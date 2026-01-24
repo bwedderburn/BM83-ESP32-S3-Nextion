@@ -98,6 +98,11 @@ pytest -v
 4. Don’t send unsanitized strings to Nextion (quotes/CRLF/length can break commands).
 5. Don’t duplicate protocol constants/encoders across files—centralize in the relevant module.
 
+## Dependency Verification & Enhancement Checks
+- When adding or updating dependencies from supported ecosystems (pip/npm/etc.), run the `gh-advisory-database` tool with the exact name/version and address any findings before finalizing changes.
+- If the dependency version is unknown, determine it first (e.g., from `pyproject.toml`/`setup.py`) before running the advisory check.
+- While making code changes, look for small, safe enhancements (reuse existing helpers, add missing docstrings for public helpers, reduce duplicated protocol logic) without expanding scope or breaking CircuitPython constraints.
+
 ## Boundaries / Files to Treat as Read-Only (unless explicitly requested)
 - `Documents/` (vendor datasheets, reference PDFs)
 - `.github/workflows/` (CI config)
