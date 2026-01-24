@@ -1,24 +1,54 @@
-# BM83-ESP32-S3-Nextion
+# ESP32-S3 Audio Remote Control (BM83 + Nextion + BLE HID)
 
-Bluetooth audio, HID, and a Nextion display driven by an ESP32-S3 running CircuitPython.
+This project implements a CircuitPython-based remote control system for audio devices using:
 
-## Overview
+- **ESP32-S3 DevKitC-1**
+- **BM83 Bluetooth module** (A2DP, AVRCP, HID)
+- **Nextion NX3224F028** UART touchscreen
+- **BLE HID** volume/mute support (for iOS/macOS)
 
-This project integrates a Microchip BM83 Bluetooth module with an ESP32-S3 and a Nextion HMI display.
+## 📦 Features
 
-The main entrypoint is `firmware/circuitpython/code.py`.
+- AVRCP metadata polling and playback control
+- AUX input detection (inferred via AVRCP silence)
+- BLE HID consumer control (volume, mute)
+- Nextion UI for metadata, EQ, AUX indication
+- Robust BLE bond recovery and advertising
 
-CircuitPython support modules also live under `firmware/circuitpython/`.
+## 📁 Project Structure
 
-### Module layout
+```
+esp32_project/
+├── main.py                  # Main control loop
+├── utils/
+│   └── common.py            # Shared helpers (dprint, formatting)
+├── nextion/
+│   └── display.py           # Nextion screen interface
+├── blehid/
+│   └── ble.py               # BLE HID (volume/mute) logic
+└── bm83/
+    └── bm83.py              # BM83 Bluetooth AVRCP/A2DP interface
+```
 
-All modules below are located in `firmware/circuitpython/`:
+## 🚀 Deployment Instructions
 
-- `bm83.py`: BM83 UART framing + event parsing + AVRCP helpers (play status, notifications, element attributes) and EQ state syncing.
-- `nextion.py`: Nextion UART protocol (token parsing, command queue, `sendme` polling) and helper methods to update page objects.
-- `ble_hid.py`: Optional BLE HID **ConsumerControl** helper used for volume up/down and mute.
-- `utils.py`: Shared helpers such as `sanitize_text()` and `fmt_ms()` used by the runtime and protocol layers.
+1. Flash **CircuitPython 10.x** to your ESP32-S3 DevKitC-1.
+2. Copy all project files into the mounted `CIRCUITPY` USB drive.
+3. Install required libraries:
+   - `adafruit_ble`
+   - `adafruit_hid`
+4. Connect:
+   - **BM83** via UART (IO17/IO18)
+   - **Nextion** via UART (IO15/IO16)
+5. Reset the board. `main.py` will execute and start all services.
 
-## Firmware
+## 🧪 Testing
 
-See `firmware/` for CircuitPython sources and related assets.
+Unit tests live under `tests/` and can be run with `pytest` on compatible platforms.
+
+## 🆘 Troubleshooting
+
+- If BLE doesn't work on iOS, try **Forget Device** and trigger `BT_EBIND`.
+- If metadata stops updating, ensure AVRCP is supported by the source device.
+- If CircuitPython auto-reloads on file save, it's disabled in code.
+
