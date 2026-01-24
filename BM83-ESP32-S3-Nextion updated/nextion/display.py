@@ -1,0 +1,212 @@
+import time
+from utils.common import dprint, _sanitize_text
+
+# endregion
+TERM = b"\xFF\xFF\xFF"
+TOKENS = {
+    b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
+    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_EBIND"
+}
+
+# endregion
+EQ_OBJ_PAGE0 = "tEQ0"
+EQ_OBJ_PAGE1 = "tEQ1"
+AUX_OBJ_PAGE1 = "tAUX1"
+
+# endregion
+NX_RUNTIME = {
+    "title": "tTitle", "artist": "tArtist", "album": "tAlbum", "genre": "tGenre",
+    "time_cur": "tTIME_CUR", "time": "tTime", "track_num": "tTrack_num",
+    "total_tracks": "tTotalTracks"
+}
+
+# endregion
+# Class: Nextion - Represents the Nextion class.
+class Nextion:
+# region Nextion
+# Nextion class encapsulates functionality related to nextion. #
+    # Loop through items
+# Function: __init__ - Defines the behavior for `__init__`.
+    def __init__(self, uart):
+# region __init__
+    # __init__ handles   init   logic. #
+        self.uart = uart
+        self._rx = bytearray()
+
+# endregion
+        self.current_page = None
+        self._last_sendme_at = 0.0
+        self._sendme_period_s = 0.5
+
+# endregion
+        self._txq = []
+        self._last_tx_at = 0.0
+        self._tx_interval_s = 0.035
+
+# endregion
+        self._last_token = None
+        self._last_token_at = 0.0
+
+# endregion
+    # Loop through items
+# Function: boot_sync - Defines the behavior for `boot_sync`.
+    def boot_sync(self, delay_s=0.8):
+# region boot_sync
+    # boot_sync handles boot sync logic. #
+        time.sleep(delay_s)
+        self._rx = bytearray()
+        self._txq.clear()
+        self.current_page = None
+        self._last_sendme_at = 0.0
+        self._last_tx_at = 0.0
+        self.enqueue("bkcmd=3")
+        self.enqueue("sendme")
+
+# endregion
+    # Loop through items
+# Function: enqueue - Defines the behavior for `enqueue`.
+    def enqueue(self, cmd):
+# region enqueue
+    # enqueue handles enqueue logic. #
+        self._txq.append(cmd)
+
+# endregion
+    # Loop through items
+# Function: sendme_tick - Defines the behavior for `sendme_tick`.
+    def sendme_tick(self):
+# region sendme_tick
+    # sendme_tick handles sendme tick logic. #
+        now = time.monotonic()
+    # Conditional check
+        if (now - self._last_sendme_at) >= self._sendme_period_s:
+            self._last_sendme_at = now
+            self.enqueue("sendme")
+
+# endregion
+    # Loop through items
+# Function: tick - Defines the behavior for `tick`.
+    def tick(self):
+# region tick
+    # tick handles tick logic. #
+        self.sendme_tick()
+        now = time.monotonic()
+    # Conditional check
+        if not self._txq or (now - self._last_tx_at) < self._tx_interval_s:
+            return
+        cmd = self._txq.pop(0)
+    # Try block to catch exceptions
+        try:
+            self.uart.write(cmd.encode("ascii", "replace") + TERM)
+            self._last_tx_at = now
+    # Handle exceptions
+        except Exception as e:
+            dprint("[NX] write err:", e)
+
+# endregion
+    # Loop through items
+# Function: _read_more - Defines the behavior for `_read_more`.
+    def _read_more(self):
+# region _read_more
+    # _read_more handles  read more logic. #
+    # Try block to catch exceptions
+        try:
+            n = getattr(self.uart, "in_waiting", 0) or 0
+            chunk = self.uart.read(min(256, n)) if n else None
+    # Handle exceptions
+        except Exception as e:
+            dprint("[NX] read err:", e)
+            return
+    # Conditional check
+        if chunk:
+            self._rx.extend(chunk)
+
+# endregion
+    # Loop through items
+# Function: _pop_frame - Defines the behavior for `_pop_frame`.
+    def _pop_frame(self):
+# region _pop_frame
+    # _pop_frame handles  pop frame logic. #
+        i = self._rx.find(TERM)
+    # Conditional check
+        if i < 0:
+    # Return the result
+            return None
+# endregion
+        frame = bytes(self._rx[:i])
+        self._rx = self._rx[i + 3:]
+    # Return the result
+        return frame
+# endregion
+
+# endregion
+    @staticmethod
+    # Loop through items
+# Function: _is_token_frame - Defines the behavior for `_is_token_frame`.
+    def _is_token_frame(frame):
+# region _is_token_frame
+    # _is_token_frame handles  is token frame logic. #
+        f = frame.strip()
+    # Conditional check
+        if not f:
+    # Return the result
+            return False
+# endregion
+    # Loop through items
+        for b in f:
+    # Conditional check
+            if 48 <= b <= 57 or 65 <= b <= 90 or b == 95:
+                continue
+    # Return the result
+            return False
+# endregion
+    # Return the result
+        return f in TOKENS
+# endregion
+
+# endregion
+    # Loop through items
+# Function: read - Defines the behavior for `read`.
+    def read(self, max_tokens=6, debounce_s=0.10):
+# region read
+    # read handles read logic. #
+        tokens = []
+        page_changed = False
+        self._read_more()
+    # While loop execution
+        while True:
+            frame = self._pop_frame()
+    # Conditional check
+            if frame is None:
+                break
+    # Conditional check
+            if len(frame) >= 2 and frame[0] == 0x66:
+                pageid = frame[1]
+    # Conditional check
+                if self.current_page != pageid:
+                    self.current_page = pageid
+                    page_changed = True
+                continue
+    # Conditional check
+            if self._is_token_frame(frame):
+                now = time.monotonic()
+    # Conditional check
+                if self._last_token == frame and (now - self._last_token_at) < debounce_s:
+                    continue
+                self._last_token = frame
+                self._last_token_at = now
+                tokens.append(frame)
+    # Conditional check
+                if len(tokens) >= max_tokens:
+                    break
+    # Return the result
+        return tokens, page_changed
+# endregion
+
+# endregion
+    # Loop through items
+# Function: set_text_active_page - Defines the behavior for `set_text_active_page`.
+    def set_text_active_page(self, obj, txt):
+# region set_text_active_page
+    # set_text_active_page handles set text active page logic. #
+        safe = _sanitize_text(txt)
+        self.enqueue('%s.txt="%s"' % (obj, safe))
