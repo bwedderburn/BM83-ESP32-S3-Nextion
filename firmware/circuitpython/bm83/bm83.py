@@ -495,6 +495,11 @@ class Bm83:
         attr_id = data[0]
         # Skip charset byte at data[1]
         length = data[2]
+        
+        # Validate that data contains enough bytes for the declared length
+        if len(data) < 3 + length:
+            return {}
+        
         text = data[3:3 + length].decode("utf-8", "replace")
         
         # Map attribute IDs to names

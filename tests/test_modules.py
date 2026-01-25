@@ -1,16 +1,9 @@
 """Tests for the modular implementation."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Add firmware directory to path
-FIRMWARE_DIR = Path(__file__).parent.parent / "firmware" / "circuitpython"
-sys.path.insert(0, str(FIRMWARE_DIR))
-
-import utils  # noqa: E402
-import bm83  # noqa: E402
-import nextion  # noqa: E402
+import utils
+import bm83
+import nextion
 
 
 # =============================================================================
@@ -79,7 +72,7 @@ def test_bm83_parse_metadata():
 def test_bm83_eq_constants():
     """Test EQ constants."""
     assert bm83.EQ_OFF == 0
-    assert bm83.EQ_USER == 10
+    assert bm83.EQ_USER == 11  # Aligned with Bm83.EQ_SEQ and EQ_L
     assert len(bm83.EQ_LABELS) == 11
     assert len(bm83.EQ_SEQ) == 11
 

@@ -4,15 +4,6 @@ from utils.common import dprint, _sanitize_text
 # endregion
 TERM = b"\xFF\xFF\xFF"
 
-# Token sets for test compatibility
-TOK_BT = {
-    b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
-    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_EBIND"
-}
-TOK_EQ = set()  # Empty for now, can be populated if needed
-
-TOKENS = TOK_BT | TOK_EQ  # Combined token set
-
 # EQ mapping for test compatibility
 EQ_MAP = {
     b"EQ_OFF": 0,
@@ -25,8 +16,17 @@ EQ_MAP = {
     b"EQ_POP": 7,
     b"EQ_DANCE": 8,
     b"EQ_RNB": 9,
-    b"EQ_USER": 10
+    b"EQ_USER": 11  # Aligned with BM83 EQ_SEQ and EQ_L
 }
+
+# Token sets for test compatibility
+TOK_BT = {
+    b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
+    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_EBIND"
+}
+TOK_EQ = set(EQ_MAP.keys())  # Populated from EQ_MAP keys
+
+TOKENS = TOK_BT | TOK_EQ  # Combined token set
 
 # endregion
 

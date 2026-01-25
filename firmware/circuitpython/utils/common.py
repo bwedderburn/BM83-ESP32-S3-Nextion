@@ -94,36 +94,42 @@ def sanitize_text(txt, max_len=100):
     """Sanitize text for display (public API with test-compatible defaults)."""
     if txt is None:
         return "—"
+    
     out = []
     for ch in str(txt):
         o = ord(ch)
         out.append(ch if 32 <= o <= 126 else " ")
     s = "".join(out).replace('"', "'").strip()
+    
     if not s:
         s = "—"
+    
+    # Use "..." instead of "…" for test compatibility
     if len(s) > max_len:
-        s = s[: max_len - 3] + "..."  # Use "..." for test compatibility
+        s = s[: max_len - 3] + "..."
+    
     return s
 
 
 # Public wrapper for fmt_ms with test-compatible formatting
 def fmt_ms(ms):
     """Format milliseconds as time string (public API with test-compatible formatting)."""
-    if ms is None:
-        return "—"
-    try:
-        ms = int(ms)
-    except Exception:
-        return sanitize_text(str(ms), max_len=16)
+    # Reuse internal _fmt_ms logic to avoid duplication
+    base = _fmt_ms(ms)
     
-    if ms < 0:
-        ms = 0
+    # Preserve special/invalid outputs as-is
+    if base == "—":
+        return base
     
-    total = ms // 1000
-    h = total // 3600
-    m = (total % 3600) // 60
-    s = total % 60
+    parts = base.split(":")
+    # h:mm:ss case (three parts) or unexpected formats are returned unchanged
+    if len(parts) != 2:
+        return base
     
-    if h > 0:
-        return "%d:%02d:%02d" % (h, m, s)
-    return "%02d:%02d" % (m, s)  # Zero-pad minutes for test compatibility
+    minutes, seconds = parts
+    # Only adjust if both components are purely digits
+    if minutes.isdigit() and seconds.isdigit() and len(minutes) == 1:
+        # Zero-pad minutes for test compatibility (e.g., "0:05" -> "00:05")
+        return "0%s:%s" % (minutes, seconds)
+    
+    return base
