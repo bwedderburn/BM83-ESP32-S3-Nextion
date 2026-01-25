@@ -4,6 +4,10 @@ __pycache__/
 .env
 .venv
 *.pyc
+*.egg-info/
+dist/
+build/
+.pytest_cache/
 
 # macOS
 .DS_Store
