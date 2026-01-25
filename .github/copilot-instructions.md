@@ -113,6 +113,14 @@ pytest -v
 - `LICENSE`
 - `SECURITY.md`
 
+## Git & Workflow Policy
+- **Always** run linters (`flake8`) and tests (`pytest`) before committing
+- Keep commits focused and atomic
+- Write clear, descriptive commit messages
+- All changes must pass CI (Python 3.9, 3.10, 3.11)
+- Do not force-push or rebase shared branches
+- Test on actual hardware when modifying protocol logic (BM83/Nextion/BLE)
+
 ## Acceptance Criteria for Changes
 - `flake8` passes (strict pass + style pass as in CI)
 - `pytest` passes
@@ -122,17 +130,57 @@ pytest -v
 
 ## Examples
 
-### Good: reading a global (no `global` declaration)
+### ✅ Good: reading a global (no `global` declaration)
 ```python
 def is_powered_on() -> bool:
     """Return the last-known BM83 power state."""
     return _power_on
 ```
 
-### Good: assigning a global (requires `global`)
+### ✅ Good: assigning a global (requires `global`)
 ```python
 def set_power_state(on: bool) -> None:
     """Update the cached BM83 power state."""
     global _power_on
     _power_on = on
+```
+
+### ❌ Bad: unnecessary `global` for read-only access
+```python
+def is_powered_on() -> bool:
+    """WRONG: Don't declare global for read-only."""
+    global _power_on  # ❌ Unnecessary and confusing
+    return _power_on
+```
+
+### ❌ Bad: blocking UART read in main loop
+```python
+def update_metadata():
+    """WRONG: Blocking call freezes the event loop."""
+    data = uart.read(100)  # ❌ Blocks until 100 bytes received
+    parse_metadata(data)
+```
+
+### ✅ Good: non-blocking UART read with timeout
+```python
+def update_metadata():
+    """Correct: Non-blocking with timeout handling."""
+    data = uart.read(100) if uart.in_waiting >= 100 else None
+    if data:
+        parse_metadata(data)
+```
+
+### ❌ Bad: unsanitized text sent to Nextion
+```python
+def show_title(title):
+    """WRONG: Can break Nextion command parsing."""
+    uart.write(f't0.txt="{title}"\xff\xff\xff')  # ❌ Quotes/CRLF not escaped
+```
+
+### ✅ Good: sanitized text with helper
+```python
+def show_title(title):
+    """Correct: Use sanitization helper."""
+    safe_title = _sanitize_text(title)
+    uart.write(f't0.txt="{safe_title}"\xff\xff\xff')
 ```
