@@ -4,10 +4,14 @@
 This repository contains CircuitPython firmware for an **ESP32-S3** board that host-controls a **Microchip BM83 Bluetooth audio module** over UART, integrates a **Nextion HMI display** over UART, and optionally provides **BLE HID ConsumerControl** for volume/mute.
 
 The main entrypoint is:
-- `firmware/circuitpython/code.py`
+- `firmware/circuitpython/main.py`
 
-Supporting modules live under:
-- `firmware/circuitpython/`
+Supporting modules live under `firmware/circuitpython/` as packages:
+- `main.py`: main runtime / event loop / orchestration
+- `bm83/bm83.py`: BM83 UART framing, parsing, AVRCP helpers, EQ syncing
+- `nextion/display.py`: Nextion protocol, token parsing, command queue, polling (`sendme`)
+- `blehid/ble.py`: optional BLE HID ConsumerControl helper
+- `utils/common.py`: shared helpers like `_sanitize_text()` and `_fmt_ms()`
 
 ## Technology Stack
 - **Language**: Python (CircuitPython style; runs on-device)
@@ -20,11 +24,11 @@ Supporting modules live under:
 
 ## Code Structure (authoritative)
 All modules below are located in `firmware/circuitpython/`:
-- `code.py`: main runtime / event loop / orchestration
-- `bm83.py`: BM83 UART framing, parsing, AVRCP helpers, EQ syncing
-- `nextion.py`: Nextion protocol, token parsing, command queue, polling (`sendme`)
-- `ble_hid.py`: optional BLE HID ConsumerControl helper
-- `utils.py`: shared helpers like `sanitize_text()` and `fmt_ms()`
+- `main.py`: main runtime / event loop / orchestration
+- `bm83/bm83.py`: BM83 UART framing, parsing, AVRCP helpers, EQ syncing
+- `nextion/display.py`: Nextion protocol, token parsing, command queue, polling (`sendme`)
+- `blehid/ble.py`: optional BLE HID ConsumerControl helper
+- `utils/common.py`: shared helpers like `_sanitize_text()` and `_fmt_ms()`
 
 Tests:
 - `tests/`: unit tests run in CI (host Python)
@@ -65,7 +69,7 @@ pytest -v
 
 ## Key Patterns & Conventions
 ### Global state
-- If you must use global variables in `code.py` (common in CircuitPython), follow this rule:
+- If you must use global variables in `main.py` (common in CircuitPython), follow this rule:
   - **Only declare `global x` inside a function if that function assigns to `x`.**
   - Reading a global does **not** need a `global` statement.
 
@@ -86,10 +90,10 @@ pytest -v
   - keep state machines explicit (especially play/pause timing and metadata updates)
 
 ## Common Operations (preferred entry points)
-- Sending BM83 commands: use the canonical send helper in `bm83.py` (don’t duplicate framing logic)
-- Updating Nextion UI: use the helper methods in `nextion.py` (don’t hand-roll terminators everywhere)
-- Formatting/sanitizing UI text: use `utils.py` helpers (`sanitize_text()`, etc.)
-- BLE HID volume/mute: use `ble_hid.py` helper rather than inlining HID reports
+- Sending BM83 commands: use the canonical send helper in `bm83/bm83.py` (don’t duplicate framing logic)
+- Updating Nextion UI: use the helper methods in `nextion/display.py` (don’t hand-roll terminators everywhere)
+- Formatting/sanitizing UI text: use `utils/common.py` helpers (`_sanitize_text()`, etc.)
+- BLE HID volume/mute: use `blehid/ble.py` helper rather than inlining HID reports
 
 ## Common Pitfalls to Avoid
 1. Don’t declare `global` for read-only globals (flake8 will complain; also harms clarity).
