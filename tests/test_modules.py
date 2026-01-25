@@ -8,9 +8,9 @@ from pathlib import Path
 FIRMWARE_DIR = Path(__file__).parent.parent / "firmware" / "circuitpython"
 sys.path.insert(0, str(FIRMWARE_DIR))
 
-import utils
-import bm83
-import nextion
+import utils  # noqa: E402
+import bm83  # noqa: E402
+import nextion  # noqa: E402
 
 
 # =============================================================================
