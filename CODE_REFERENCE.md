@@ -26,7 +26,7 @@ BLE_NAME = "AmpBench Remote"
 # Function: main - Defines the behavior for `main`.
 def main():
 # region main
-""" main handles main logic. """
+# main handles main logic. 
     gc.collect()
 
 # endregion
@@ -70,7 +70,7 @@ def main():
 # Function: flush_page - Defines the behavior for `flush_page`.
     def flush_page(pageid):
 # region flush_page
-    """ flush_page handles flush page logic. """
+    # flush_page handles flush page logic. 
     # Conditional check
         if pageid == 0:
             nx.set_text_active_page(EQ_OBJ_PAGE0, desired_eq)
@@ -87,7 +87,7 @@ def main():
 # Function: maybe_track_changed - Defines the behavior for `maybe_track_changed`.
     def maybe_track_changed(pos_ms, total_ms):
 # region maybe_track_changed
-    """ maybe_track_changed handles maybe track changed logic. """
+    # maybe_track_changed handles maybe track changed logic. 
         nonlocal last_pos_ms, last_total_ms
     # Conditional check
         if pos_ms is None or total_ms is None:
@@ -114,7 +114,7 @@ def main():
 # Function: enter_aux_mode - Defines the behavior for `enter_aux_mode`.
     def enter_aux_mode():
 # region enter_aux_mode
-    """ enter_aux_mode handles enter aux mode logic. """
+    # enter_aux_mode handles enter aux mode logic. 
         nonlocal desired_aux, desired_meta, last_pos_ms, last_total_ms
         desired_aux = "AUX IN"
     # Loop through items
@@ -128,7 +128,7 @@ def main():
 # Function: exit_aux_mode - Defines the behavior for `exit_aux_mode`.
     def exit_aux_mode():
 # region exit_aux_mode
-    """ exit_aux_mode handles exit aux mode logic. """
+    # exit_aux_mode handles exit aux mode logic. 
         nonlocal desired_aux
         desired_aux = ""
         bm._next_playstatus_at = 0.0
@@ -414,12 +414,12 @@ NX_RUNTIME = {
 # Class: Nextion - Represents the Nextion class.
 class Nextion:
 # region Nextion
-""" Nextion class encapsulates functionality related to nextion. """
+# Nextion class encapsulates functionality related to nextion. 
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
     def __init__(self, uart):
 # region __init__
-    """ __init__ handles   init   logic. """
+    # __init__ handles   init   logic. 
         self.uart = uart
         self._rx = bytearray()
 
@@ -442,7 +442,7 @@ class Nextion:
 # Function: boot_sync - Defines the behavior for `boot_sync`.
     def boot_sync(self, delay_s=0.8):
 # region boot_sync
-    """ boot_sync handles boot sync logic. """
+    # boot_sync handles boot sync logic. 
         time.sleep(delay_s)
         self._rx = bytearray()
         self._txq.clear()
@@ -457,7 +457,7 @@ class Nextion:
 # Function: enqueue - Defines the behavior for `enqueue`.
     def enqueue(self, cmd):
 # region enqueue
-    """ enqueue handles enqueue logic. """
+    # enqueue handles enqueue logic. 
         self._txq.append(cmd)
 
 # endregion
@@ -465,7 +465,7 @@ class Nextion:
 # Function: sendme_tick - Defines the behavior for `sendme_tick`.
     def sendme_tick(self):
 # region sendme_tick
-    """ sendme_tick handles sendme tick logic. """
+    # sendme_tick handles sendme tick logic. 
         now = time.monotonic()
     # Conditional check
         if (now - self._last_sendme_at) >= self._sendme_period_s:
@@ -477,7 +477,7 @@ class Nextion:
 # Function: tick - Defines the behavior for `tick`.
     def tick(self):
 # region tick
-    """ tick handles tick logic. """
+    # tick handles tick logic. 
         self.sendme_tick()
         now = time.monotonic()
     # Conditional check
@@ -497,7 +497,7 @@ class Nextion:
 # Function: _read_more - Defines the behavior for `_read_more`.
     def _read_more(self):
 # region _read_more
-    """ _read_more handles  read more logic. """
+    # _read_more handles  read more logic. 
     # Try block to catch exceptions
         try:
             n = getattr(self.uart, "in_waiting", 0) or 0
@@ -515,7 +515,7 @@ class Nextion:
 # Function: _pop_frame - Defines the behavior for `_pop_frame`.
     def _pop_frame(self):
 # region _pop_frame
-    """ _pop_frame handles  pop frame logic. """
+    # _pop_frame handles  pop frame logic. 
         i = self._rx.find(TERM)
     # Conditional check
         if i < 0:
@@ -534,7 +534,7 @@ class Nextion:
 # Function: _is_token_frame - Defines the behavior for `_is_token_frame`.
     def _is_token_frame(frame):
 # region _is_token_frame
-    """ _is_token_frame handles  is token frame logic. """
+    # _is_token_frame handles  is token frame logic. 
         f = frame.strip()
     # Conditional check
         if not f:
@@ -558,7 +558,7 @@ class Nextion:
 # Function: read - Defines the behavior for `read`.
     def read(self, max_tokens=6, debounce_s=0.10):
 # region read
-    """ read handles read logic. """
+    # read handles read logic. 
         tokens = []
         page_changed = False
         self._read_more()
@@ -597,7 +597,7 @@ class Nextion:
 # Function: set_text_active_page - Defines the behavior for `set_text_active_page`.
     def set_text_active_page(self, obj, txt):
 # region set_text_active_page
-    """ set_text_active_page handles set text active page logic. """
+    # set_text_active_page handles set text active page logic. 
         safe = _sanitize_text(txt)
         self.enqueue('%s.txt="%s"' % (obj, safe))
 ```
@@ -620,7 +620,7 @@ from utils.common import dprint, _sanitize_text
 # Class: Bm83 - Represents the Bm83 class.
 class Bm83:
 # region Bm83
-""" Bm83 class encapsulates functionality related to bm83. """
+# Bm83 class encapsulates functionality related to bm83. 
     OP_MMI_ACTION = 0x02
     OP_EVENT_FILTER = 0x03
     OP_MUSIC_CONTROL = 0x04
@@ -662,7 +662,7 @@ class Bm83:
 # Function: __init__ - Defines the behavior for `__init__`.
     def __init__(self, uart):
 # region __init__
-    """ __init__ handles   init   logic. """
+    # __init__ handles   init   logic. 
         self.uart = uart
         self._rx = bytearray()
         self.power_on = False
@@ -684,7 +684,7 @@ class Bm83:
 # Function: _checksum - Defines the behavior for `_checksum`.
     def _checksum(hi, lo, body):
 # region _checksum
-    """ _checksum handles  checksum logic. """
+    # _checksum handles  checksum logic. 
     # Return the result
         return (-((hi + lo + sum(body)) & 0xFF)) & 0xFF
 # endregion
@@ -694,7 +694,7 @@ class Bm83:
 # Function: _frame - Defines the behavior for `_frame`.
     def _frame(self, op, params=b""):
 # region _frame
-    """ _frame handles  frame logic. """
+    # _frame handles  frame logic. 
         body = bytes([op]) + params
         ln = len(body)
         hi, lo = (ln >> 8) & 0xFF, ln & 0xFF
@@ -708,7 +708,7 @@ class Bm83:
 # Function: send - Defines the behavior for `send`.
     def send(self, op, params=b""):
 # region send
-    """ send handles send logic. """
+    # send handles send logic. 
         pkt = self._frame(op, params)
         dprint("[BM83 TX]", " ".join("%02X" % b for b in pkt))
     # Try block to catch exceptions
@@ -723,7 +723,7 @@ class Bm83:
 # Function: ack_event - Defines the behavior for `ack_event`.
     def ack_event(self, event_op):
 # region ack_event
-    """ ack_event handles ack event logic. """
+    # ack_event handles ack event logic.  
     # Conditional check
         if event_op == 0x00:
             return
@@ -734,7 +734,7 @@ class Bm83:
 # Function: poll - Defines the behavior for `poll`.
     def poll(self, max_read=768):
 # region poll
-    """ poll handles poll logic. """
+     # poll handles poll logic. 
         out = []
     # Try block to catch exceptions
         try:
@@ -791,7 +791,7 @@ class Bm83:
 # Function: init_link - Defines the behavior for `init_link`.
     def init_link(self):
 # region init_link
-    """ init_link handles init link logic. """
+    # init_link handles init link logic.  
         self.send(self.OP_READ_BD_ADDR)
         self.send(self.OP_EVENT_FILTER, b"\x00\x00\x00\x00")
         self.send(self.OP_BTM_UTILITY_FUNC, b"\x03\x01")
@@ -802,7 +802,7 @@ class Bm83:
 # Function: power_on_cmd - Defines the behavior for `power_on_cmd`.
     def power_on_cmd(self):
 # region power_on_cmd
-    """ power_on_cmd handles power on cmd logic. """
+    # power_on_cmd handles power on cmd logic. 
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_PRESS]))
         time.sleep(0.2)
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_RELEASE]))
@@ -816,7 +816,7 @@ class Bm83:
 # Function: power_off_cmd - Defines the behavior for `power_off_cmd`.
     def power_off_cmd(self):
 # region power_off_cmd
-    """ power_off_cmd handles power off cmd logic. """
+    # power_off_cmd handles power off cmd logic. 
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_PRESS]))
         time.sleep(1.5)
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_RELEASE]))
@@ -829,7 +829,7 @@ class Bm83:
 # Function: power_toggle - Defines the behavior for `power_toggle`.
     def power_toggle(self):
 # region power_toggle
-    """ power_toggle handles power toggle logic. """
+    # power_toggle handles power toggle logic. 
         self.power_off_cmd() if self.power_on else self.power_on_cmd()
 
 # endregion
@@ -837,7 +837,7 @@ class Bm83:
 # Function: pair - Defines the behavior for `pair`.
     def pair(self):
 # region pair
-    """ pair handles pair logic. """
+    # pair handles pair logic. 
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_ENTER_PAIRING]))
         print("[PAIR] Enter pairing")
 
@@ -846,7 +846,7 @@ class Bm83:
 # Function: play_pause - Defines the behavior for `play_pause`.
     def play_pause(self):
 # region play_pause
-    """ play_pause handles play pause logic. """
+    # play_pause handles play pause logic. 
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PLAY_PAUSE]))
         print("[PLAY/PAUSE] toggled")
 
@@ -855,7 +855,7 @@ class Bm83:
 # Function: prev - Defines the behavior for `prev`.
     def prev(self):
 # region prev
-    """ prev handles prev logic. """
+    # prev handles prev logic. 
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PREV]))
         print("[PREV] triggered")
 
@@ -864,7 +864,7 @@ class Bm83:
 # Function: next - Defines the behavior for `next`.
     def next(self):
 # region next
-    """ next handles next logic. """
+    # next handles next logic. 
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_NEXT]))
         print("[NEXT] triggered")
 
@@ -873,7 +873,7 @@ class Bm83:
 # Function: next_eq - Defines the behavior for `next_eq`.
     def next_eq(self):
 # region next_eq
-    """ next_eq handles next eq logic. """
+    # next_eq handles next eq logic. 
         self.eq_index = (self.eq_index + 1) % len(self.EQ_SEQ)
         mode = self.EQ_SEQ[self.eq_index]
         self.send(self.OP_EQ_MODE_SETTING, bytes([mode, 0x00]))
@@ -886,7 +886,7 @@ class Bm83:
 # Function: note_btm_state - Defines the behavior for `note_btm_state`.
     def note_btm_state(self, state):
 # region note_btm_state
-    """ note_btm_state handles note btm state logic. """
+    # note_btm_state handles note btm state logic. 
         now = time.monotonic()
     # Conditional check
         if state in self.CONNECTED_STATES:
@@ -916,7 +916,7 @@ class Bm83:
 # Function: _avc_payload - Defines the behavior for `_avc_payload`.
     def _avc_payload(pdu, params):
 # region _avc_payload
-    """ _avc_payload handles  avc payload logic. """
+    # _avc_payload handles  avc payload logic. 
     # Return the result
         return bytes([pdu, 0x00]) + len(params).to_bytes(2, "big") + params
 # endregion
@@ -926,7 +926,7 @@ class Bm83:
 # Function: avrcp_get_play_status - Defines the behavior for `avrcp_get_play_status`.
     def avrcp_get_play_status(self, db=0):
 # region avrcp_get_play_status
-    """ avrcp_get_play_status handles avrcp get play status logic. """
+    # avrcp_get_play_status handles avrcp get play status logic. 
         self.send(self.OP_AVC_VENDOR_CMD, bytes([db]) + self._avc_payload(0x30, b""))
 
 # endregion
@@ -934,7 +934,7 @@ class Bm83:
 # Function: avrcp_register_notification - Defines the behavior for `avrcp_register_notification`.
     def avrcp_register_notification(self, event_id, interval_s=0, db=0):
 # region avrcp_register_notification
-    """ avrcp_register_notification handles avrcp register notification logic. """
+    # avrcp_register_notification handles avrcp register notification logic. 
         params = bytes([event_id]) + int(interval_s).to_bytes(4, "big")
         self.send(self.OP_AVC_VENDOR_CMD, bytes([db]) + self._avc_payload(0x31, params))
 
@@ -943,7 +943,7 @@ class Bm83:
 # Function: avrcp_get_element_attributes - Defines the behavior for `avrcp_get_element_attributes`.
     def avrcp_get_element_attributes(self, db=0):
 # region avrcp_get_element_attributes
-    """ avrcp_get_element_attributes handles avrcp get element attributes logic. """
+    # avrcp_get_element_attributes handles avrcp get element attributes logic. 
         attr_ids = (1, 2, 3, 6, 4, 5, 7)
         p = bytes([len(attr_ids)])
     # Loop through items
@@ -956,7 +956,7 @@ class Bm83:
 # Function: schedule_attrs - Defines the behavior for `schedule_attrs`.
     def schedule_attrs(self, delay_s=0.35):
 # region schedule_attrs
-    """ schedule_attrs handles schedule attrs logic. """
+    # schedule_attrs handles schedule attrs logic. 
         now = time.monotonic()
     # Conditional check
         if (now - self._last_attrs_req_at) < self._attrs_throttle_s:
@@ -971,7 +971,7 @@ class Bm83:
 # Function: tick_avrcp - Defines the behavior for `tick_avrcp`.
     def tick_avrcp(self):
 # region tick_avrcp
-    """ tick_avrcp handles tick avrcp logic. """
+    # tick_avrcp handles tick avrcp logic. 
     # Conditional check
         if not self.connected:
             return
@@ -992,7 +992,7 @@ class Bm83:
 # Function: parse_avc_vendor_rsp - Defines the behavior for `parse_avc_vendor_rsp`.
     def parse_avc_vendor_rsp(params):
 # region parse_avc_vendor_rsp
-    """ parse_avc_vendor_rsp handles parse avc vendor rsp logic. """
+    # parse_avc_vendor_rsp handles parse avc vendor rsp logic. 
     # Conditional check
         if len(params) < 1 + 10:
     # Return the result
@@ -1017,7 +1017,7 @@ class Bm83:
 # Function: parse_gea_0x5d - Defines the behavior for `parse_gea_0x5d`.
     def parse_gea_0x5d(self, params):
 # region parse_gea_0x5d
-    """ parse_gea_0x5d handles parse gea 0x5d logic. """
+    # parse_gea_0x5d handles parse gea 0x5d logic. 
     # Conditional check
         if len(params) < 2:
     # Return the result
@@ -1090,12 +1090,12 @@ from utils.common import dprint
 # Class: BleHid - Represents the BleHid class.
 class BleHid:
 # region BleHid
-""" BleHid class encapsulates functionality related to blehid. """
+# BleHid class encapsulates functionality related to blehid. 
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
     def __init__(self, enabled, name):
 # region __init__
-    """ __init__ handles   init   logic. """
+    # __init__ handles   init   logic. 
         self.enabled = enabled
         self.name = name
 
@@ -1132,7 +1132,7 @@ class BleHid:
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
 # region setup
-    """ setup handles setup logic. """
+    # setup handles setup logic. 
     # Conditional check
         if not self.enabled:
             return
@@ -1168,7 +1168,7 @@ class BleHid:
 # Function: _stop_adv - Defines the behavior for `_stop_adv`.
     def _stop_adv(self):
 # region _stop_adv
-    """ _stop_adv handles  stop adv logic. """
+    # _stop_adv handles  stop adv logic. 
     # Conditional check
         if not self._ready or not self._ble:
             return
@@ -1186,7 +1186,7 @@ class BleHid:
 # Function: _start_adv - Defines the behavior for `_start_adv`.
     def _start_adv(self, force=False):
 # region _start_adv
-    """ _start_adv handles  start adv logic. """
+    # _start_adv handles  start adv logic. 
     # Conditional check
         if not self._ready or not self._ble or not self._adv:
             return
@@ -1237,7 +1237,7 @@ class BleHid:
 # Function: _on_connect - Defines the behavior for `_on_connect`.
     def _on_connect(self):
 # region _on_connect
-    """ _on_connect handles  on connect logic. """
+    # _on_connect handles  on connect logic. 
         print("[BLE] Connected")
     # Try block to catch exceptions
         try:
@@ -1255,7 +1255,7 @@ class BleHid:
 # Function: _on_disconnect - Defines the behavior for `_on_disconnect`.
     def _on_disconnect(self):
 # region _on_disconnect
-    """ _on_disconnect handles  on disconnect logic. """
+    # _on_disconnect handles  on disconnect logic. 
         print("[BLE] Disconnected")
         self._need_pairing_check = False
         self._pair_attempts = 0
@@ -1266,7 +1266,7 @@ class BleHid:
 # Function: _ensure_paired - Defines the behavior for `_ensure_paired`.
     def _ensure_paired(self):
 # region _ensure_paired
-    """ _ensure_paired handles  ensure paired logic. """
+    # _ensure_paired handles  ensure paired logic. 
     # Conditional check
         if not self._ble or not getattr(self._ble, "connected", False):
             return
@@ -1317,7 +1317,7 @@ class BleHid:
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
     def erase_bonds(self):
 # region erase_bonds
-    """ erase_bonds handles erase bonds logic. """
+    # erase_bonds handles erase bonds logic. 
         print("[BLE] Erase bonding requested")
     # Try block to catch exceptions
         try:
@@ -1373,7 +1373,7 @@ class BleHid:
 # Function: tick - Defines the behavior for `tick`.
     def tick(self):
 # region tick
-    """ tick handles tick logic. """
+    # tick handles tick logic. 
     # Conditional check
         if not self._ready or not self._ble:
             return
@@ -1412,7 +1412,7 @@ class BleHid:
 # Function: _send_ccc - Defines the behavior for `_send_ccc`.
     def _send_ccc(self, code):
 # region _send_ccc
-    """ _send_ccc handles  send ccc logic. """
+    # _send_ccc handles  send ccc logic. 
     # Conditional check
         if not self._ready or not self._ble or not self._cc:
             return
@@ -1439,7 +1439,7 @@ class BleHid:
 # Function: volume - Defines the behavior for `volume`.
     def volume(self, up):
 # region volume
-    """ volume handles volume logic. """
+    # volume handles volume logic. 
     # Conditional check
         if not self._CCC:
             return
@@ -1450,7 +1450,7 @@ class BleHid:
 # Function: mute - Defines the behavior for `mute`.
     def mute(self):
 # region mute
-    """ mute handles mute logic. """
+    # mute handles mute logic. 
     # Conditional check
         if not self._CCC:
             return
@@ -1477,7 +1477,7 @@ DEBUG = True
 # Function: dprint - Defines the behavior for `dprint`.
 def dprint(*a):
 # region dprint
-""" dprint handles dprint logic. """
+# dprint handles dprint logic. 
     # Conditional check
     if DEBUG:
         print(*a)
@@ -1487,7 +1487,7 @@ def dprint(*a):
 # Function: _sanitize_text - Defines the behavior for `_sanitize_text`.
 def _sanitize_text(txt, max_len=48):
 # region _sanitize_text
-""" _sanitize_text handles  sanitize text logic. """
+# _sanitize_text handles  sanitize text logic. 
     # Conditional check
     if txt is None:
     # Return the result
@@ -1514,7 +1514,7 @@ def _sanitize_text(txt, max_len=48):
 # Function: _fmt_ms - Defines the behavior for `_fmt_ms`.
 def _fmt_ms(ms):
 # region _fmt_ms
-""" _fmt_ms handles  fmt ms logic. """
+# _fmt_ms handles  fmt ms logic. 
     # Conditional check
     if ms is None:
     # Return the result
