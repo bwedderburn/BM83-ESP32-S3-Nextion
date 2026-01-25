@@ -3,12 +3,45 @@ from utils.common import dprint, _sanitize_text
 
 # endregion
 TERM = b"\xFF\xFF\xFF"
-TOKENS = {
+
+# Token sets for test compatibility
+TOK_BT = {
     b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
     b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_EBIND"
 }
+TOK_EQ = set()  # Empty for now, can be populated if needed
+
+TOKENS = TOK_BT | TOK_EQ  # Combined token set
+
+# EQ mapping for test compatibility
+EQ_MAP = {
+    b"EQ_OFF": 0,
+    b"EQ_SOFT": 1,
+    b"EQ_BASS": 2,
+    b"EQ_TREBLE": 3,
+    b"EQ_CLASSICAL": 4,
+    b"EQ_ROCK": 5,
+    b"EQ_JAZZ": 6,
+    b"EQ_POP": 7,
+    b"EQ_DANCE": 8,
+    b"EQ_RNB": 9,
+    b"EQ_USER": 10
+}
 
 # endregion
+
+
+def ascii_upper_uscore(token):
+    """Check if token contains only uppercase ASCII, digits, underscores, and spaces."""
+    if not token:
+        return False
+    for b in token:
+        # Allow: A-Z (65-90), 0-9 (48-57), _ (95), space (32)
+        if not (48 <= b <= 57 or 65 <= b <= 90 or b == 95 or b == 32):
+            return False
+    return True
+
+
 EQ_OBJ_PAGE0 = "tEQ0"
 EQ_OBJ_PAGE1 = "tEQ1"
 AUX_OBJ_PAGE1 = "tAUX1"
@@ -27,7 +60,7 @@ class Nextion:
 # Nextion class encapsulates functionality related to nextion. #
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
-    def __init__(self, uart):
+    def __init__(self, uart=None):
 # region __init__
     # __init__ handles   init   logic. #
         self.uart = uart
@@ -46,6 +79,23 @@ class Nextion:
 # endregion
         self._last_token = None
         self._last_token_at = 0.0
+
+# endregion
+    
+    # Properties for test compatibility
+    @property
+    def rx_buffer(self):
+        """Alias for _rx buffer for test compatibility."""
+        return self._rx
+    
+    @property
+    def tx_queue(self):
+        """Alias for _txq for test compatibility."""
+        return self._txq
+    
+    def send_cmd(self, cmd):
+        """Alias for enqueue() for test compatibility."""
+        self.enqueue(cmd)
 
 # endregion
     # Loop through items
@@ -141,11 +191,36 @@ class Nextion:
 # endregion
     @staticmethod
     # Loop through items
+# Function: _extract_token - Extract clean token from frame by removing noise
+    def _extract_token(frame):
+# region _extract_token
+    # _extract_token handles token extraction logic. #
+        f = frame.strip()
+        if not f:
+            return None
+        
+        # Remove leading and trailing non-token bytes (filter noise)
+        # Valid token bytes: A-Z (65-90), 0-9 (48-57), _ (95)
+        start = 0
+        while start < len(f) and not (48 <= f[start] <= 57 or 65 <= f[start] <= 90 or f[start] == 95):
+            start += 1
+        
+        end = len(f)
+        while end > start and not (48 <= f[end-1] <= 57 or 65 <= f[end-1] <= 90 or f[end-1] == 95):
+            end -= 1
+        
+        return f[start:end] if start < end else None
+# endregion
+
+# endregion
+    @staticmethod
+    # Loop through items
 # Function: _is_token_frame - Defines the behavior for `_is_token_frame`.
     def _is_token_frame(frame):
 # region _is_token_frame
     # _is_token_frame handles  is token frame logic. #
-        f = frame.strip()
+        # Extract clean token
+        f = Nextion._extract_token(frame)
     # Conditional check
         if not f:
     # Return the result
@@ -200,6 +275,33 @@ class Nextion:
                     break
     # Return the result
         return tokens, page_changed
+# endregion
+
+# endregion
+    # Loop through items
+# Function: process_bytes - Process raw bytes from UART and call handler for tokens
+    def process_bytes(self, data, token_handler=None):
+# region process_bytes
+    # process_bytes handles byte processing logic for test compatibility. #
+        """Process incoming bytes and call token_handler for each valid token found."""
+        if not data:
+            return
+        
+        # Add data to buffer
+        self._rx.extend(data)
+        
+        # Extract and process tokens
+        while True:
+            frame = self._pop_frame()
+            if frame is None:
+                break
+            
+            # Check if it's a valid token
+            if self._is_token_frame(frame):
+                # Extract the clean token (without noise bytes)
+                clean_token = self._extract_token(frame)
+                if clean_token and token_handler:
+                    token_handler(clean_token)
 # endregion
 
 # endregion

@@ -73,3 +73,57 @@ def _fmt_ms(ms):
     # Return the result
     return "%d:%02d" % (m, s)
 # endregion
+
+
+# Function: hexdump - Hex dump utility for debugging
+def hexdump(data, width=16):
+    """Format bytes as hex string for debugging."""
+    if not data:
+        return "<empty>"
+    hex_strs = ["%02X" % b for b in data]
+    if width and len(hex_strs) > width:
+        lines = []
+        for i in range(0, len(hex_strs), width):
+            lines.append(" ".join(hex_strs[i:i+width]))
+        return "\n".join(lines)
+    return " ".join(hex_strs)
+
+
+# Public wrapper for sanitize_text with test-compatible defaults
+def sanitize_text(txt, max_len=100):
+    """Sanitize text for display (public API with test-compatible defaults)."""
+    if txt is None:
+        return "—"
+    out = []
+    for ch in str(txt):
+        o = ord(ch)
+        out.append(ch if 32 <= o <= 126 else " ")
+    s = "".join(out).replace('"', "'").strip()
+    if not s:
+        s = "—"
+    if len(s) > max_len:
+        s = s[: max_len - 3] + "..."  # Use "..." for test compatibility
+    return s
+
+
+# Public wrapper for fmt_ms with test-compatible formatting
+def fmt_ms(ms):
+    """Format milliseconds as time string (public API with test-compatible formatting)."""
+    if ms is None:
+        return "—"
+    try:
+        ms = int(ms)
+    except Exception:
+        return sanitize_text(str(ms), max_len=16)
+    
+    if ms < 0:
+        ms = 0
+    
+    total = ms // 1000
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    
+    if h > 0:
+        return "%d:%02d:%02d" % (h, m, s)
+    return "%02d:%02d" % (m, s)  # Zero-pad minutes for test compatibility

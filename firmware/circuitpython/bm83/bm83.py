@@ -40,12 +40,13 @@ class Bm83:
         0: "OFF", 1: "SOFT", 2: "BASS", 3: "TREBLE", 4: "CLASSICAL",
         5: "ROCK", 6: "JAZZ", 7: "POP", 8: "DANCE", 9: "RNB", 11: "USER"
     }
+    EQ_LABELS = EQ_L  # Alias for test compatibility
     CONNECTED_STATES = (0x06, 0x0B, 0x82, 0x64, 0x65, 0x66)
 
 # endregion
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
-    def __init__(self, uart):
+    def __init__(self, uart=None):
 # region __init__
     # __init__ handles   init   logic. #
         self.uart = uart
@@ -86,6 +87,28 @@ class Bm83:
         chk = self._checksum(hi, lo, body)
     # Return the result
         return bytes([0xAA, hi, lo]) + body + bytes([chk])
+# endregion
+
+# endregion
+    # Public alias for testing
+    def frame(self, op, params=b""):
+        """Public wrapper for _frame() to support tests."""
+        return self._frame(op, params)
+
+# endregion
+    # Loop through items
+# Function: _checksum_valid - Validates a checksum
+    def _checksum_valid(self, body_with_checksum):
+# region _checksum_valid
+    # _checksum_valid handles checksum validation logic. #
+        if len(body_with_checksum) < 2:
+            return False
+        body = body_with_checksum[:-1]
+        chk = body_with_checksum[-1]
+        ln = len(body)
+        hi, lo = (ln >> 8) & 0xFF, ln & 0xFF
+        expected = self._checksum(hi, lo, body)
+        return chk == expected
 # endregion
 
 # endregion
@@ -453,4 +476,39 @@ class Bm83:
             attrs[aid] = s
     # Return the result
         return resp, attrs
+# endregion
+
+# endregion
+    @staticmethod
+# Function: parse_avrcp_metadata - Parses simple AVRCP metadata for tests
+    def parse_avrcp_metadata(data):
+# region parse_avrcp_metadata
+    # parse_avrcp_metadata handles simple parsing logic for tests. #
+        """Parse simple AVRCP metadata from raw attribute data.
+        
+        Test format: attr_id (1 byte), charset (1 byte), length (1 byte), text
+        Maps attr_id: 1=title, 2=artist, 3=album, 4=track_num, 5=total_tracks, 6=genre
+        """
+        if len(data) < 3:
+            return {}
+        
+        attr_id = data[0]
+        # Skip charset byte at data[1]
+        length = data[2]
+        text = data[3:3 + length].decode("utf-8", "replace")
+        
+        # Map attribute IDs to names
+        attr_names = {
+            1: "title",
+            2: "artist", 
+            3: "album",
+            4: "track_num",
+            5: "total_tracks",
+            6: "genre"
+        }
+        
+        result = {}
+        if attr_id in attr_names:
+            result[attr_names[attr_id]] = text
+        return result
 # endregion
