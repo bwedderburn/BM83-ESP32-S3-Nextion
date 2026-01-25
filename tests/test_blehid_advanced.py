@@ -1,5 +1,6 @@
 from blehid.ble import BleHid
 
+
 class MockConnection:
     def __init__(self):
         self._paired = False

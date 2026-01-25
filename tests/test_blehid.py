@@ -1,6 +1,7 @@
 import types
 from blehid.ble import BleHid
 
+
 class DummyBLE:
     connected = False
     advertising = False

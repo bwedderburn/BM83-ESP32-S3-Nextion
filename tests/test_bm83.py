@@ -1,5 +1,6 @@
 from bm83.bm83 import Bm83
 
+
 def test_checksum():
     hi, lo = 0x00, 0x03
     body = bytes([0x01, 0x02, 0x03])

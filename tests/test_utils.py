@@ -1,5 +1,5 @@
-import pytest
 from utils.common import _sanitize_text, _fmt_ms
+
 
 def test_sanitize_text_basic():
     assert _sanitize_text("Hello!") == "Hello!"

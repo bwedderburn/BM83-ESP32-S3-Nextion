@@ -1,5 +1,5 @@
-import pytest
 from nextion.display import Nextion
+
 
 class DummyUART:
     def __init__(self):

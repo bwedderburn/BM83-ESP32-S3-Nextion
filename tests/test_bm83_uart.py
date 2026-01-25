@@ -1,5 +1,6 @@
 from bm83.bm83 import Bm83
 
+
 class MockUART:
     def __init__(self):
         self.writes = []

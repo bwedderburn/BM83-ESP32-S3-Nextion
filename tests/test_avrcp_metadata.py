@@ -1,5 +1,6 @@
 from bm83.bm83 import Bm83
 
+
 def test_avrcp_parse_metadata_attrs():
     bm = Bm83(None)
 
