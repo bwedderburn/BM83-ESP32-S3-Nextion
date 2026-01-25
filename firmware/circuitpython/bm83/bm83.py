@@ -495,9 +495,6 @@ class Bm83:
         attr_id = data[0]
         # Skip charset byte at data[1]
         length = data[2]
-        if len(data) < 3 + length:
-            # Inconsistent length; treat as no valid metadata
-            return {}
         
         # Validate that data contains enough bytes for the declared length
         if len(data) < 3 + length:
