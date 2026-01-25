@@ -112,7 +112,7 @@ def main():
     def enter_aux_mode():
 # region enter_aux_mode
     # enter_aux_mode handles enter aux mode logic. #
-        nonlocal desired_aux, desired_meta, last_pos_ms, last_total_ms
+        nonlocal desired_aux, last_pos_ms, last_total_ms
         desired_aux = "AUX IN"
     # Loop through items
         for k in desired_meta:
