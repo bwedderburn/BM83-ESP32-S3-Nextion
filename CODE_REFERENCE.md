@@ -395,18 +395,25 @@ flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statist
 ### BM83 AVRCP Metadata
 ```python
 bm = Bm83(uart)
-bm.req_avrcp_meta()  # Request metadata update
-meta = bm.get_avrcp_meta()  # Get cached metadata
-# meta = {
-#   "title": "Song Title",
-#   "artist": "Artist Name",
-#   "album": "Album Name",
-#   "track_num": "1",
-#   "total_tracks": "10",
-#   "genre": "Rock",
-#   "play_time_ms": 125000,  # Current position
-#   "total_len_ms": 240000   # Total duration
-# }
+
+# Request AVRCP metadata from the active device (DB index 0)
+bm.avrcp_get_element_attributes(db=0)
+
+# In your main loop, poll for events and parse metadata frames:
+for event, params in bm.poll():
+    if event == "GEA_0x5D":  # AVRCP Get Element Attributes response
+        meta = bm.parse_gea_0x5d(params)
+        # meta = {
+        #   "title": "Song Title",
+        #   "artist": "Artist Name",
+        #   "album": "Album Name",
+        #   "track_num": "1",
+        #   "total_tracks": "10",
+        #   "genre": "Rock",
+        #   "play_time_ms": 125000,  # Current position
+        #   "total_len_ms": 240000   # Total duration
+        # }
+        break
 ```
 
 ### Nextion Display Updates
