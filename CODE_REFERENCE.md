@@ -426,8 +426,8 @@ nx.set_text_active_page("tTitle", "Song Title")
 ```python
 ble = BleHid(enabled=True, name="AmpBench Remote")
 ble.setup()
-ble.vol_up()
-ble.vol_down()
+ble.volume(True)   # Volume up
+ble.volume(False)  # Volume down
 ble.mute()
 ```
 
