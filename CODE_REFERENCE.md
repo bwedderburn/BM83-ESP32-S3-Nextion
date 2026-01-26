@@ -436,7 +436,7 @@ ble.mute()
 from utils.common import sanitize_text, fmt_ms
 
 safe_text = sanitize_text("Artist — Name", max_len=30)
-time_str = fmt_ms(125000)  # "2:05"
+time_str = fmt_ms(125000)  # "02:05"
 ```
 
 ---
