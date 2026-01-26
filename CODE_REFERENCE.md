@@ -117,20 +117,18 @@ Provides package-level exports for the BM83 module, including EQ constants used 
 
 **Key Features**:
 - Binary UART protocol with framing and checksums
-- AVRCP metadata polling (title, artist, album, position, duration)
-- Playback control (play, pause, next, prev, stop)
+- AVRCP metadata (title, artist, album, position, duration) via async updates
+- Playback control (play/pause toggle, next, prev, stop)
 - Volume control and mute
 - EQ mode management (OFF, ROCK, POP, JAZZ, etc.)
 - Event notifications (pairing, connection, power state)
 
 **Key Methods**:
-- `send_cmd(opcode, params)`: Sends UART command with framing
-- `read_event()`: Reads and parses incoming BM83 events
-- `req_avrcp_meta()`: Requests AVRCP metadata update
-- `get_avrcp_meta()`: Returns cached metadata dict
-- `play()`, `pause()`, `next()`, `prev()`: Playback control
-- `vol_up()`, `vol_down()`: Volume adjustment
-- `set_eq_mode(mode_idx)`: Change EQ preset
+- `send(op, params)`: Sends UART command with framing
+- `poll(max_read=768)`: Reads and parses incoming BM83 events
+- `avrcp_get_element_attributes(db=0)`: Request AVRCP metadata; parsed metadata is updated asynchronously from `poll()` events
+- `play_pause()`, `next()`, `prev()`: Playback control (toggle play/pause, skip forward/backward)
+- `next_eq()`: Cycle to the next EQ preset and return the new mode index
 
 **EQ Constants**:
 ```python
