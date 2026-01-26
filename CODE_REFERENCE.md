@@ -214,8 +214,7 @@ Empty module marker (no exports).
 
 **Key Methods**:
 - `setup()`: Initializes BLE and starts advertising
-- `vol_up()`: Sends volume up HID report
-- `vol_down()`: Sends volume down HID report
+- `volume(up: bool)`: Sends volume up (`True`) or volume down (`False`) HID report
 - `mute()`: Sends mute toggle HID report
 - `erase_bonds()`: Clears paired devices
 - `start_advertising()`: Begins BLE advertisement
