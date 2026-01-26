@@ -162,11 +162,11 @@ Package-level exports for Nextion display components.
 
 **Key Methods**:
 - `boot_sync(delay_s)`: Waits for Nextion to boot and synchronizes
-- `poll()`: Reads and parses button press tokens
+- `read(max_tokens=6, debounce_s=0.10)`: Reads and parses button press tokens; returns `(tokens, page_changed)`
 - `set_text(obj_name, text)`: Updates text field (queues command)
 - `set_text_active_page(obj_name, text)`: Updates text on current page immediately
-- `flush_queue()`: Sends all queued commands
-- `get_page()`: Returns current page ID
+- `tick()`: Non-blocking processing; flushes the queued commands to the display
+- `current_page` (attribute): Current page ID
 
 **UI Object IDs**:
 ```python
