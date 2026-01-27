@@ -3,6 +3,30 @@ import gc
 from utils.common import dprint
 
 # endregion
+BLE_COUNTER_FILE = "/ble_counter.txt"
+
+
+# endregion
+def _read_ble_counter():
+    """Read the BLE counter from persistent storage."""
+    try:
+        with open(BLE_COUNTER_FILE, "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+
+# endregion
+def _write_ble_counter(count):
+    """Write the BLE counter to persistent storage."""
+    try:
+        with open(BLE_COUNTER_FILE, "w") as f:
+            f.write(str(count))
+    except Exception:
+        pass
+
+
+# endregion
 # Class: BleHid - Represents the BleHid class.
 class BleHid:
 # region BleHid
@@ -13,6 +37,7 @@ class BleHid:
 # region __init__
     # __init__ handles   init   logic. #
         self.enabled = enabled
+        self.base_name = name
         self.name = name
 
 # endregion
@@ -230,6 +255,24 @@ class BleHid:
 
 # endregion
     # Loop through items
+# Function: _update_ble_name - Defines the behavior for `_update_ble_name`.
+    def _update_ble_name(self, counter):
+# region _update_ble_name
+    # _update_ble_name handles updating BLE name with counter. #
+    # Conditional check
+        if not self._ready or not self._ble:
+            return
+        self.name = "%s%02d" % (self.base_name, counter)
+    # Try block to catch exceptions
+        try:
+            self._ble.name = self.name
+            print("[BLE] Name updated to:", self.name)
+    # Handle exceptions
+        except Exception as e:
+            dprint("[BLE] name update err:", e)
+
+# endregion
+    # Loop through items
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
     def erase_bonds(self):
 # region erase_bonds
@@ -282,6 +325,12 @@ class BleHid:
 # endregion
     # Conditional check
         print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
+        
+        # Increment counter and update BLE name
+        counter = _read_ble_counter() + 1
+        _write_ble_counter(counter)
+        self._update_ble_name(counter)
+        
         self._adv_inhibit_until = 0.0
         self._adv_oom_count = 0
         self._need_pairing_check = False

@@ -37,7 +37,6 @@ def main():
 # endregion
     ble = BleHid(BLE_ENABLED, BLE_NAME)
     ble.setup()
-    ble.erase_bonds()  # Erase BLE bindings at boot
 
 # endregion
     print("=== ESP32-S3 BM83 + Nextion + BLE HID (VOLUME ONLY) ===")
