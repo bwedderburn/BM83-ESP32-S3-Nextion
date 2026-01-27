@@ -163,9 +163,9 @@ Package-level exports for Nextion display components.
 **Key Methods**:
 - `boot_sync(delay_s)`: Waits for Nextion to boot and synchronizes
 - `read(max_tokens=6, debounce_s=0.10)`: Reads and parses button press tokens; returns `(tokens, page_changed)`
-- `set_text(obj_name, text)`: Updates text field (queues command)
-- `set_text_active_page(obj_name, text)`: Updates text on current page immediately
-- `tick()`: Non-blocking processing; flushes the queued commands to the display
+- `enqueue(cmd)`: Queues a command string to be sent to the display
+- `set_text_active_page(obj_name, text)`: Updates text field on current page (queues sanitized command)
+- `tick()`: Non-blocking processing; sends queued commands to the display
 - `current_page` (attribute): Current page ID
 
 **UI Object IDs**:
@@ -419,11 +419,11 @@ for event, params in bm.poll():
 ### Nextion Display Updates
 ```python
 nx = Nextion(uart)
-nx.set_text("tTitle", "Song Title")  # Queue update
-nx.flush_queue()  # Send all queued commands
+nx.set_text_active_page("tTitle", "Song Title")  # Queue update for current page
 
-# Update on current page immediately
-nx.set_text_active_page("tTitle", "Song Title")
+# Or manually queue commands and process them
+nx.enqueue('tTitle.txt="Song Title"')  # Queue custom command
+nx.tick()  # Process queued commands (call repeatedly in main loop)
 ```
 
 ### BLE HID Volume Control
