@@ -1,5 +1,5 @@
 from nextion.display import Nextion
-import unittest.mock as mock
+from unittest import mock
 
 
 class DummyUART:
