@@ -7,6 +7,12 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+!dist/
+!build/
+dist/**
+build/**
+!dist/**/*.mpy
+!build/**/*.mpy
 .pytest_cache/
 
 # macOS

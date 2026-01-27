@@ -377,6 +377,12 @@ flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statist
 ./deploy.sh
 ```
 
+### MPY Build Output
+```bash
+# Build .mpy artifacts into dist/circuitpython (requires mpy-cross)
+./build_mpy.sh
+```
+
 **Manual Deployment**:
 1. Flash CircuitPython 10.x to ESP32-S3 DevKitC-1
 2. Copy `firmware/circuitpython/*` to `CIRCUITPY` drive
