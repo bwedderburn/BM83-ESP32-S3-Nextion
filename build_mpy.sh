@@ -19,12 +19,21 @@ if command -v rsync >/dev/null 2>&1; then
   rsync -a --exclude="__pycache__" --exclude="*.py" "${SRC_DIR}/" "${DIST_DIR}/"
 else
   echo "rsync not found; falling back to cp. Install rsync for faster builds." >&2
-  while IFS= read -r -d '' file; do
-    rel_path="${file#"${SRC_DIR}"/}"
-    dest="${DIST_DIR}/${rel_path}"
-    mkdir -p "$(dirname "${dest}")"
-    cp -p "${file}" "${dest}"
-  done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0)
+  if [[ ! -d "${SRC_DIR}" ]]; then
+    echo "Error: Source directory ${SRC_DIR} does not exist" >&2
+    exit 1
+  fi
+  find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0 | \
+    while IFS= read -r -d '' file; do
+      rel_path="${file#"${SRC_DIR}"/}"
+      dest="${DIST_DIR}/${rel_path}"
+      mkdir -p "$(dirname "${dest}")"
+      cp -p "${file}" "${dest}"
+    done
+  if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
+    echo "Error: find command failed during file copy" >&2
+    exit 1
+  fi
 fi
 
 while IFS= read -r -d '' py_file; do
