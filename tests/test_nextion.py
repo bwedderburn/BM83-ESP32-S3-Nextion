@@ -1,4 +1,5 @@
 from nextion.display import Nextion
+import time
 
 
 class DummyUART:
@@ -31,3 +32,47 @@ def test_nextion_read_token():
     nx = Nextion(uart)
     tokens, _ = nx.read()
     assert tokens == [b"BT_EQ"]
+
+def test_nextion_queue_overflow():
+    """Test that queue refuses to grow beyond max_queue_size"""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    max_size = nx._max_queue_size
+    
+    # Fill queue to max
+    for i in range(max_size):
+        nx.enqueue(f"cmd_{i}")
+    assert len(nx._txq) == max_size
+    
+    # Additional enqueue should be dropped
+    nx.enqueue("cmd_overflow")
+    assert len(nx._txq) == max_size
+    assert "cmd_overflow" not in nx._txq
+
+def test_nextion_token_throttle():
+    """Test that all tokens are throttled within throttle window"""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    
+    # First token should be accepted
+    uart.to_read = b"BT_EQ\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+    tokens, _ = nx.read()
+    assert len(tokens) == 1
+    assert tokens[0] == b"BT_EQ"
+    
+    # Second token (different) within throttle window should be dropped
+    # Even though it's in the buffer, throttle should prevent any tokens
+    uart.to_read = b"BT_POWER\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+    tokens, _ = nx.read()
+    assert len(tokens) == 0  # Throttled (all tokens in window)
+    # BT_POWER should still be in buffer
+    assert b"BT_POWER" in nx._rx
+    
+    # After throttle window, the buffered token should be accepted
+    time.sleep(nx._token_throttle_s + 0.01)
+    tokens, _ = nx.read()
+    assert len(tokens) == 1
+    assert tokens[0] == b"BT_POWER"
+

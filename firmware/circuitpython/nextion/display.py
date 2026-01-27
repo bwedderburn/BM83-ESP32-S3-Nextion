@@ -75,10 +75,11 @@ class Nextion:
         self._txq = []
         self._last_tx_at = 0.0
         self._tx_interval_s = 0.035
+        self._max_queue_size = 50  # Prevent unbounded growth
 
 # endregion
-        self._last_token = None
         self._last_token_at = 0.0
+        self._token_throttle_s = 0.15  # Any token within this window is dropped
 
 # endregion
     
@@ -118,6 +119,9 @@ class Nextion:
     def enqueue(self, cmd):
 # region enqueue
     # enqueue handles enqueue logic. #
+        if len(self._txq) >= self._max_queue_size:
+            dprint("[NX] queue full, dropping:", cmd[:30])
+            return
         self._txq.append(cmd)
 
 # endregion
@@ -247,6 +251,10 @@ class Nextion:
         tokens = []
         page_changed = False
         self._read_more()
+        now = time.monotonic()
+        # Throttle ALL tokens within window (not just duplicates)
+        if (now - self._last_token_at) < self._token_throttle_s:
+            return tokens, page_changed
     # While loop execution
         while True:
             frame = self._pop_frame()
@@ -263,11 +271,6 @@ class Nextion:
                 continue
     # Conditional check
             if self._is_token_frame(frame):
-                now = time.monotonic()
-    # Conditional check
-                if self._last_token == frame and (now - self._last_token_at) < debounce_s:
-                    continue
-                self._last_token = frame
                 self._last_token_at = now
                 tokens.append(frame)
     # Conditional check
