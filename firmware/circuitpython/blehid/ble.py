@@ -235,6 +235,10 @@ class BleHid:
 # region erase_bonds
     # erase_bonds handles erase bonds logic. #
         print("[BLE] Erase bonding requested")
+    # Conditional check
+        if not self._ready or not self._ble:
+            print("[BLE] erase_bonding: Not ready or BLE not initialized")
+            return
     # Try block to catch exceptions
         try:
     # Loop through items
