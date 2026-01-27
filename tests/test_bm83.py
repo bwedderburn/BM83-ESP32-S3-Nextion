@@ -141,3 +141,54 @@ def test_poll_buffer_overflow_protection():
     bm.poll()
     # Buffer should be cleared on overflow
     assert len(bm._rx) == 0
+
+
+def test_eq_throttle():
+    """Test that rapid EQ button presses are throttled."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    # bm.eq_index starts at 0
+
+    # First EQ command should go through
+    # eq_index: 0 -> 1, returns EQ_SEQ[1] (SOFT)
+    mode1 = bm.next_eq()
+    assert bm.eq_index == 1
+    assert mode1 == Bm83.EQ_SEQ[1]
+    assert len(uart.writes) == 1
+
+    # Immediate second call should be throttled (returns current mode, no index change)
+    # eq_index stays at 1, returns EQ_SEQ[1] (SOFT)
+    mode2 = bm.next_eq()
+    assert bm.eq_index == 1  # Not incremented
+    assert mode2 == Bm83.EQ_SEQ[1]  # Returns current mode
+    assert len(uart.writes) == 1  # No new command sent
+
+    # Simulate time passing beyond throttle window
+    bm._last_eq_cmd_at = time.monotonic() - 1.0  # Force past throttle
+    # eq_index: 1 -> 2, returns EQ_SEQ[2] (BASS)
+    mode3 = bm.next_eq()
+    assert bm.eq_index == 2
+    assert mode3 == Bm83.EQ_SEQ[2]
+    assert len(uart.writes) == 2  # New command sent
+
+
+def test_track_changed_reregister_throttle():
+    """Test that TrackChanged re-registration is throttled to prevent loops."""
+    uart = MockUART()
+    bm = Bm83(uart)
+
+    # First re-registration should go through
+    result1 = bm.avrcp_reregister_track_changed()
+    assert result1 is True
+    assert len(uart.writes) == 1
+
+    # Immediate second call should be throttled
+    result2 = bm.avrcp_reregister_track_changed()
+    assert result2 is False
+    assert len(uart.writes) == 1  # No new command
+
+    # Simulate time passing beyond throttle window (2s)
+    bm._last_track_changed_reg_at = time.monotonic() - 3.0
+    result3 = bm.avrcp_reregister_track_changed()
+    assert result3 is True
+    assert len(uart.writes) == 2  # New command sent
