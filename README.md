@@ -52,3 +52,7 @@ Unit tests live under `tests/` and can be run with `pytest` on compatible platfo
 - If metadata stops updating, ensure AVRCP is supported by the source device.
 - If CircuitPython auto-reloads on file save, it's disabled in code.
 
+## Open investigations (keep issues open)
+
+- **#35 Hard crash after EQ/power interactions** – crash observed while cycling EQ presets and power events; awaiting on-device confirmation of any fix before closure.
+- **#37 E-BIND button crash with BLE pairing** – crash seen when pressing E-BIND with repeated AVRCP metadata requests and BLE pairing attempts; will remain open until validated on hardware.
