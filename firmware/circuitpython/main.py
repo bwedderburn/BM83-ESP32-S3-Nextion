@@ -248,7 +248,7 @@ def main():
                     if event_id == 0x02:
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
-                        bm.avrcp_register_notification(0x02, interval_s=0)
+                        bm.avrcp_reregister_track_changed()
     # Conditional check
                     elif event_id == 0x05 and len(avp) >= 5:
                         pos = int.from_bytes(avp[1:5], "big")

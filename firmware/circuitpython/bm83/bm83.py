@@ -67,6 +67,12 @@ class Bm83:
         # Non-blocking power state machine
         self._power_state = None  # None, "on_press", "on_init", "off_press"
         self._power_next_at = 0.0
+        # EQ command throttle to prevent rapid-fire from fast button presses
+        self._last_eq_cmd_at = 0.0
+        self._eq_throttle_s = 0.25  # Min time between EQ commands
+        # TrackChanged re-registration throttle to prevent feedback loops
+        self._last_track_changed_reg_at = 0.0
+        self._track_changed_reg_throttle_s = 2.0  # Min time between re-registrations
 
 # endregion
     @staticmethod
@@ -321,7 +327,12 @@ class Bm83:
 # Function: next_eq - Defines the behavior for `next_eq`.
     def next_eq(self):
 # region next_eq
-    # next_eq handles next eq logic. #
+    # next_eq handles next eq logic with throttling to prevent UART flood. #
+        now = time.monotonic()
+        if (now - self._last_eq_cmd_at) < self._eq_throttle_s:
+            # Return current mode without sending command (throttled)
+            return self.EQ_SEQ[self.eq_index]
+        self._last_eq_cmd_at = now
         self.eq_index = (self.eq_index + 1) % len(self.EQ_SEQ)
         mode = self.EQ_SEQ[self.eq_index]
         self.send(self.OP_EQ_MODE_SETTING, bytes([mode, 0x00]))
@@ -385,6 +396,20 @@ class Bm83:
     # avrcp_register_notification handles avrcp register notification logic. #
         params = bytes([event_id]) + int(interval_s).to_bytes(4, "big")
         self.send(self.OP_AVC_VENDOR_CMD, bytes([db]) + self._avc_payload(0x31, params))
+
+# endregion
+    # Loop through items
+# Function: avrcp_reregister_track_changed - Re-register TrackChanged with throttle
+    def avrcp_reregister_track_changed(self, db=0):
+# region avrcp_reregister_track_changed
+    # Throttled re-registration for TrackChanged to prevent feedback loops. #
+        now = time.monotonic()
+        if (now - self._last_track_changed_reg_at) < self._track_changed_reg_throttle_s:
+            return False  # Throttled
+        self._last_track_changed_reg_at = now
+        self.avrcp_register_notification(0x02, interval_s=0, db=db)
+        return True
+# endregion
 
 # endregion
     # Loop through items
