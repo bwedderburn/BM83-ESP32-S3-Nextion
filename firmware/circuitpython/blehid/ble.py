@@ -2,11 +2,9 @@ import time
 import gc
 from utils.common import dprint
 
-# endregion
 BLE_COUNTER_FILE = "/ble_counter.txt"
 
 
-# endregion
 def _read_ble_counter():
     """Read the BLE counter from persistent storage."""
     try:
@@ -16,17 +14,13 @@ def _read_ble_counter():
         return 0
 
 
-# endregion
 def _write_ble_counter(count):
     """Write the BLE counter to persistent storage."""
     try:
         with open(BLE_COUNTER_FILE, "w") as f:
             f.write(str(count))
-    except Exception:
-        pass
-
-
-# endregion
+    except Exception as e:
+        dprint("[BLE] counter write err:", e)
 # Class: BleHid - Represents the BleHid class.
 class BleHid:
 # region BleHid
@@ -258,7 +252,9 @@ class BleHid:
 # Function: _update_ble_name - Defines the behavior for `_update_ble_name`.
     def _update_ble_name(self, counter):
 # region _update_ble_name
-    # _update_ble_name handles updating BLE name with counter. #
+    # _update_ble_name handles updating BLE name with counter.
+    # Formats counter as 2-digit zero-padded number (e.g., 01, 02, ..., 99, 100).
+    # For counters > 99, the full number is used without padding.
     # Conditional check
         if not self._ready or not self._ble:
             return
@@ -326,10 +322,11 @@ class BleHid:
     # Conditional check
         print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
         
-        # Increment counter and update BLE name
-        counter = _read_ble_counter() + 1
-        _write_ble_counter(counter)
-        self._update_ble_name(counter)
+        # Increment counter and update BLE name only if erase succeeded
+        if ok:
+            counter = _read_ble_counter() + 1
+            _write_ble_counter(counter)
+            self._update_ble_name(counter)
         
         self._adv_inhibit_until = 0.0
         self._adv_oom_count = 0
