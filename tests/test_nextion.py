@@ -51,28 +51,31 @@ def test_nextion_queue_overflow():
 
 def test_nextion_token_throttle():
     """Test that all tokens are throttled within throttle window"""
+    import unittest.mock as mock
     uart = DummyUART()
     nx = Nextion(uart)
     
-    # First token should be accepted
-    uart.to_read = b"BT_EQ\xFF\xFF\xFF"
-    uart.in_waiting = len(uart.to_read)
-    tokens, _ = nx.read()
-    assert len(tokens) == 1
-    assert tokens[0] == b"BT_EQ"
-    
-    # Second token (different) within throttle window should be dropped
-    # Even though it's in the buffer, throttle should prevent any tokens
-    uart.to_read = b"BT_POWER\xFF\xFF\xFF"
-    uart.in_waiting = len(uart.to_read)
-    tokens, _ = nx.read()
-    assert len(tokens) == 0  # Throttled (all tokens in window)
-    # BT_POWER should still be in buffer
-    assert b"BT_POWER" in nx._rx
-    
-    # After throttle window, the buffered token should be accepted
-    time.sleep(nx._token_throttle_s + 0.01)
-    tokens, _ = nx.read()
-    assert len(tokens) == 1
-    assert tokens[0] == b"BT_POWER"
+    with mock.patch('nextion.display.time.monotonic') as mock_time:
+        # First token at time 0
+        mock_time.return_value = 0.0
+        uart.to_read = b"BT_EQ\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        assert len(tokens) == 1
+        assert tokens[0] == b"BT_EQ"
+        
+        # Second token at 0.1s (within throttle window)
+        mock_time.return_value = 0.1
+        uart.to_read = b"BT_POWER\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        assert len(tokens) == 0  # Throttled (all tokens in window)
+        # BT_POWER should still be in buffer
+        assert b"BT_POWER" in nx._rx
+        
+        # After throttle window (0.15s + 0.01s margin)
+        mock_time.return_value = 0.16
+        tokens, _ = nx.read()
+        assert len(tokens) == 1
+        assert tokens[0] == b"BT_POWER"
 

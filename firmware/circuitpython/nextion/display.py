@@ -78,7 +78,7 @@ class Nextion:
         self._max_queue_size = 50  # Prevent unbounded growth
 
 # endregion
-        self._last_token_at = 0.0
+        self._last_token_at = -1.0  # Initialize to past to allow first token
         self._token_throttle_s = 0.15  # Any token within this window is dropped
 
 # endregion
@@ -120,6 +120,7 @@ class Nextion:
 # region enqueue
     # enqueue handles enqueue logic. #
         if len(self._txq) >= self._max_queue_size:
+            # Truncate command for readability in debug logs (30 chars is enough to identify command type)
             dprint("[NX] queue full, dropping:", cmd[:30])
             return
         self._txq.append(cmd)
