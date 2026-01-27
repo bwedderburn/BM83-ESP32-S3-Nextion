@@ -17,7 +17,7 @@ BM83_TX, BM83_RX = board.IO17, board.IO18
 
 # endregion
 BLE_ENABLED = True
-BLE_NAME = "AmpBench Remote"
+BLE_NAME = "Bs Groovy BT CTRL"
 
 # endregion
 # Function: main - Defines the behavior for `main`.
@@ -37,6 +37,7 @@ def main():
 # endregion
     ble = BleHid(BLE_ENABLED, BLE_NAME)
     ble.setup()
+    ble.erase_bonds()  # Erase BLE bindings at boot
 
 # endregion
     print("=== ESP32-S3 BM83 + Nextion + BLE HID (VOLUME ONLY) ===")
