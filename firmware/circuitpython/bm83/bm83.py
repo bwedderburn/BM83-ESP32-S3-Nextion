@@ -51,6 +51,7 @@ class Bm83:
     # __init__ handles   init   logic. #
         self.uart = uart
         self._rx = bytearray()
+        self._rx_max = 4096  # Max buffer size to prevent memory exhaustion
         self.power_on = False
         self.eq_index = 0
         self.connected = False
@@ -63,6 +64,9 @@ class Bm83:
         self._last_attrs_req_at = 0.0
         self._gea_frag = bytearray()
         self._gea_expect_len = None
+        # Non-blocking power state machine
+        self._power_state = None  # None, "on_press", "on_wait", "off_press", "off_wait"
+        self._power_next_at = 0.0
 
 # endregion
     @staticmethod
@@ -140,7 +144,7 @@ class Bm83:
 # endregion
     # Loop through items
 # Function: poll - Defines the behavior for `poll`.
-    def poll(self, max_read=768):
+    def poll(self, max_read=768, max_events=8):
 # region poll
     # poll handles poll logic. #
         out = []
@@ -157,8 +161,12 @@ class Bm83:
     # Conditional check
         if chunk:
             self._rx.extend(chunk)
+        # Limit buffer size to prevent memory exhaustion
+        if len(self._rx) > self._rx_max:
+            dprint("[BM83] buffer overflow, trimming")
+            self._rx = self._rx[-self._rx_max:]
     # While loop execution
-        while True:
+        while len(out) < max_events:
     # Conditional check
             if len(self._rx) < 4:
                 break
@@ -210,27 +218,56 @@ class Bm83:
 # Function: power_on_cmd - Defines the behavior for `power_on_cmd`.
     def power_on_cmd(self):
 # region power_on_cmd
-    # power_on_cmd handles power on cmd logic. #
+    # power_on_cmd handles power on cmd logic (non-blocking state machine). #
+        now = time.monotonic()
+        self._power_state = "on_press"
+        self._power_next_at = now
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_PRESS]))
-        time.sleep(0.2)
-        self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_RELEASE]))
-        time.sleep(0.5)
-        self.init_link()
-        self.power_on = True
-        print("[POWER] ON (UART)")
 
 # endregion
     # Loop through items
 # Function: power_off_cmd - Defines the behavior for `power_off_cmd`.
     def power_off_cmd(self):
 # region power_off_cmd
-    # power_off_cmd handles power off cmd logic. #
+    # power_off_cmd handles power off cmd logic (non-blocking state machine). #
+        now = time.monotonic()
+        self._power_state = "off_press"
+        self._power_next_at = now
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_PRESS]))
-        time.sleep(1.5)
-        self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_RELEASE]))
-        self.power_on = False
-        self.connected = False
-        print("[POWER] OFF (UART)")
+
+# endregion
+    # Loop through items
+# Function: tick_power - Defines the behavior for `tick_power`.
+    def tick_power(self):
+# region tick_power
+    # tick_power handles non-blocking power state machine. #
+        if self._power_state is None:
+            return
+        now = time.monotonic()
+        if now < self._power_next_at:
+            return
+        if self._power_state == "on_press":
+            self._power_state = "on_release"
+            self._power_next_at = now + 0.2
+            self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_RELEASE]))
+        elif self._power_state == "on_release":
+            self._power_state = "on_init"
+            self._power_next_at = now + 0.5
+        elif self._power_state == "on_init":
+            self.init_link()
+            self.power_on = True
+            self._power_state = None
+            print("[POWER] ON (UART)")
+        elif self._power_state == "off_press":
+            self._power_state = "off_release"
+            self._power_next_at = now + 1.5
+        elif self._power_state == "off_release":
+            self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_RELEASE]))
+            self.power_on = False
+            self.connected = False
+            self._power_state = None
+            print("[POWER] OFF (UART)")
+# endregion
 
 # endregion
     # Loop through items

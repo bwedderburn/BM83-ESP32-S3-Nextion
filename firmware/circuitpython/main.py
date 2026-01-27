@@ -133,13 +133,14 @@ def main():
 
 # endregion
     last_gc = time.monotonic()
+    gc_interval_s = 4.0  # More frequent GC to prevent memory pressure
 
 # endregion
     # While loop execution
     while True:
         now = time.monotonic()
     # Conditional check
-        if now - last_gc > 8.0:
+        if now - last_gc > gc_interval_s:
             gc.collect()
             last_gc = now
 
@@ -153,6 +154,10 @@ def main():
 
 # endregion
         ble.tick()
+
+# endregion
+        # Tick non-blocking power state machine
+        bm.tick_power()
 
 # endregion
         streaming_seems_active = bm.connected and last_avrcp_rx_at > 0.0 and (now - last_avrcp_rx_at) < AVRCP_SILENCE_TO_AUX_S
