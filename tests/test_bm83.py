@@ -147,21 +147,28 @@ def test_eq_throttle():
     """Test that rapid EQ button presses are throttled."""
     uart = MockUART()
     bm = Bm83(uart)
+    # bm.eq_index starts at 0
 
     # First EQ command should go through
+    # eq_index: 0 -> 1, returns EQ_SEQ[1] (SOFT)
     mode1 = bm.next_eq()
-    assert mode1 == Bm83.EQ_SEQ[1]  # 0 -> 1 in sequence
+    assert bm.eq_index == 1
+    assert mode1 == Bm83.EQ_SEQ[1]
     assert len(uart.writes) == 1
 
-    # Immediate second call should be throttled (returns current mode)
+    # Immediate second call should be throttled (returns current mode, no index change)
+    # eq_index stays at 1, returns EQ_SEQ[1] (SOFT)
     mode2 = bm.next_eq()
-    assert mode2 == Bm83.EQ_SEQ[1]  # Still at index 1
+    assert bm.eq_index == 1  # Not incremented
+    assert mode2 == Bm83.EQ_SEQ[1]  # Returns current mode
     assert len(uart.writes) == 1  # No new command sent
 
     # Simulate time passing beyond throttle window
     bm._last_eq_cmd_at = time.monotonic() - 1.0  # Force past throttle
+    # eq_index: 1 -> 2, returns EQ_SEQ[2] (BASS)
     mode3 = bm.next_eq()
-    assert mode3 == Bm83.EQ_SEQ[2]  # Now at index 2
+    assert bm.eq_index == 2
+    assert mode3 == Bm83.EQ_SEQ[2]
     assert len(uart.writes) == 2  # New command sent
 
 
