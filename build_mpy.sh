@@ -23,7 +23,7 @@ else
     rel_path="${file#"${SRC_DIR}"/}"
     dest="${DIST_DIR}/${rel_path}"
     mkdir -p "$(dirname "${dest}")"
-    cp "${file}" "${dest}"
+    cp -p "${file}" "${dest}"
   done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0)
 fi
 
