@@ -1,4 +1,6 @@
+import time
 from bm83.bm83 import Bm83
+from tests.test_bm83_uart import MockUART, frame_to_bytes
 
 
 def test_checksum():
@@ -58,7 +60,6 @@ def test_power_off_nonblocking():
 
 def test_tick_power_on_sequence():
     """Test tick_power completes power on sequence."""
-    import time
     uart = MockUARTForPower()
     bm = Bm83(uart)
     bm.power_on_cmd()
@@ -81,7 +82,6 @@ def test_tick_power_on_sequence():
 
 def test_tick_power_off_sequence():
     """Test tick_power completes power off sequence."""
-    import time
     uart = MockUARTForPower()
     bm = Bm83(uart)
     bm.power_on = True
@@ -103,7 +103,6 @@ def test_tick_power_off_sequence():
 
 def test_poll_limits_events():
     """Test that poll respects max_events parameter."""
-    from tests.test_bm83_uart import MockUART, frame_to_bytes
     uart = MockUART()
     bm = Bm83(uart)
     # Queue up many events

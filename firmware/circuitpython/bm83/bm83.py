@@ -65,7 +65,7 @@ class Bm83:
         self._gea_frag = bytearray()
         self._gea_expect_len = None
         # Non-blocking power state machine
-        self._power_state = None  # None, "on_press", "on_wait", "off_press", "off_wait"
+        self._power_state = None  # None, "on_press", "on_release", "on_init", "off_press", "off_release"
         self._power_next_at = 0.0
 
 # endregion
