@@ -49,12 +49,16 @@ def test_tick_power_on_sequence():
     bm.power_on_cmd()
     assert bm._power_state == "on_press"
     assert len(uart.writes) == 1  # Press command sent
+    # Verify press command contains MMI_POWER_ON_PRESS (0x51)
+    assert Bm83.MMI_POWER_ON_PRESS in uart.writes[0]
 
     # Simulate 0.2s elapsed, tick should send release and transition to on_init
     bm._power_next_at = time.monotonic() - 1  # Force immediate
     bm.tick_power()
     assert bm._power_state == "on_init"
     assert len(uart.writes) == 2  # Release command sent
+    # Verify release command contains MMI_POWER_ON_RELEASE (0x52)
+    assert Bm83.MMI_POWER_ON_RELEASE in uart.writes[1]
 
     # Simulate 0.5s elapsed, tick should call init_link
     bm._power_next_at = time.monotonic() - 1
@@ -62,6 +66,9 @@ def test_tick_power_on_sequence():
     assert bm._power_state is None
     assert bm.power_on is True
     assert len(uart.writes) >= 4  # init_link sends multiple commands
+    # Verify init_link commands include OP_READ_BD_ADDR (0x0F)
+    init_link_cmds = uart.writes[2:]
+    assert any(Bm83.OP_READ_BD_ADDR in cmd for cmd in init_link_cmds)
 
 
 def test_tick_power_off_sequence():
@@ -73,6 +80,8 @@ def test_tick_power_off_sequence():
     bm.power_off_cmd()
     assert bm._power_state == "off_press"
     assert len(uart.writes) == 1  # Press command sent
+    # Verify press command contains MMI_POWER_OFF_PRESS (0x53)
+    assert Bm83.MMI_POWER_OFF_PRESS in uart.writes[0]
 
     # Simulate 1.5s elapsed, tick should send release and complete
     bm._power_next_at = time.monotonic() - 1
@@ -81,6 +90,8 @@ def test_tick_power_off_sequence():
     assert bm.power_on is False
     assert bm.connected is False
     assert len(uart.writes) == 2  # Release command sent
+    # Verify release command contains MMI_POWER_OFF_RELEASE (0x54)
+    assert Bm83.MMI_POWER_OFF_RELEASE in uart.writes[1]
 
 
 def test_rapid_power_toggle_ignored():
