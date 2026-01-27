@@ -246,16 +246,12 @@ class Nextion:
 # endregion
     # Loop through items
 # Function: read - Defines the behavior for `read`.
-    def read(self, max_tokens=6, debounce_s=0.10):
+    def read(self, max_tokens=6):
 # region read
     # read handles read logic. #
         tokens = []
         page_changed = False
         self._read_more()
-        now = time.monotonic()
-        # Throttle ALL tokens within window (not just duplicates)
-        if (now - self._last_token_at) < self._token_throttle_s:
-            return tokens, page_changed
     # While loop execution
         while True:
             frame = self._pop_frame()
@@ -272,6 +268,10 @@ class Nextion:
                 continue
     # Conditional check
             if self._is_token_frame(frame):
+                now = time.monotonic()
+                # Throttle: drop token frames within window, but continue draining buffer
+                if (now - self._last_token_at) < self._token_throttle_s:
+                    continue  # Discard this token frame, process next
                 self._last_token_at = now
                 tokens.append(frame)
     # Conditional check

@@ -63,18 +63,65 @@ def test_nextion_token_throttle():
         assert len(tokens) == 1
         assert tokens[0] == b"BT_EQ"
         
-        # Second token at 0.1s (within throttle window)
+        # Second token at 0.1s (within throttle window) - should be discarded
         mock_time.return_value = 0.1
         uart.to_read = b"BT_POWER\xFF\xFF\xFF"
         uart.in_waiting = len(uart.to_read)
         tokens, _ = nx.read()
-        assert len(tokens) == 0  # Throttled (all tokens in window)
-        # BT_POWER should still be in buffer
-        assert b"BT_POWER" in nx._rx
+        assert len(tokens) == 0  # Throttled (all tokens in window are dropped)
+        # BT_POWER should be consumed/discarded, not in buffer
+        assert b"BT_POWER" not in nx._rx
         
-        # After throttle window (0.15s + 0.01s margin)
+        # Third token after throttle window - should be accepted
         mock_time.return_value = 0.16
+        uart.to_read = b"BT_NEXT\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
         tokens, _ = nx.read()
         assert len(tokens) == 1
-        assert tokens[0] == b"BT_POWER"
+        assert tokens[0] == b"BT_NEXT"
+
+def test_nextion_page_change_during_throttle():
+    """Test that page-change frames are processed even during token throttle"""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    
+    with mock.patch('nextion.display.time.monotonic') as mock_time:
+        # First token at time 0
+        mock_time.return_value = 0.0
+        uart.to_read = b"BT_EQ\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, page_changed = nx.read()
+        assert len(tokens) == 1
+        
+        # Page-change frame at 0.05s (within throttle window)
+        mock_time.return_value = 0.05
+        uart.to_read = b"\x66\x01\xFF\xFF\xFF"  # Page change to page 1
+        uart.in_waiting = len(uart.to_read)
+        tokens, page_changed = nx.read()
+        assert len(tokens) == 0  # No tokens during throttle
+        assert page_changed  # But page change still processed
+        assert nx.current_page == 1
+
+def test_nextion_multiple_buffered_tokens_throttled():
+    """Test that multiple buffered tokens are individually throttled"""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    
+    with mock.patch('nextion.display.time.monotonic') as mock_time:
+        # First token at time 0
+        mock_time.return_value = 0.0
+        uart.to_read = b"BT_EQ\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        assert len(tokens) == 1
+        assert tokens[0] == b"BT_EQ"
+        
+        # Multiple tokens already buffered at 0.05s (within throttle window)
+        mock_time.return_value = 0.05
+        uart.to_read = b"BT_POWER\xFF\xFF\xFFBT_NEXT\xFF\xFF\xFFBT_PLAY\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        # All should be throttled/discarded since they're processed within window
+        assert len(tokens) == 0
+        assert len(nx._rx) == 0  # All consumed
 
