@@ -1,5 +1,5 @@
 from nextion.display import Nextion
-import time
+import unittest.mock as mock
 
 
 class DummyUART:
@@ -51,7 +51,6 @@ def test_nextion_queue_overflow():
 
 def test_nextion_token_throttle():
     """Test that all tokens are throttled within throttle window"""
-    import unittest.mock as mock
     uart = DummyUART()
     nx = Nextion(uart)
     
