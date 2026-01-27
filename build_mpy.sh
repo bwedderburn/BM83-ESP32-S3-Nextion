@@ -39,8 +39,10 @@ else
   done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0)
   
   if [[ -f "${error_flag}" ]]; then
+    rm -f "${error_flag}"
     exit 1
   fi
+  rm -f "${error_flag}"
 fi
 
 while IFS= read -r -d '' py_file; do
