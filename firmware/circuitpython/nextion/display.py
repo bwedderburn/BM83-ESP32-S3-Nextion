@@ -75,10 +75,11 @@ class Nextion:
         self._txq = []
         self._last_tx_at = 0.0
         self._tx_interval_s = 0.035
+        self._max_queue_size = 50  # Prevent unbounded growth
 
 # endregion
-        self._last_token = None
-        self._last_token_at = 0.0
+        self._last_token_at = -1.0  # Initialize to past to allow first token
+        self._token_throttle_s = 0.15  # Any token within this window is dropped
 
 # endregion
     
@@ -118,6 +119,10 @@ class Nextion:
     def enqueue(self, cmd):
 # region enqueue
     # enqueue handles enqueue logic. #
+        if len(self._txq) >= self._max_queue_size:
+            # Truncate command for readability in debug logs (30 chars is enough to identify command type)
+            dprint("[NX] queue full, dropping:", cmd[:30])
+            return
         self._txq.append(cmd)
 
 # endregion
@@ -241,7 +246,7 @@ class Nextion:
 # endregion
     # Loop through items
 # Function: read - Defines the behavior for `read`.
-    def read(self, max_tokens=6, debounce_s=0.10):
+    def read(self, max_tokens=6):
 # region read
     # read handles read logic. #
         tokens = []
@@ -264,10 +269,9 @@ class Nextion:
     # Conditional check
             if self._is_token_frame(frame):
                 now = time.monotonic()
-    # Conditional check
-                if self._last_token == frame and (now - self._last_token_at) < debounce_s:
-                    continue
-                self._last_token = frame
+                # Throttle: drop token frames within window, but continue draining buffer
+                if (now - self._last_token_at) < self._token_throttle_s:
+                    continue  # Discard this token frame, process next
                 self._last_token_at = now
                 tokens.append(frame)
     # Conditional check
