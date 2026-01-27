@@ -311,11 +311,14 @@ def main():
     # Conditional check
             elif tok == b"BT_EQ":
                 mode = bm.next_eq()
-                desired_eq = bm.EQ_L.get(mode, "OFF")
-                print("[EQ] set to", desired_eq)
+                next_label = bm.EQ_L.get(mode, "OFF")
     # Conditional check
-                if nx.current_page is not None:
-                    flush_page(nx.current_page)
+                if next_label != desired_eq:
+                    desired_eq = next_label
+                    print("[EQ] set to", desired_eq)
+    # Conditional check
+                    if nx.current_page is not None:
+                        flush_page(nx.current_page)
     # Conditional check
             elif tok == b"BT_VOLUP":
                 ble.volume(True)
@@ -330,7 +333,7 @@ def main():
                     last_voldn_at = now
     # Conditional check
             elif tok == b"BT_EBIND":
-                ble.erase_bonds()
+                ble.request_erase_bonds()
 
 # endregion
         time.sleep(0.005)

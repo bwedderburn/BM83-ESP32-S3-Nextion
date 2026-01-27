@@ -63,6 +63,13 @@ class BleHid:
         self._pair_attempt_limit = 4
 
 # endregion
+        self._erase_pending = False
+        self._erase_requested_at = 0.0
+        self._last_erase_at = 0.0
+        self._erase_cooldown_s = 3.0
+        self._erase_debounce_s = 0.15
+
+# endregion
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
@@ -278,6 +285,8 @@ class BleHid:
         if not self._ready or not self._ble:
             print("[BLE] erase_bonding: Not ready or BLE not initialized")
             return
+        self._stop_adv()
+        gc.collect()
     # Try block to catch exceptions
         try:
     # Loop through items
@@ -327,12 +336,27 @@ class BleHid:
             counter = _read_ble_counter() + 1
             _write_ble_counter(counter)
             self._update_ble_name(counter)
-        
+        gc.collect()
         self._adv_inhibit_until = 0.0
         self._adv_oom_count = 0
         self._need_pairing_check = False
         self._pair_attempts = 0
         self._start_adv(force=True)
+
+# endregion
+    # Loop through items
+# Function: request_erase_bonds - Defines the behavior for `request_erase_bonds`.
+    def request_erase_bonds(self):
+# region request_erase_bonds
+    # request_erase_bonds defers erase_bonds to the tick loop with cooldown. #
+        now = time.monotonic()
+    # Conditional check
+        if (now - self._last_erase_at) < self._erase_cooldown_s:
+            dprint("[BLE] erase_bonds throttled")
+            return False
+        self._erase_pending = True
+        self._erase_requested_at = now
+        return True
 
 # endregion
     # Loop through items
@@ -343,6 +367,12 @@ class BleHid:
     # Conditional check
         if not self._ready or not self._ble:
             return
+        now = time.monotonic()
+    # Conditional check
+        if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
+            self._erase_pending = False
+            self._last_erase_at = now
+            self.erase_bonds()
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
@@ -352,7 +382,6 @@ class BleHid:
                 self._on_connect()
             else:
                 self._on_disconnect()
-        now = time.monotonic()
     # Conditional check
         if not connected:
             advertising = False
