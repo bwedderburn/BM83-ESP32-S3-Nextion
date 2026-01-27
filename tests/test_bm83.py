@@ -19,25 +19,9 @@ def test_avc_payload():
     assert payload[4:] == params
 
 
-class MockUARTForPower:
-    def __init__(self):
-        self.writes = []
-        self.to_read = bytearray()
-        self.in_waiting = 0
-
-    def write(self, data):
-        self.writes.append(data)
-
-    def read(self, n):
-        out = self.to_read[:n]
-        self.to_read = self.to_read[n:]
-        self.in_waiting = len(self.to_read)
-        return out
-
-
 def test_power_on_nonblocking():
     """Test that power_on_cmd starts state machine without blocking."""
-    uart = MockUARTForPower()
+    uart = MockUART()
     bm = Bm83(uart)
     bm.power_on_cmd()
     # Should have sent power on press command immediately
@@ -48,7 +32,7 @@ def test_power_on_nonblocking():
 
 def test_power_off_nonblocking():
     """Test that power_off_cmd starts state machine without blocking."""
-    uart = MockUARTForPower()
+    uart = MockUART()
     bm = Bm83(uart)
     bm.power_on = True
     bm.power_off_cmd()
@@ -59,46 +43,65 @@ def test_power_off_nonblocking():
 
 
 def test_tick_power_on_sequence():
-    """Test tick_power completes power on sequence."""
-    uart = MockUARTForPower()
+    """Test tick_power completes power on sequence with correct command timing."""
+    uart = MockUART()
     bm = Bm83(uart)
     bm.power_on_cmd()
     assert bm._power_state == "on_press"
+    assert len(uart.writes) == 1  # Press command sent
 
-    # Simulate time passing and tick
+    # Simulate 0.2s elapsed, tick should send release and transition to on_init
     bm._power_next_at = time.monotonic() - 1  # Force immediate
     bm.tick_power()
-    assert bm._power_state == "on_release"
-
-    bm._power_next_at = time.monotonic() - 1
-    bm.tick_power()
     assert bm._power_state == "on_init"
+    assert len(uart.writes) == 2  # Release command sent
 
+    # Simulate 0.5s elapsed, tick should call init_link
     bm._power_next_at = time.monotonic() - 1
     bm.tick_power()
     assert bm._power_state is None
     assert bm.power_on is True
+    assert len(uart.writes) >= 4  # init_link sends multiple commands
 
 
 def test_tick_power_off_sequence():
-    """Test tick_power completes power off sequence."""
-    uart = MockUARTForPower()
+    """Test tick_power completes power off sequence with correct command timing."""
+    uart = MockUART()
     bm = Bm83(uart)
     bm.power_on = True
     bm.connected = True
     bm.power_off_cmd()
     assert bm._power_state == "off_press"
+    assert len(uart.writes) == 1  # Press command sent
 
-    # Simulate time passing and tick
-    bm._power_next_at = time.monotonic() - 1
-    bm.tick_power()
-    assert bm._power_state == "off_release"
-
+    # Simulate 1.5s elapsed, tick should send release and complete
     bm._power_next_at = time.monotonic() - 1
     bm.tick_power()
     assert bm._power_state is None
     assert bm.power_on is False
     assert bm.connected is False
+    assert len(uart.writes) == 2  # Release command sent
+
+
+def test_rapid_power_toggle_ignored():
+    """Test that rapid power toggles during state machine are ignored."""
+    uart = MockUART()
+    bm = Bm83(uart)
+
+    # Start power on
+    bm.power_on_cmd()
+    assert bm._power_state == "on_press"
+    initial_writes = len(uart.writes)
+
+    # Try to call power_on again - should be ignored
+    bm.power_on_cmd()
+    assert bm._power_state == "on_press"  # State unchanged
+    assert len(uart.writes) == initial_writes  # No new commands
+
+    # Try to call power_off - should also be ignored while on sequence active
+    bm.power_off_cmd()
+    assert bm._power_state == "on_press"  # State unchanged
+    assert len(uart.writes) == initial_writes  # No new commands
 
 
 def test_poll_limits_events():
@@ -116,14 +119,14 @@ def test_poll_limits_events():
 
 
 def test_poll_buffer_overflow_protection():
-    """Test that buffer overflow is handled gracefully."""
-    uart = MockUARTForPower()
+    """Test that buffer overflow clears buffer to prevent corruption."""
+    uart = MockUART()
     bm = Bm83(uart)
     # Manually overfill buffer
     bm._rx = bytearray(b'\x00' * 5000)
     uart.to_read = bytearray(b'\x00' * 100)
     uart.in_waiting = 100
     # Should not crash
-    events = bm.poll()
-    # Buffer should be trimmed
-    assert len(bm._rx) <= bm._rx_max
+    bm.poll()
+    # Buffer should be cleared on overflow
+    assert len(bm._rx) == 0

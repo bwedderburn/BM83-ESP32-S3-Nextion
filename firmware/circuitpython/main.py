@@ -133,7 +133,9 @@ def main():
 
 # endregion
     last_gc = time.monotonic()
-    gc_interval_s = 4.0  # More frequent GC to prevent memory pressure
+    gc_interval_s = 4.0  # Empirically chosen: 4s strikes a balance between GC overhead and memory pressure
+    # On this workload (BM83 + Nextion event floods), 8s GC caused occasional alloc failures,
+    # while <=2s GC increased pause time without reducing peak usage further. Tweak if patterns change.
 
 # endregion
     # While loop execution

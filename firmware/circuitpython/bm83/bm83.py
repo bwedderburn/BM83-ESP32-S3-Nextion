@@ -65,7 +65,7 @@ class Bm83:
         self._gea_frag = bytearray()
         self._gea_expect_len = None
         # Non-blocking power state machine
-        self._power_state = None  # None, "on_press", "on_release", "on_init", "off_press", "off_release"
+        self._power_state = None  # None, "on_press", "on_init", "off_press"
         self._power_next_at = 0.0
 
 # endregion
@@ -161,10 +161,11 @@ class Bm83:
     # Conditional check
         if chunk:
             self._rx.extend(chunk)
-        # Limit buffer size to prevent memory exhaustion
+        # Limit buffer size to prevent memory exhaustion - clear buffer on overflow
+        # since partial frames would be corrupted anyway
         if len(self._rx) > self._rx_max:
-            dprint("[BM83] buffer overflow, trimming")
-            self._rx = self._rx[-self._rx_max:]
+            dprint("[BM83] buffer overflow, clearing to prevent corruption")
+            self._rx.clear()
     # While loop execution
         while len(out) < max_events:
     # Conditional check
@@ -219,9 +220,12 @@ class Bm83:
     def power_on_cmd(self):
 # region power_on_cmd
     # power_on_cmd handles power on cmd logic (non-blocking state machine). #
+        # Ignore if state machine already in progress to prevent inconsistent state
+        if self._power_state is not None:
+            return
         now = time.monotonic()
         self._power_state = "on_press"
-        self._power_next_at = now
+        self._power_next_at = now + 0.2  # Wait 0.2s before sending release
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_PRESS]))
 
 # endregion
@@ -230,9 +234,12 @@ class Bm83:
     def power_off_cmd(self):
 # region power_off_cmd
     # power_off_cmd handles power off cmd logic (non-blocking state machine). #
+        # Ignore if state machine already in progress to prevent inconsistent state
+        if self._power_state is not None:
+            return
         now = time.monotonic()
         self._power_state = "off_press"
-        self._power_next_at = now
+        self._power_next_at = now + 1.5  # Wait 1.5s before sending release
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_PRESS]))
 
 # endregion
@@ -247,21 +254,17 @@ class Bm83:
         if now < self._power_next_at:
             return
         if self._power_state == "on_press":
-            self._power_state = "on_release"
-            self._power_next_at = now + 0.2
+            # 0.2s elapsed since press, now send release
             self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_RELEASE]))
-        elif self._power_state == "on_release":
             self._power_state = "on_init"
-            self._power_next_at = now + 0.5
+            self._power_next_at = now + 0.5  # Wait 0.5s before init_link
         elif self._power_state == "on_init":
             self.init_link()
             self.power_on = True
             self._power_state = None
             print("[POWER] ON (UART)")
         elif self._power_state == "off_press":
-            self._power_state = "off_release"
-            self._power_next_at = now + 1.5
-        elif self._power_state == "off_release":
+            # 1.5s elapsed since press, now send release
             self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_RELEASE]))
             self.power_on = False
             self.connected = False
