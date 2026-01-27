@@ -16,16 +16,15 @@ rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
 
 if command -v rsync >/dev/null 2>&1; then
-  rsync -av --exclude="__pycache__" --exclude="*.py" "${SRC_DIR}/" "${DIST_DIR}/"
+  rsync -a --exclude="__pycache__" --exclude="*.py" "${SRC_DIR}/" "${DIST_DIR}/"
 else
   echo "rsync not found; falling back to cp. Install rsync for faster builds." >&2
-  find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0 | \
-    while IFS= read -r -d '' file; do
-      rel_path="${file#"${SRC_DIR}"/}"
-      dest="${DIST_DIR}/${rel_path}"
-      mkdir -p "$(dirname "${dest}")"
-      cp "${file}" "${dest}"
-    done
+  while IFS= read -r -d '' file; do
+    rel_path="${file#"${SRC_DIR}"/}"
+    dest="${DIST_DIR}/${rel_path}"
+    mkdir -p "$(dirname "${dest}")"
+    cp "${file}" "${dest}"
+  done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0)
 fi
 
 while IFS= read -r -d '' py_file; do
