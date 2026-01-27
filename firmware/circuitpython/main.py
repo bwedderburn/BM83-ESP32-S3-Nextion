@@ -128,7 +128,7 @@ def main():
     # exit_aux_mode handles exit aux mode logic. #
         nonlocal desired_aux
         desired_aux = ""
-        bm._next_playstatus_at = 0.0
+        bm._next_playstatus_at = time.monotonic() + 0.05
         bm.schedule_attrs(0.3)
 
 # endregion
@@ -205,7 +205,7 @@ def main():
                     bm.avrcp_register_notification(0x01, interval_s=1)
                     bm.avrcp_register_notification(0x02, interval_s=0)
                     bm.avrcp_register_notification(0x05, interval_s=1)
-                    bm._next_playstatus_at = 0.0
+                    bm._next_playstatus_at = now + 0.05
                     bm.schedule_attrs(0.8)
     # Conditional check
             elif op == bm.EVT_EQ_MODE_IND and params:
