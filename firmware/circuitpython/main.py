@@ -17,7 +17,7 @@ BM83_TX, BM83_RX = board.IO17, board.IO18
 
 # endregion
 BLE_ENABLED = True
-BLE_NAME = "AmpBench Remote"
+BLE_NAME = "Bs Groovy BT CTRL"
 
 # endregion
 # Function: main - Defines the behavior for `main`.
