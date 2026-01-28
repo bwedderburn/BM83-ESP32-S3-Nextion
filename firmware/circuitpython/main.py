@@ -66,8 +66,8 @@ def main():
     vol_hold_active = None        # None, "up", or "down"
     vol_hold_start_at = 0.0       # When the button was first pressed
     vol_last_repeat_at = 0.0      # When we last sent a repeat
-    VOL_INITIAL_DELAY_S = 0.5     # 500ms before repeat starts
-    VOL_REPEAT_INTERVAL_S = 0.08  # 80ms between repeats
+    vol_initial_delay_s = 0.5     # 500ms before repeat starts
+    vol_repeat_interval_s = 0.08  # 80ms between repeats
 
 # endregion
     # Loop through items
@@ -363,9 +363,9 @@ def main():
         # Handle volume hold-and-repeat
         if vol_hold_active is not None:
             # Check if initial delay has passed
-            if (now - vol_hold_start_at) >= VOL_INITIAL_DELAY_S:
+            if (now - vol_hold_start_at) >= vol_initial_delay_s:
                 # Check if it's time for another repeat
-                if (now - vol_last_repeat_at) >= VOL_REPEAT_INTERVAL_S:
+                if (now - vol_last_repeat_at) >= vol_repeat_interval_s:
                     if vol_hold_active == "up":
                         ble.volume(True)
                     elif vol_hold_active == "down":
