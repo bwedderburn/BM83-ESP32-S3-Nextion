@@ -250,7 +250,16 @@ After configuring your Nextion buttons:
 If you see examples elsewhere showing both commands together, they are incorrect.
 
 ### Tokens appear with garbage bytes (e.g., `b'BT_VOLUP_Pf\x00'`)
-This was a bug in older firmware versions (fixed in commit 90c0cdb). Update your firmware to the latest version. The firmware now properly extracts clean tokens even if extra bytes are present in the UART stream.
+
+**This means you're running old firmware!** The token cleaning fix was added in commit 90c0cdb (2026-01-28).
+
+**Solution:** Update your ESP32-S3 firmware:
+1. Pull the latest code from GitHub
+2. Copy `firmware/circuitpython/nextion/display.py` to your `CIRCUITPY` drive
+3. Press **Ctrl+D** in serial terminal or press RESET button to reload
+4. Verify you now see clean tokens: `b'BT_POWER'` instead of `b'BT_POWERf\x00'`
+
+**See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed firmware update instructions.**
 
 ### Token is received but volume doesn't change
 This is usually a **BLE HID** issue, not a Nextion issue:
