@@ -109,8 +109,8 @@ class BleHid:
             # Initialize counter state from persistent storage if available
             counter = _read_ble_counter()
             self._memory_counter = counter
-            # Try a test write to see if filesystem is writable
-            self._counter_persisted = _write_ble_counter(counter)
+            # Assume filesystem is writable initially; will detect read-only on first erase_bonds
+            self._counter_persisted = True
 
             self._ready = True
             print("[BLE] Ready:", self.name)
@@ -365,12 +365,10 @@ class BleHid:
         # Increment counter and update BLE name only if erase succeeded
         if ok:
             # Read counter from appropriate source and increment
+            # Use max() to prevent counter regression if persistent value is stale/corrupt
             if self._counter_persisted:
-                # Try to read from persistent storage, fall back to memory if it fails
-                try:
-                    counter = _read_ble_counter() + 1
-                except Exception:
-                    counter = self._memory_counter + 1
+                persisted_counter = _read_ble_counter()
+                counter = max(persisted_counter, self._memory_counter) + 1
             else:
                 counter = self._memory_counter + 1
 

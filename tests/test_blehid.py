@@ -69,7 +69,8 @@ def test_ble_name_cycling():
         assert counter == 5
 
         # Test writing counter
-        _write_ble_counter(6)
+        success = _write_ble_counter(6)
+        assert success is True
         counter = _read_ble_counter()
         assert counter == 6
 
@@ -170,7 +171,8 @@ def test_erase_bonds_with_failing_erase_bonding():
 
 def test_erase_bonds_with_readonly_filesystem():
     """Test that erase_bonds works even when filesystem is read-only."""
-    import blehid.ble as ble_module
+    import sys
+    ble_module = sys.modules["blehid.ble"]
 
     # Mock the write function to simulate read-only filesystem
     original_write = ble_module._write_ble_counter
@@ -205,9 +207,8 @@ def test_erase_bonds_with_readonly_filesystem():
 
 def test_erase_bonds_filesystem_transition():
     """Test counter continues incrementing when filesystem becomes read-only mid-operation."""
-    import blehid.ble as ble_module
-    import tempfile
-    import os
+    import sys
+    ble_module = sys.modules["blehid.ble"]
 
     original_file = ble_module.BLE_COUNTER_FILE
     original_write = ble_module._write_ble_counter
