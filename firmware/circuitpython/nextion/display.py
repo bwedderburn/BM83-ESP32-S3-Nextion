@@ -304,12 +304,10 @@ class Nextion:
             if frame is None:
                 break
             
-            # Check if it's a valid token
-            if self._is_token_frame(frame):
-                # Extract the clean token (without noise bytes)
-                clean_token = self._extract_token(frame)
-                if clean_token and token_handler:
-                    token_handler(clean_token)
+            # Check if it's a valid token and get cleaned token
+            clean_token = self._is_token_frame(frame)
+            if clean_token and token_handler:
+                token_handler(clean_token)
 # endregion
 
 # endregion
