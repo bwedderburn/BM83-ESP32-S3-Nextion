@@ -17,7 +17,7 @@ BM83_TX, BM83_RX = board.IO17, board.IO18
 
 # endregion
 BLE_ENABLED = True
-BLE_NAME = "Bs Groovy BT CTRL"
+BLE_NAME = "B's Groovy BT CTRL"
 
 # endregion
 # Function: main - Defines the behavior for `main`.
