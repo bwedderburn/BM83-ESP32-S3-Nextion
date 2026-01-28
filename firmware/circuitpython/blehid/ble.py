@@ -285,23 +285,34 @@ class BleHid:
         if not self._ready or not self._ble:
             print("[BLE] erase_bonding: Not ready or BLE not initialized")
             return
+
+        # Stop advertising first to reduce memory pressure
         self._stop_adv()
+
+        # Aggressive GC before heavy operations
         gc.collect()
+        gc.collect()  # Second collect to ensure thorough cleanup
+
+        # Disconnect all connections with individual error handling
     # Try block to catch exceptions
         try:
+            conns = list(getattr(self._ble, "connections", []))
     # Loop through items
-            for c in list(getattr(self._ble, "connections", [])):
+            for c in conns:
     # Try block to catch exceptions
                 try:
                     c.disconnect()
     # Handle exceptions
-                except Exception:
-                    pass
+                except Exception as e:
+                    dprint("[BLE] disconnect err:", e)
     # Handle exceptions
-        except Exception:
-            pass
+        except Exception as e:
+            dprint("[BLE] connections list err:", e)
 
 # endregion
+        # Another GC pass after disconnections
+        gc.collect()
+
         ok = False
     # Try block to catch exceptions
         try:
@@ -310,7 +321,8 @@ class BleHid:
                 self._ble.erase_bonding()
                 ok = True
     # Handle exceptions
-        except Exception:
+        except Exception as e:
+            dprint("[BLE] erase_bonding err:", e)
             ok = False
 
 # endregion
@@ -324,23 +336,30 @@ class BleHid:
                     _bleio.adapter.erase_bonding()
                     ok = True
     # Handle exceptions
-            except Exception:
+            except Exception as e:
+                dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
                 ok = False
 
 # endregion
     # Conditional check
         print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
-        
+
         # Increment counter and update BLE name only if erase succeeded
         if ok:
             counter = _read_ble_counter() + 1
             _write_ble_counter(counter)
             self._update_ble_name(counter)
+
+        # Final GC pass before restarting advertising
         gc.collect()
+
+        # Reset state
         self._adv_inhibit_until = 0.0
         self._adv_oom_count = 0
         self._need_pairing_check = False
         self._pair_attempts = 0
+
+        # Restart advertising
         self._start_adv(force=True)
 
 # endregion
