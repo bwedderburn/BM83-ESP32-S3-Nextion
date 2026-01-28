@@ -60,7 +60,14 @@ def main():
     last_pos_ms = None
     last_total_ms = None
     last_voldn_at = 0.0
-    mute_window_s = 0.35
+    mute_window_s = 0.25
+
+    # Hold-and-repeat state for volume controls
+    vol_hold_active = None        # None, "up", or "down"
+    vol_hold_start_at = 0.0       # When the button was first pressed
+    vol_last_repeat_at = 0.0      # When we last sent a repeat
+    VOL_INITIAL_DELAY_S = 0.5     # 500ms before repeat starts
+    VOL_REPEAT_INTERVAL_S = 0.08  # 80ms between repeats
 
 # endregion
     # Loop through items
@@ -320,22 +327,51 @@ def main():
                     if nx.current_page is not None:
                         flush_page(nx.current_page)
     # Conditional check
-            elif tok == b"BT_VOLUP":
+            elif tok == b"BT_VOLUP_P":
+                # Volume up pressed - send immediate volume up and start hold tracking
                 ble.volume(True)
+                vol_hold_active = "up"
+                vol_hold_start_at = now
+                vol_last_repeat_at = now
+            elif tok == b"BT_VOLUP_R":
+                # Volume up released - stop hold-and-repeat
+                if vol_hold_active == "up":
+                    vol_hold_active = None
     # Conditional check
-            elif tok == b"BT_VOLDN":
+            elif tok == b"BT_VOLDN_P":
+                # Volume down pressed - check for double-tap mute, then start hold tracking
     # Conditional check
                 if (now - last_voldn_at) <= mute_window_s:
                     ble.mute()
                     last_voldn_at = 0.0
+                    vol_hold_active = None  # Don't repeat after mute
                 else:
                     ble.volume(False)
                     last_voldn_at = now
+                    vol_hold_active = "down"
+                    vol_hold_start_at = now
+                    vol_last_repeat_at = now
+            elif tok == b"BT_VOLDN_R":
+                # Volume down released - stop hold-and-repeat
+                if vol_hold_active == "down":
+                    vol_hold_active = None
     # Conditional check
             elif tok == b"BT_EBIND":
                 ble.request_erase_bonds()
 
 # endregion
+        # Handle volume hold-and-repeat
+        if vol_hold_active is not None:
+            # Check if initial delay has passed
+            if (now - vol_hold_start_at) >= VOL_INITIAL_DELAY_S:
+                # Check if it's time for another repeat
+                if (now - vol_last_repeat_at) >= VOL_REPEAT_INTERVAL_S:
+                    if vol_hold_active == "up":
+                        ble.volume(True)
+                    elif vol_hold_active == "down":
+                        ble.volume(False)
+                    vol_last_repeat_at = now
+
         time.sleep(0.005)
 
 # endregion
