@@ -23,13 +23,13 @@ For each button that needs press/release events (especially volume up and volume
 
 **Command to send**:
 ```
-printh 23 02 54 XX
+print "TOKEN_NAME"
 ```
 
-Where `XX` is the hex ASCII representation of your token name. For the volume buttons:
+Replace `TOKEN_NAME` with the actual token. For the volume buttons:
 
-- **Volume Up Press**: Send token `BT_VOLUP_P`
-- **Volume Down Press**: Send token `BT_VOLDN_P`
+- **Volume Up Press**: `print "BT_VOLUP_P"`
+- **Volume Down Press**: `print "BT_VOLDN_P"`
 
 ### 2. Touch Release Event
 
@@ -41,13 +41,13 @@ Where `XX` is the hex ASCII representation of your token name. For the volume bu
 
 **Command to send**:
 ```
-printh 23 02 54 XX
+print "TOKEN_NAME"
 ```
 
-Where `XX` is the hex ASCII representation of your token name. For the volume buttons:
+Replace `TOKEN_NAME` with the actual token. For the volume buttons:
 
-- **Volume Up Release**: Send token `BT_VOLUP_R`
-- **Volume Down Release**: Send token `BT_VOLDN_R`
+- **Volume Up Release**: `print "BT_VOLUP_R"`
+- **Volume Down Release**: `print "BT_VOLDN_R"`
 
 ---
 
@@ -57,59 +57,58 @@ Where `XX` is the hex ASCII representation of your token name. For the volume bu
 
 **Touch Press Event**:
 ```
-printh 23 02 54 42 54 5F 56 4F 4C 55 50 5F 50
+print "BT_VOLUP_P"
 ```
-This sends `BT_VOLUP_P` (hex: `42 54 5F 56 4F 4C 55 50 5F 50`)
+This sends the token `BT_VOLUP_P` followed by the Nextion terminator (`FF FF FF`)
 
 **Touch Release Event**:
 ```
-printh 23 02 54 42 54 5F 56 4F 4C 55 50 5F 52
+print "BT_VOLUP_R"
 ```
-This sends `BT_VOLUP_R` (hex: `42 54 5F 56 4F 4C 55 50 5F 52`)
+This sends the token `BT_VOLUP_R` followed by the Nextion terminator (`FF FF FF`)
 
 ### Volume Down Button
 
 **Touch Press Event**:
 ```
-printh 23 02 54 42 54 5F 56 4F 4C 44 4E 5F 50
+print "BT_VOLDN_P"
 ```
-This sends `BT_VOLDN_P` (hex: `42 54 5F 56 4F 4C 44 4E 5F 50`)
+This sends the token `BT_VOLDN_P` followed by the Nextion terminator (`FF FF FF`)
 
 **Touch Release Event**:
 ```
-printh 23 02 54 42 54 5F 56 4F 4C 44 4E 5F 52
+print "BT_VOLDN_R"
 ```
-This sends `BT_VOLDN_R` (hex: `42 54 5F 56 4F 4C 44 4E 5F 52`)
+This sends the token `BT_VOLDN_R` followed by the Nextion terminator (`FF FF FF`)
+
+**Note**: The Nextion `print` command automatically appends the `FF FF FF` terminator bytes. You do NOT need to manually add them.
 
 ---
 
-## Understanding the `printh` Command
+## Understanding the Nextion `print` Command
 
-The `printh` command sends hexadecimal bytes over UART. The format is:
+The Nextion `print` command sends ASCII text over UART followed by the standard Nextion terminator bytes (`FF FF FF`).
 
+**Format**:
 ```
-printh 23 02 54 [ASCII_HEX_OF_TOKEN]
+print "TOKEN_NAME"
 ```
 
-**Breakdown**:
-- `23` = `#` (start marker for the firmware's token parser)
-- `02` = STX (Start of Text control character)
-- `54` = `T` (Token identifier)
-- Remaining bytes = ASCII hex representation of your token name
+**What gets sent over UART**:
+```
+TOKEN_NAME + FF FF FF
+```
 
-**Example conversion** for `BT_VOLUP_P`:
-```
-B  = 0x42
-T  = 0x54
-_  = 0x5F
-V  = 0x56
-O  = 0x4F
-L  = 0x4C
-U  = 0x55
-P  = 0x50
-_  = 0x5F
-P  = 0x50
-```
+The ESP32-S3 firmware receives these bytes and:
+1. Looks for the `FF FF FF` terminator to identify frame boundaries
+2. Extracts the token name (e.g., `BT_VOLUP_P`)
+3. Validates it against the allowlist in `TOKENS`
+4. Passes it to the main loop for handling
+
+**Example** for `print "BT_VOLUP_P"`:
+- Bytes sent: `42 54 5F 56 4F 4C 55 50 5F 50 FF FF FF`
+  - `42 54 5F 56 4F 4C 55 50 5F 50` = ASCII for "BT_VOLUP_P"
+  - `FF FF FF` = Nextion terminator (added automatically)
 
 ---
 
@@ -130,6 +129,12 @@ The firmware recognizes these button tokens. For hold-and-repeat functionality, 
 | Volume Down | `BT_VOLDN` |
 
 ### Other Control Buttons (single Touch Press Event only)
+
+For these buttons, configure only the **Touch Press Event** with `print "TOKEN"`. No release event is needed.
+
+**Example for Play/Pause button**:
+- Touch Press Event: `print "BT_PLAY"`
+
 | Button | Token | Function |
 |--------|-------|----------|
 | Power | `BT_POWER` | Toggle power on/off |
@@ -151,7 +156,7 @@ The firmware recognizes these button tokens. For hold-and-repeat functionality, 
 For a token to be recognized by the firmware:
 1. Must use **UPPERCASE letters, digits, and underscores only**
 2. Must be in the allowlist (see `TOK_BT` and `TOK_EQ` in `firmware/circuitpython/nextion/display.py`)
-3. Must be sent with the correct `printh` prefix (`23 02 54`)
+3. Must be sent using Nextion's `print "TOKEN"` command (which automatically adds `FF FF FF` terminator)
 
 ---
 
@@ -172,32 +177,51 @@ After configuring your Nextion buttons:
 ## Troubleshooting
 
 ### Button doesn't respond
-- Verify the `printh` command has the correct hex bytes
+- Verify the `print "TOKEN"` command syntax is correct (include the quotes!)
 - Check that the token is in the firmware's allowlist (`TOK_BT` in `display.py`)
 - Ensure UART baud rate is 9600 for Nextion communication
+- Check the serial debug output to see if the token is being received
+
+### Token is received but volume doesn't change
+This is usually a **BLE HID** issue, not a Nextion issue:
+- **Ensure BLE is enabled and connected** to your device (iOS, macOS, etc.)
+- Check that the ESP32-S3 is paired with your audio device
+- Some devices may not support BLE HID volume control
+- Try the volume buttons on a known-working BLE HID device to confirm compatibility
+- Check the serial output for BLE-related error messages
 
 ### Volume doesn't repeat when held
 - Verify BOTH press (`_P`) and release (`_R`) events are configured
-- Check that Touch Release Event is actually firing (some Nextion components may need specific settings)
+- Check that Touch Release Event is actually firing (test by adding a debug `print "RELEASE_TEST"` command)
+- Some Nextion components may need specific settings to trigger release events properly
+- Ensure the button component is set to "Press" or "Touch" mode, not "Click" mode
 
 ### Volume keeps repeating after release
 - Ensure Touch Release Event is properly configured and sending
 - Check UART connection stability
 - The firmware has a 2-second safety timeout that will stop repeating automatically
+- This could indicate that release tokens are being throttled (150ms window) - try adding a small delay before release
 
 ---
 
-## Converting Token Names to Hex
+## Alternative: Using `printh` for Custom Protocols
 
-If you need to add a custom token, use this Python snippet to convert:
+**Note**: For standard button tokens, use the simple `print "TOKEN"` command shown above. The `printh` method is only needed if you want to send custom byte sequences or implement a different protocol.
 
-```python
-token = "BT_VOLUP_P"
-hex_bytes = " ".join(f"{ord(c):02X}" for c in token)
-print(f"printh 23 02 54 {hex_bytes}")
+If you need to send custom tokens with additional protocol bytes, you can use `printh` to send hex bytes:
+
+```
+printh FF FF FF
 ```
 
-Or use an online ASCII to hex converter and manually format the `printh` command.
+This sends the three bytes `FF FF FF` (the Nextion terminator). For ASCII text tokens, you'd need to convert each character to hex:
+
+**Example** to send "BT_VOLUP_P" with `printh`:
+```
+printh 42 54 5F 56 4F 4C 55 50 5F 50 FF FF FF
+```
+
+But again, **this is unnecessary** - just use `print "BT_VOLUP_P"` which is simpler and does the same thing.
 
 ---
 
