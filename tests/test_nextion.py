@@ -125,3 +125,32 @@ def test_nextion_multiple_buffered_tokens_throttled():
         assert len(tokens) == 0
         assert len(nx._rx) == 0  # All consumed
 
+def test_nextion_token_with_trailing_garbage():
+    """Test that tokens with trailing garbage bytes are properly cleaned"""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    
+    # Simulate token with trailing garbage (e.g., from page change event)
+    # This is what happens when print "BT_VOLUP_P" is followed by a page event
+    uart.to_read = b"BT_VOLUP_Pf\x00\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+    tokens, _ = nx.read()
+    
+    # Should extract clean token without the trailing 'f\x00'
+    assert len(tokens) == 1
+    assert tokens[0] == b"BT_VOLUP_P"
+    
+def test_nextion_token_with_leading_garbage():
+    """Test that tokens with leading garbage bytes are properly cleaned"""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    
+    # Simulate token with leading garbage
+    uart.to_read = b"\x01\x02BT_PLAY\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+    tokens, _ = nx.read()
+    
+    # Should extract clean token without the leading bytes
+    assert len(tokens) == 1
+    assert tokens[0] == b"BT_PLAY"
+

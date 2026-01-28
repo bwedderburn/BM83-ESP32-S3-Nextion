@@ -40,11 +40,20 @@ esp32_project/
 4. Connect:
    - **BM83** via UART (IO17/IO18)
    - **Nextion** via UART (IO15/IO16)
-5. Reset the board. `main.py` will execute and start all services.
+5. **Configure Nextion HMI buttons** - See [NEXTION_SETUP.md](NEXTION_SETUP.md) for press/release event configuration
+6. Reset the board. `main.py` will execute and start all services.
+
+**For firmware updates or troubleshooting deployment issues, see [DEPLOYMENT.md](DEPLOYMENT.md)**
 
 ## 🧪 Testing
 
 Unit tests live under `tests/` and can be run with `pytest` on compatible platforms.
+
+## 📚 Documentation
+
+- **[NEXTION_SETUP.md](NEXTION_SETUP.md)** - Complete guide for configuring Nextion HMI button press/release events
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Firmware deployment and update instructions
+- **[CODE_REFERENCE.md](CODE_REFERENCE.md)** - Detailed code reference and API documentation
 
 ## 🆘 Troubleshooting
 

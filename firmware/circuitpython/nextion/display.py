@@ -275,7 +275,10 @@ class Nextion:
                 if (now - self._last_token_at) < self._token_throttle_s:
                     continue  # Discard this token frame, process next
                 self._last_token_at = now
-                tokens.append(frame)
+                # Extract clean token (without noise bytes)
+                clean_token = self._extract_token(frame)
+                if clean_token:
+                    tokens.append(clean_token)
     # Conditional check
                 if len(tokens) >= max_tokens:
                     break

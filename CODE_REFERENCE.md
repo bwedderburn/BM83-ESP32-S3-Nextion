@@ -348,6 +348,7 @@ CI/CD workflow for automated testing:
 ### Project Documentation
 
 - **`README.md`**: Project overview, features, setup instructions, deployment
+- **`NEXTION_SETUP.md`**: Complete guide for configuring Nextion HMI press/release events
 - **`SECURITY.md`**: Security policy and vulnerability reporting
 - **`LICENSE`**: MIT License
 - **`docs/index.html`**: Project documentation homepage
