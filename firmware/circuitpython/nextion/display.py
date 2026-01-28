@@ -82,6 +82,7 @@ class Nextion:
 # endregion
         self._last_token_at = -1.0  # Initialize to past to allow first token
         self._token_throttle_s = 0.15  # Any token within this window is dropped
+        self._last_token = None  # Track last token value for smarter throttling
 
 # endregion
     
@@ -271,13 +272,13 @@ class Nextion:
     # Conditional check
             if self._is_token_frame(frame):
                 now = time.monotonic()
-                # Throttle: drop token frames within window, but continue draining buffer
-                if (now - self._last_token_at) < self._token_throttle_s:
-                    continue  # Discard this token frame, process next
-                self._last_token_at = now
-                # Extract clean token (without noise bytes)
                 clean_token = self._extract_token(frame)
                 if clean_token:
+                    # Throttle only duplicate tokens within the window; allow different tokens
+                    if (now - self._last_token_at) < self._token_throttle_s and clean_token == self._last_token:
+                        continue  # Discard duplicate within throttle window
+                    self._last_token_at = now
+                    self._last_token = clean_token
                     tokens.append(clean_token)
     # Conditional check
                 if len(tokens) >= max_tokens:

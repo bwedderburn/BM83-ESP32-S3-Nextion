@@ -50,7 +50,7 @@ def test_nextion_queue_overflow():
     assert "cmd_overflow" not in nx._txq
 
 def test_nextion_token_throttle():
-    """Test that all tokens are throttled within throttle window"""
+    """Test that duplicate tokens are throttled within throttle window"""
     uart = DummyUART()
     nx = Nextion(uart)
     
@@ -63,14 +63,12 @@ def test_nextion_token_throttle():
         assert len(tokens) == 1
         assert tokens[0] == b"BT_EQ"
         
-        # Second token at 0.1s (within throttle window) - should be discarded
+        # Second token at 0.1s (within throttle window) - different token should pass
         mock_time.return_value = 0.1
         uart.to_read = b"BT_POWER\xFF\xFF\xFF"
         uart.in_waiting = len(uart.to_read)
         tokens, _ = nx.read()
-        assert len(tokens) == 0  # Throttled (all tokens in window are dropped)
-        # BT_POWER should be consumed/discarded, not in buffer
-        assert b"BT_POWER" not in nx._rx
+        assert tokens == [b"BT_POWER"]  # Allowed because different token
         
         # Third token after throttle window - should be accepted
         mock_time.return_value = 0.16
@@ -103,7 +101,7 @@ def test_nextion_page_change_during_throttle():
         assert nx.current_page == 1
 
 def test_nextion_multiple_buffered_tokens_throttled():
-    """Test that multiple buffered tokens are individually throttled"""
+    """Test that buffered tokens are individually throttled (duplicates only)"""
     uart = DummyUART()
     nx = Nextion(uart)
     
@@ -121,9 +119,27 @@ def test_nextion_multiple_buffered_tokens_throttled():
         uart.to_read = b"BT_POWER\xFF\xFF\xFFBT_NEXT\xFF\xFF\xFFBT_PLAY\xFF\xFF\xFF"
         uart.in_waiting = len(uart.to_read)
         tokens, _ = nx.read()
-        # All should be throttled/discarded since they're processed within window
-        assert len(tokens) == 0
-        assert len(nx._rx) == 0  # All consumed
+        # Different tokens should still be accepted; throttle only suppresses duplicates
+        assert tokens == [b"BT_POWER", b"BT_NEXT", b"BT_PLAY"]
+
+def test_nextion_token_throttle_allows_different_tokens():
+    """Ensure throttle only suppresses duplicates within the window."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+
+    with mock.patch('nextion.display.time.monotonic') as mock_time:
+        mock_time.return_value = 0.0
+        uart.to_read = b"BT_VOLUP_P\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        assert tokens == [b"BT_VOLUP_P"]
+
+        # Within throttle window but different token should be accepted
+        mock_time.return_value = 0.05
+        uart.to_read = b"BT_VOLUP_R\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        assert tokens == [b"BT_VOLUP_R"]
 
 def test_nextion_token_with_trailing_garbage():
     """Test that tokens with trailing garbage bytes are properly cleaned"""
@@ -153,4 +169,3 @@ def test_nextion_token_with_leading_garbage():
     # Should extract clean token without the leading bytes
     assert len(tokens) == 1
     assert tokens[0] == b"BT_PLAY"
-
