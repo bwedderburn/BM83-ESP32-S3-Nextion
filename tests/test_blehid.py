@@ -80,7 +80,6 @@ def test_ble_name_cycling():
         blehid._ready = True
         # Set up counter state to use persistent storage
         blehid._counter_persisted = True
-        blehid._memory_counter = 6
 
         # Initial name should be "Test Device"
         assert blehid.name == "Test Device"
@@ -91,9 +90,10 @@ def test_ble_name_cycling():
         assert blehid.name == "Test Device07"
         assert blehid._ble.name == "Test Device07"
 
-        # Counter should be incremented
+        # Counter should be incremented (both in file and memory)
         counter = _read_ble_counter()
         assert counter == 7
+        assert blehid._memory_counter == 7
 
     finally:
         # Cleanup
@@ -201,3 +201,60 @@ def test_erase_bonds_with_readonly_filesystem():
 
     finally:
         ble_module._write_ble_counter = original_write
+
+
+def test_erase_bonds_filesystem_transition():
+    """Test counter continues incrementing when filesystem becomes read-only mid-operation."""
+    import blehid.ble as ble_module
+    import tempfile
+    import os
+
+    original_file = ble_module.BLE_COUNTER_FILE
+    original_write = ble_module._write_ble_counter
+
+    write_count = [0]  # Use list to allow modification in nested function
+
+    def mock_write_with_transition(count):
+        write_count[0] += 1
+        # First write succeeds, subsequent writes fail (simulate filesystem becoming read-only)
+        if write_count[0] == 1:
+            return original_write(count)
+        return False
+
+    try:
+        # Create temporary file for testing
+        test_file = tempfile.NamedTemporaryFile(mode='w', delete=False)
+        test_file.write("10")
+        test_file.close()
+        ble_module.BLE_COUNTER_FILE = test_file.name
+        ble_module._write_ble_counter = mock_write_with_transition
+
+        blehid = BleHid(enabled=True, name="TestDevice")
+        blehid._ble = DummyBLE()
+        blehid._adv = object()
+        blehid._ready = True
+        blehid._counter_persisted = True  # Start with writable filesystem
+
+        # First erase: filesystem is writable
+        blehid.erase_bonds()
+        assert blehid.name == "TestDevice11"
+        assert blehid._memory_counter == 11
+        assert blehid._counter_persisted is True
+
+        # Second erase: filesystem becomes read-only
+        blehid.erase_bonds()
+        assert blehid.name == "TestDevice12"
+        assert blehid._memory_counter == 12
+        assert blehid._counter_persisted is False  # Write failed
+
+        # Third erase: filesystem still read-only, counter should continue incrementing
+        blehid.erase_bonds()
+        assert blehid.name == "TestDevice13"
+        assert blehid._memory_counter == 13
+        assert blehid._counter_persisted is False
+
+    finally:
+        ble_module.BLE_COUNTER_FILE = original_file
+        ble_module._write_ble_counter = original_write
+        if os.path.exists(test_file.name):
+            os.unlink(test_file.name)

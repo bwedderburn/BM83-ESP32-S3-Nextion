@@ -73,10 +73,12 @@ class BleHid:
         self._erase_debounce_s = 0.15
 
 # endregion
-        self._memory_counter = 0  # Fallback counter when filesystem is read-only
-        self._counter_persisted = False  # Track if counter is successfully persisted
-
-# endregion
+        # Counter state for BLE name cycling on erase_bonds:
+        # _memory_counter: Current counter value, always kept up-to-date regardless of persistence
+        # _counter_persisted: True if last write to persistent storage succeeded
+        # When filesystem is read-only, _memory_counter continues to increment while _counter_persisted=False
+        self._memory_counter = 0
+        self._counter_persisted = False
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
@@ -303,9 +305,9 @@ class BleHid:
         self._stop_adv()
 
         # Aggressive GC before heavy operations
-        # Two consecutive gc.collect() calls are used because in CircuitPython/embedded environments,
-        # the first pass may not reclaim all reclaimable memory (especially with circular refs).
-        # A second pass ensures thorough cleanup before memory-intensive BLE operations.
+        # Two consecutive gc.collect() calls ensure thorough cleanup: the first pass may leave
+        # objects in a "finalizing" state, and the second pass ensures those finalizers have
+        # run and freed their memory. This is critical before memory-intensive BLE operations.
         gc.collect()
         gc.collect()
 
@@ -362,14 +364,20 @@ class BleHid:
 
         # Increment counter and update BLE name only if erase succeeded
         if ok:
-            # Try to read from persistent storage, fall back to memory counter
+            # Read counter from appropriate source and increment
             if self._counter_persisted:
-                counter = _read_ble_counter() + 1
+                # Try to read from persistent storage, fall back to memory if it fails
+                try:
+                    counter = _read_ble_counter() + 1
+                except Exception:
+                    counter = self._memory_counter + 1
             else:
-                self._memory_counter += 1
-                counter = self._memory_counter
+                counter = self._memory_counter + 1
 
-            # Attempt to persist counter, track success
+            # Always update memory counter to keep it in sync
+            self._memory_counter = counter
+
+            # Attempt to persist counter and track success
             self._counter_persisted = _write_ble_counter(counter)
             if not self._counter_persisted:
                 print("[BLE] Using in-memory counter (filesystem read-only)")
