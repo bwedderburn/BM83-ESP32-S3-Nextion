@@ -25,7 +25,7 @@ cp -r firmware/circuitpython/* /path/to/CIRCUITPY/
 ```
 
 **Important files to update** (if you've made changes):
-- `nextion/display.py` - Token parsing fixes (commit 90c0cdb)
+- `nextion/display.py` - Recent token parsing fixes
 - `main.py` - Main application logic
 - `bm83/bm83.py` - BM83 module updates
 - `blehid/ble.py` - BLE HID updates
@@ -107,11 +107,11 @@ If you're still seeing tokens like `b'BT_POWERf\x00'` after updating:
    ```bash
    # On your computer, verify you have the latest code
    cd /path/to/BM83-ESP32-S3-Nextion
-   git pull origin copilot/add-nextion-press-release-events
+   git pull
    git log --oneline -3
    ```
    
-   You should see commit `90c0cdb` or later with message "Fix token parsing to extract clean tokens without garbage bytes"
+   You should see recent commits with message "Fix token parsing to extract clean tokens without garbage bytes"
 
 4. **Clear any cached bytecode:**
    Sometimes CircuitPython caches compiled code. Delete the `.mpy` files if present:

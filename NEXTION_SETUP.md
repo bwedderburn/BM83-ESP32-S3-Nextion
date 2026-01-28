@@ -226,7 +226,7 @@ After configuring your Nextion buttons:
    [NX] Token: b'BT_VOLUP_R'
    ```
 
-**Note**: In firmware versions prior to the fix in commit 90c0cdb (2026-01-28), tokens may have appeared with garbage bytes like `b'BT_VOLUP_Pf\x00'`. This has been fixed - tokens are now properly cleaned before processing.
+**Note**: In firmware versions prior to 2026-01-28, tokens may have appeared with garbage bytes like `b'BT_VOLUP_Pf\x00'`. This has been fixed - tokens are now properly cleaned before processing.
 
 ---
 
@@ -251,7 +251,7 @@ If you see examples elsewhere showing both commands together, they are incorrect
 
 ### Tokens appear with garbage bytes (e.g., `b'BT_VOLUP_Pf\x00'`)
 
-**This means you're running old firmware!** The token cleaning fix was added in commit 90c0cdb (2026-01-28).
+**This means you're running old firmware!** The token cleaning fix was added in firmware builds after 2026-01-28.
 
 **Solution:** Update your ESP32-S3 firmware:
 1. Pull the latest code from GitHub
