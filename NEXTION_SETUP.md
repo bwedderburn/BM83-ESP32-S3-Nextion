@@ -31,7 +31,7 @@ Where `XX` is the hex ASCII representation of your token name. For the volume bu
 - **Volume Up Press**: Send token `BT_VOLUP_P`
 - **Volume Down Press**: Send token `BT_VOLDN_P`
 
-### 2. Touch Release Event  
+### 2. Touch Release Event
 
 **When to trigger**: When the button is released
 
