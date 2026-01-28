@@ -15,12 +15,15 @@ def _read_ble_counter():
 
 
 def _write_ble_counter(count):
-    """Write the BLE counter to persistent storage."""
+    """Write the BLE counter to persistent storage.
+    Returns True if successful, False otherwise."""
     try:
         with open(BLE_COUNTER_FILE, "w") as f:
             f.write(str(count))
+        return True
     except Exception as e:
         dprint("[BLE] counter write err:", e)
+        return False
 # Class: BleHid - Represents the BleHid class.
 class BleHid:
 # region BleHid
@@ -70,6 +73,10 @@ class BleHid:
         self._erase_debounce_s = 0.15
 
 # endregion
+        self._memory_counter = 0  # Fallback counter when filesystem is read-only
+        self._counter_persisted = False  # Track if counter is successfully persisted
+
+# endregion
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
@@ -97,6 +104,12 @@ class BleHid:
             self._CCC = CCC
 
 # endregion
+            # Initialize counter state from persistent storage if available
+            counter = _read_ble_counter()
+            self._memory_counter = counter
+            # Try a test write to see if filesystem is writable
+            self._counter_persisted = _write_ble_counter(counter)
+
             self._ready = True
             print("[BLE] Ready:", self.name)
             self._start_adv(force=True)
@@ -290,8 +303,11 @@ class BleHid:
         self._stop_adv()
 
         # Aggressive GC before heavy operations
+        # Two consecutive gc.collect() calls are used because in CircuitPython/embedded environments,
+        # the first pass may not reclaim all reclaimable memory (especially with circular refs).
+        # A second pass ensures thorough cleanup before memory-intensive BLE operations.
         gc.collect()
-        gc.collect()  # Second collect to ensure thorough cleanup
+        gc.collect()
 
         # Disconnect all connections with individual error handling
     # Try block to catch exceptions
@@ -346,8 +362,19 @@ class BleHid:
 
         # Increment counter and update BLE name only if erase succeeded
         if ok:
-            counter = _read_ble_counter() + 1
-            _write_ble_counter(counter)
+            # Try to read from persistent storage, fall back to memory counter
+            if self._counter_persisted:
+                counter = _read_ble_counter() + 1
+            else:
+                self._memory_counter += 1
+                counter = self._memory_counter
+
+            # Attempt to persist counter, track success
+            self._counter_persisted = _write_ble_counter(counter)
+            if not self._counter_persisted:
+                print("[BLE] Using in-memory counter (filesystem read-only)")
+
+            # Update BLE name with new counter value
             self._update_ble_name(counter)
 
         # Final GC pass before restarting advertising

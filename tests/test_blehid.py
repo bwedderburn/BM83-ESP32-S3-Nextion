@@ -78,6 +78,9 @@ def test_ble_name_cycling():
         blehid._ble = DummyBLE()
         blehid._adv = object()
         blehid._ready = True
+        # Set up counter state to use persistent storage
+        blehid._counter_persisted = True
+        blehid._memory_counter = 6
 
         # Initial name should be "Test Device"
         assert blehid.name == "Test Device"
@@ -159,3 +162,42 @@ def test_erase_bonds_with_failing_erase_bonding():
 
     # Should still attempt to restart advertising
     assert blehid._ble.advertising is True
+
+    # BLE name should NOT be updated when erase_bonding fails
+    assert blehid.name == "TestDevice"
+    assert blehid._ble.name == ""  # Name not updated
+
+
+def test_erase_bonds_with_readonly_filesystem():
+    """Test that erase_bonds works even when filesystem is read-only."""
+    import blehid.ble as ble_module
+
+    # Mock the write function to simulate read-only filesystem
+    original_write = ble_module._write_ble_counter
+
+    def mock_write_readonly(count):
+        # Simulate read-only filesystem error
+        return False
+
+    try:
+        ble_module._write_ble_counter = mock_write_readonly
+
+        blehid = BleHid(enabled=True, name="TestDevice")
+        blehid._ble = DummyBLE()
+        blehid._adv = object()
+        blehid._ready = True
+        blehid._memory_counter = 5
+        blehid._counter_persisted = False
+
+        # Erase bonds should work even with read-only filesystem
+        blehid.erase_bonds()
+
+        # Name should be updated with in-memory counter
+        assert blehid.name == "TestDevice06"
+        assert blehid._ble.name == "TestDevice06"
+
+        # Memory counter should be incremented
+        assert blehid._memory_counter == 6
+
+    finally:
+        ble_module._write_ble_counter = original_write
