@@ -362,15 +362,22 @@ def main():
 # endregion
         # Handle volume hold-and-repeat
         if vol_hold_active is not None:
-            # Check if initial delay has passed
-            if (now - vol_hold_start_at) >= vol_initial_delay_s:
-                # Check if it's time for another repeat
-                if (now - vol_last_repeat_at) >= vol_repeat_interval_s:
-                    if vol_hold_active == "up":
-                        ble.volume(True)
-                    elif vol_hold_active == "down":
-                        ble.volume(False)
-                    vol_last_repeat_at = now
+            # How long this button has been considered "held"
+            hold_elapsed = now - vol_hold_start_at
+            # Only start repeating after the initial delay has passed
+            if hold_elapsed >= vol_initial_delay_s:
+                # Safety cap: stop repeating after a maximum hold duration
+                # This prevents a missed release token from causing unbounded repeats.
+                if hold_elapsed > 2.0:
+                    vol_hold_active = None
+                else:
+                    # Check if it's time for another repeat step
+                    if (now - vol_last_repeat_at) >= vol_repeat_interval_s:
+                        if vol_hold_active == "up":
+                            ble.volume(True)
+                        elif vol_hold_active == "down":
+                            ble.volume(False)
+                        vol_last_repeat_at = now
 
         time.sleep(0.005)
 
