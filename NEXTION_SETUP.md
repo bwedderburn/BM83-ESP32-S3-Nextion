@@ -2,6 +2,19 @@
 
 This guide explains how to configure your Nextion HMI display to send press and release events for volume controls (and other buttons) that work with the ESP32-S3 firmware.
 
+## Quick Start
+
+**For volume buttons, configure TWO events in Nextion Editor:**
+
+1. **Touch Press Event**: `print "BT_VOLUP_P"` (for volume up) or `print "BT_VOLDN_P"` (for volume down)
+2. **Touch Release Event**: `print "BT_VOLUP_R"` (for volume up) or `print "BT_VOLDN_R"` (for volume down)
+
+**For other buttons** (Play, Next, Prev, EQ, etc.): Just one Touch Press Event with `print "TOKEN"` (e.g., `print "BT_PLAY"`)
+
+**Common Issue**: If tokens are received but volume doesn't change, ensure BLE HID is enabled, paired, and connected to your device.
+
+---
+
 ## Overview
 
 The firmware uses **press (`_P`) and release (`_R`) event tokens** for volume buttons to support hold-and-repeat functionality. When you press and hold a volume button, it:
@@ -206,22 +219,22 @@ This is usually a **BLE HID** issue, not a Nextion issue:
 
 ## Alternative: Using `printh` for Custom Protocols
 
-**Note**: For standard button tokens, use the simple `print "TOKEN"` command shown above. The `printh` method is only needed if you want to send custom byte sequences or implement a different protocol.
+**Note**: For standard button tokens, use the simple `print "TOKEN"` command shown above. The `printh` method is only needed if you want to send binary data, non-ASCII sequences, or implement a custom protocol that requires precise byte control.
 
-If you need to send custom tokens with additional protocol bytes, you can use `printh` to send hex bytes:
+The `print` command handles ASCII strings and automatically adds terminators. If you need to send raw bytes (e.g., for binary protocols or special control sequences), use `printh`:
 
+**Example** - Sending a custom binary sequence:
 ```
-printh FF FF FF
+printh 01 02 03 FF FF FF
 ```
 
-This sends the three bytes `FF FF FF` (the Nextion terminator). For ASCII text tokens, you'd need to convert each character to hex:
-
-**Example** to send "BT_VOLUP_P" with `printh`:
+**Example** - Sending the same token as `print "BT_VOLUP_P"` using `printh`:
 ```
 printh 42 54 5F 56 4F 4C 55 50 5F 50 FF FF FF
 ```
+Where `42 54 5F 56 4F 4C 55 50 5F 50` is the ASCII hex for "BT_VOLUP_P" and `FF FF FF` is the terminator.
 
-But again, **this is unnecessary** - just use `print "BT_VOLUP_P"` which is simpler and does the same thing.
+But again, **this is unnecessary for standard tokens** - just use `print "BT_VOLUP_P"` which is simpler and does the same thing. The `printh` approach is only useful if you need to send non-printable bytes or construct complex binary protocols.
 
 ---
 
