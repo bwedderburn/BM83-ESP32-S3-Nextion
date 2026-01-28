@@ -229,10 +229,9 @@ class Nextion:
     # _is_token_frame handles  is token frame logic. #
         # Extract clean token
         f = Nextion._extract_token(frame)
-    # Conditional check
+        # Conditional check
         if not f:
-    # Return the result
-            return False
+            return None
 # endregion
     # Loop through items
         for b in f:
@@ -240,10 +239,10 @@ class Nextion:
             if 48 <= b <= 57 or 65 <= b <= 90 or b == 95:
                 continue
     # Return the result
-            return False
+            return None
 # endregion
-    # Return the result
-        return f in TOKENS
+        # Return the cleaned token if it's recognized
+        return f if f in TOKENS else None
 # endregion
 
 # endregion
@@ -270,16 +269,15 @@ class Nextion:
                     page_changed = True
                 continue
     # Conditional check
-            if self._is_token_frame(frame):
+            clean_token = self._is_token_frame(frame)
+            if clean_token:
                 now = time.monotonic()
-                clean_token = self._extract_token(frame)
-                if clean_token:
-                    # Throttle only duplicate tokens within the window; allow different tokens
-                    if (now - self._last_token_at) < self._token_throttle_s and clean_token == self._last_token:
-                        continue  # Discard duplicate within throttle window
-                    self._last_token_at = now
-                    self._last_token = clean_token
-                    tokens.append(clean_token)
+                # Throttle only duplicate tokens within the window; allow different tokens
+                if (now - self._last_token_at) < self._token_throttle_s and clean_token == self._last_token:
+                    continue  # Discard duplicate within throttle window
+                self._last_token_at = now
+                self._last_token = clean_token
+                tokens.append(clean_token)
     # Conditional check
                 if len(tokens) >= max_tokens:
                     break

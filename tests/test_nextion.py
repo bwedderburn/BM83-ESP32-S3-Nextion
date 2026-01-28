@@ -49,8 +49,8 @@ def test_nextion_queue_overflow():
     assert len(nx._txq) == max_size
     assert "cmd_overflow" not in nx._txq
 
-def test_nextion_token_throttle():
-    """Test that duplicate tokens are throttled within throttle window"""
+def test_nextion_token_throttle_different_tokens_allowed():
+    """Tokens within window are allowed when they differ; duplicates are dropped elsewhere."""
     uart = DummyUART()
     nx = Nextion(uart)
     
@@ -70,7 +70,7 @@ def test_nextion_token_throttle():
         tokens, _ = nx.read()
         assert tokens == [b"BT_POWER"]  # Allowed because different token
         
-        # Third token after throttle window - should be accepted
+        # Third token (still within window but new) - should be accepted
         mock_time.return_value = 0.16
         uart.to_read = b"BT_NEXT\xFF\xFF\xFF"
         uart.in_waiting = len(uart.to_read)
@@ -101,7 +101,7 @@ def test_nextion_page_change_during_throttle():
         assert nx.current_page == 1
 
 def test_nextion_multiple_buffered_tokens_throttled():
-    """Test that buffered tokens are individually throttled (duplicates only)"""
+    """Buffered burst keeps different tokens; duplicates in burst are dropped."""
     uart = DummyUART()
     nx = Nextion(uart)
     
@@ -116,11 +116,11 @@ def test_nextion_multiple_buffered_tokens_throttled():
         
         # Multiple tokens already buffered at 0.05s (within throttle window)
         mock_time.return_value = 0.05
-        uart.to_read = b"BT_POWER\xFF\xFF\xFFBT_NEXT\xFF\xFF\xFFBT_PLAY\xFF\xFF\xFF"
+        uart.to_read = b"BT_POWER\xFF\xFF\xFFBT_POWER\xFF\xFF\xFFBT_PLAY\xFF\xFF\xFF"
         uart.in_waiting = len(uart.to_read)
         tokens, _ = nx.read()
-        # Different tokens should still be accepted; throttle only suppresses duplicates
-        assert tokens == [b"BT_POWER", b"BT_NEXT", b"BT_PLAY"]
+        # First POWER allowed, duplicate POWER dropped, PLAY allowed
+        assert tokens == [b"BT_POWER", b"BT_PLAY"]
 
 def test_nextion_token_throttle_allows_different_tokens():
     """Ensure throttle only suppresses duplicates within the window."""
