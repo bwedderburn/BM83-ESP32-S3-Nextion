@@ -141,6 +141,25 @@ def test_nextion_token_throttle_allows_different_tokens():
         tokens, _ = nx.read()
         assert tokens == [b"BT_VOLUP_R"]
 
+def test_nextion_token_throttle_blocks_duplicate():
+    """Duplicate tokens within the throttle window should be dropped."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+
+    with mock.patch('nextion.display.time.monotonic') as mock_time:
+        mock_time.return_value = 0.0
+        uart.to_read = b"BT_POWER\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        assert tokens == [b"BT_POWER"]
+
+        # Same token within throttle window should be suppressed
+        mock_time.return_value = 0.05
+        uart.to_read = b"BT_POWER\xFF\xFF\xFF"
+        uart.in_waiting = len(uart.to_read)
+        tokens, _ = nx.read()
+        assert tokens == []
+
 def test_nextion_token_with_trailing_garbage():
     """Test that tokens with trailing garbage bytes are properly cleaned"""
     uart = DummyUART()

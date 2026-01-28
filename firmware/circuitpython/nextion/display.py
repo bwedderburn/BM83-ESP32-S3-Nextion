@@ -81,7 +81,7 @@ class Nextion:
 
 # endregion
         self._last_token_at = -1.0  # Initialize to past to allow first token
-        self._token_throttle_s = 0.15  # Any token within this window is dropped
+        self._token_throttle_s = 0.15  # Duplicate tokens within this window are dropped
         self._last_token = None  # Track last token value for smarter throttling
 
 # endregion
