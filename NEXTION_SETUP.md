@@ -98,9 +98,39 @@ This sends the token `BT_VOLDN_R` followed by the Nextion terminator (`FF FF FF`
 
 ---
 
+## ⚠️ IMPORTANT: Do NOT Add Manual Terminators
+
+**The `print` command automatically terminates - DO NOT add `printh FF FF FF` after it!**
+
+### ❌ WRONG - Double Termination (Don't do this!)
+```
+print "BT_VOLUP_P"
+printh FF FF FF      ← WRONG! This adds a second set of terminators
+```
+
+This will send: `BT_VOLUP_P + FF FF FF + FF FF FF` which could cause parsing issues or empty frames.
+
+### ✅ CORRECT - Let print Handle Termination
+```
+print "BT_VOLUP_P"
+```
+
+This automatically sends: `BT_VOLUP_P + FF FF FF`
+
+### Why This Matters
+
+The Nextion `print` command is specifically designed to send ASCII text followed by the standard protocol terminator. If you add `printh FF FF FF` manually:
+1. You create a double terminator sequence
+2. The parser might interpret the second `FF FF FF` as an empty frame
+3. This wastes bandwidth and could cause timing issues
+
+**If you see examples online showing both `print` and `printh FF FF FF` together, they are incorrect or outdated.**
+
+---
+
 ## Understanding the Nextion `print` Command
 
-The Nextion `print` command sends ASCII text over UART followed by the standard Nextion terminator bytes (`FF FF FF`).
+The Nextion `print` command sends ASCII text over UART followed by the standard Nextion terminator bytes (`FF FF FF`) **automatically**.
 
 **Format**:
 ```
@@ -112,6 +142,8 @@ print "TOKEN_NAME"
 TOKEN_NAME + FF FF FF
 ```
 
+**IMPORTANT:** The terminator is added automatically by the `print` command. You do NOT need to add it manually with `printh FF FF FF`.
+
 The ESP32-S3 firmware receives these bytes and:
 1. Looks for the `FF FF FF` terminator to identify frame boundaries
 2. Extracts the token name (e.g., `BT_VOLUP_P`)
@@ -121,7 +153,12 @@ The ESP32-S3 firmware receives these bytes and:
 **Example** for `print "BT_VOLUP_P"`:
 - Bytes sent: `42 54 5F 56 4F 4C 55 50 5F 50 FF FF FF`
   - `42 54 5F 56 4F 4C 55 50 5F 50` = ASCII for "BT_VOLUP_P"
-  - `FF FF FF` = Nextion terminator (added automatically)
+  - `FF FF FF` = Nextion terminator (added automatically by `print`)
+
+**Comparison with `printh`:**
+- `print "TEXT"` → sends ASCII TEXT + automatic `FF FF FF` terminator
+- `printh 42 54` → sends raw hex bytes `42 54` with NO automatic terminator
+- `printh FF FF FF` → sends only the terminator bytes (useful for manual protocols)
 
 ---
 
@@ -200,6 +237,17 @@ After configuring your Nextion buttons:
 - Check that the token is in the firmware's allowlist (`TOK_BT` in `display.py`)
 - Ensure UART baud rate is 9600 for Nextion communication
 - Check the serial debug output to see if the token is being received
+
+### Should I add `printh FF FF FF` after `print "TOKEN"`?
+**NO!** This is a common misconception. The `print` command automatically appends `FF FF FF` terminators. Adding `printh FF FF FF` creates double terminators which could cause:
+- Empty frame parsing
+- Token detection issues
+- Wasted UART bandwidth
+
+**Correct:** `print "BT_VOLUP_P"` (terminator added automatically)  
+**Wrong:** `print "BT_VOLUP_P"` followed by `printh FF FF FF`
+
+If you see examples elsewhere showing both commands together, they are incorrect.
 
 ### Tokens appear with garbage bytes (e.g., `b'BT_VOLUP_Pf\x00'`)
 This was a bug in older firmware versions (fixed in commit 90c0cdb). Update your firmware to the latest version. The firmware now properly extracts clean tokens even if extra bytes are present in the UART stream.
