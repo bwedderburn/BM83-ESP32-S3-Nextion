@@ -183,7 +183,13 @@ After configuring your Nextion buttons:
    - Immediate volume change on press
    - Repeated volume changes after 500ms (every 80ms while holding)
    - Stop when released
-4. **Check the debug output** - if debug printing is enabled, you'll see token reception messages
+4. **Check the debug output** - if debug printing is enabled, you'll see clean token reception messages like:
+   ```
+   [NX] Token: b'BT_VOLUP_P'
+   [NX] Token: b'BT_VOLUP_R'
+   ```
+
+**Note**: In firmware versions prior to the fix in commit 90c0cdb (2026-01-28), tokens may have appeared with garbage bytes like `b'BT_VOLUP_Pf\x00'`. This has been fixed - tokens are now properly cleaned before processing.
 
 ---
 
@@ -194,6 +200,9 @@ After configuring your Nextion buttons:
 - Check that the token is in the firmware's allowlist (`TOK_BT` in `display.py`)
 - Ensure UART baud rate is 9600 for Nextion communication
 - Check the serial debug output to see if the token is being received
+
+### Tokens appear with garbage bytes (e.g., `b'BT_VOLUP_Pf\x00'`)
+This was a bug in older firmware versions (fixed in commit 90c0cdb). Update your firmware to the latest version. The firmware now properly extracts clean tokens even if extra bytes are present in the UART stream.
 
 ### Token is received but volume doesn't change
 This is usually a **BLE HID** issue, not a Nextion issue:
