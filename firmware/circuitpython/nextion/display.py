@@ -22,7 +22,9 @@ EQ_MAP = {
 # Token sets for test compatibility
 TOK_BT = {
     b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
-    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_EBIND"
+    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_EBIND",
+    # Press/release tokens for hold-and-repeat volume controls
+    b"BT_VOLUP_P", b"BT_VOLUP_R", b"BT_VOLDN_P", b"BT_VOLDN_R"
 }
 TOK_EQ = set(EQ_MAP.keys())  # Populated from EQ_MAP keys
 
