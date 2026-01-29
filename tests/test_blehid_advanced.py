@@ -1,3 +1,4 @@
+from unittest import mock
 from blehid.ble import BleHid
 
 
@@ -31,3 +32,27 @@ def test_blehid_pairing_logic():
     ble._last_pair_try_at = 0.0
     ble._ensure_paired()
     assert ble._need_pairing_check is False
+
+
+def test_blehid_request_erase_bonds_reentry_and_cooldown():
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    now = 100.0
+
+    with mock.patch("time.monotonic", return_value=now):
+        assert ble.request_erase_bonds() is True
+        # Second request while pending should be rejected
+        assert ble.request_erase_bonds() is False
+
+    # Advance past debounce but within cooldown
+    with mock.patch("time.monotonic", return_value=now + 1.0):
+        ble._erase_pending = False
+        ble._last_erase_at = now  # simulate recent erase to enforce cooldown
+        # Should be throttled by cooldown
+        assert ble.request_erase_bonds() is False
+
+    # Advance past cooldown and not pending -> allowed again
+    with mock.patch("time.monotonic", return_value=now + 4.0):
+        assert ble.request_erase_bonds() is True

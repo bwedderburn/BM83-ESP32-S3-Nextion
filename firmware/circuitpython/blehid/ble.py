@@ -399,12 +399,15 @@ class BleHid:
     # Loop through items
 # Function: request_erase_bonds - Defines the behavior for `request_erase_bonds`.
     def request_erase_bonds(self):
-# region request_erase_bonds
+    # region request_erase_bonds
     # request_erase_bonds defers erase_bonds to the tick loop with cooldown. #
         now = time.monotonic()
     # Conditional check
         if (now - self._last_erase_at) < self._erase_cooldown_s:
             dprint("[BLE] erase_bonds throttled")
+            return False
+        # Prevent re-entry while an erase is already pending
+        if self._erase_pending:
             return False
         self._erase_pending = True
         self._erase_requested_at = now
@@ -424,7 +427,11 @@ class BleHid:
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
             self._erase_pending = False
             self._last_erase_at = now
-            self.erase_bonds()
+            # Run erase inside try to avoid propagating BLE stack crashes
+            try:
+                self.erase_bonds()
+            except Exception as e:
+                dprint("[BLE] erase_bonds crash:", e)
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
