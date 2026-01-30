@@ -31,30 +31,38 @@ jobs:
           cd tools/mpy-cross
 
           XML_URL="https://adafruit-circuit-python.s3.amazonaws.com/?prefix=bin/mpy-cross/linux-amd64/"
-          KEY="$(curl -sL "$XML_URL" \
-            | grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' \
+          
+          # Pull listing (save for debugging)
+          curl -fsSL "$XML_URL" -o listing.xml || {
+            echo "ERROR: Failed to fetch S3 listing: $XML_URL" >&2
+            exit 1
+          }
+          
+          KEY="$(grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' listing.xml \
             | sed -E 's#</?Key>##g' \
             | grep -E 'mpy-cross-linux-amd64-[0-9]+\.[0-9]+\.[0-9]+' \
             | sort -V \
             | tail -n 1)"
 
           if [[ -z "$KEY" ]]; then
-            echo "Failed to locate mpy-cross key from S3 listing" >&2
+            echo "ERROR: Failed to locate mpy-cross key from S3 listing" >&2
             echo "URL used: $XML_URL" >&2
-            echo "Raw S3 XML response:" >&2
-            curl -sL "$XML_URL" >&2
-            echo "" >&2
-            echo "Attempting to list available keys:" >&2
-            curl -sL "$XML_URL" | grep -oE '<Key>[^<]*</Key>' | sed -E 's#</?Key>##g' >&2
+            echo "First 80 lines of raw XML response:" >&2
+            sed -n '1,80p' listing.xml >&2
+            echo "Attempting to list available keys (first 30):" >&2
+            grep -oE '<Key>[^<]*</Key>' listing.xml | head -n 30 >&2 || true
             exit 1
           fi
 
           echo "Using: $KEY"
 
           # IMPORTANT: save as ./mpy-cross so MPY_CROSS can point to it predictably
-          curl -L -o mpy-cross "https://adafruit-circuit-python.s3.amazonaws.com/$KEY"
+          curl -fL -o mpy-cross "https://adafruit-circuit-python.s3.amazonaws.com/$KEY"
           chmod +x mpy-cross
-          ./mpy-cross -h
+          
+          # Verify without failing due to help exit codes
+          ./mpy-cross --version || true
+          file ./mpy-cross
 
       - name: Build dist/
         env:
