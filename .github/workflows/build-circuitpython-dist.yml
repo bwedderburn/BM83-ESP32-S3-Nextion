@@ -22,7 +22,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl zip
+          sudo apt-get install -y curl zip file
 
       - name: Fetch CircuitPython mpy-cross (linux-amd64)
         run: |
@@ -31,36 +31,47 @@ jobs:
           cd tools/mpy-cross
 
           XML_URL="https://adafruit-circuit-python.s3.amazonaws.com/?prefix=bin/mpy-cross/linux-amd64/"
-          
+
+          echo "Fetching S3 listing from: $XML_URL"
           # Pull listing (save for debugging)
           curl -fsSL "$XML_URL" -o listing.xml || {
             echo "ERROR: Failed to fetch S3 listing: $XML_URL" >&2
             exit 1
           }
-          
+
+          echo "Available mpy-cross binaries (first 50):"
+          grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' listing.xml \
+            | sed -E 's#</?Key>##g' \
+            | head -n 50 || true
+
+          # Find the latest key (handles suffixes like -beta.1, -alpha.2, -rc.3, -24-g47990e3f1b.static, etc.)
           KEY="$(grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' listing.xml \
             | sed -E 's#</?Key>##g' \
-            | grep -E 'mpy-cross-linux-amd64-[0-9]+\.[0-9]+\.[0-9]+' \
+            | grep -E 'mpy-cross-linux-amd64-[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?' \
             | sort -V \
             | tail -n 1)"
 
           if [[ -z "$KEY" ]]; then
             echo "ERROR: Failed to locate mpy-cross key from S3 listing" >&2
             echo "URL used: $XML_URL" >&2
+            echo "Tried pattern: mpy-cross-linux-amd64-[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?" >&2
             echo "First 80 lines of raw XML response:" >&2
             sed -n '1,80p' listing.xml >&2
+            echo "" >&2
             echo "Attempting to list available keys (first 30):" >&2
-            grep -oE '<Key>[^<]*</Key>' listing.xml | head -n 30 >&2 || true
+            grep -oE '<Key>[^<]*</Key>' listing.xml \
+              | sed -E 's#</?Key>##g' \
+              | head -n 30 >&2 || true
             exit 1
           fi
 
           echo "Using: $KEY"
 
-          # IMPORTANT: save as ./mpy-cross so MPY_CROSS can point to it predictably
+          # Save binary predictably in tools/mpy-cross/mpy-cross
           curl -fL -o mpy-cross "https://adafruit-circuit-python.s3.amazonaws.com/$KEY"
           chmod +x mpy-cross
-          
-          # Verify without failing due to help exit codes
+
+          # Verify without failing due to help exit codes (some builds exit non-zero for -h)
           ./mpy-cross --version || true
           file ./mpy-cross
 
