@@ -74,6 +74,9 @@ jobs:
           # Verify without failing due to help exit codes (some builds exit non-zero for -h)
           ./mpy-cross --version || true
           file ./mpy-cross
+          
+          # Clean up temporary listing file
+          rm -f listing.xml
 
       - name: Build dist/
         env:
