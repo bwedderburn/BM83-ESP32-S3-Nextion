@@ -16,11 +16,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl zip
+
       - name: Fetch CircuitPython mpy-cross (linux-amd64)
         run: |
           set -euo pipefail
           mkdir -p tools/mpy-cross
           cd tools/mpy-cross
+
           XML_URL="https://adafruit-circuit-python.s3.amazonaws.com/?prefix=bin/mpy-cross/linux-amd64/"
           KEY="$(curl -sL "$XML_URL" \
             | grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' \
@@ -28,7 +34,15 @@ jobs:
             | grep -E 'mpy-cross-linux-amd64-[0-9]+\.[0-9]+\.[0-9]+' \
             | sort -V \
             | tail -n 1)"
+
+          if [[ -z "$KEY" ]]; then
+            echo "Failed to locate mpy-cross key from S3 listing" >&2
+            exit 1
+          fi
+
           echo "Using: $KEY"
+
+          # IMPORTANT: save as ./mpy-cross so MPY_CROSS can point to it predictably
           curl -L -o mpy-cross "https://adafruit-circuit-python.s3.amazonaws.com/$KEY"
           chmod +x mpy-cross
           ./mpy-cross -h
@@ -43,11 +57,19 @@ jobs:
       - name: Zip drag-and-drop package
         run: |
           cd dist
-          zip -r circuitpython-dist.zip circuitpython
+          zip -r circuitpython-dist-${{ github.sha }}.zip circuitpython
 
       - name: Upload artifact (zip)
         uses: actions/upload-artifact@v4
         with:
-          name: circuitpython-dist
-          path: dist/circuitpython-dist.zip
+          name: circuitpython-dist-${{ github.sha }}
+          path: dist/circuitpython-dist-${{ github.sha }}.zip
+          retention-days: 30
+
+      # Optional: also upload the raw folder (handy for browsing without unzipping)
+      - name: Upload artifact (folder)
+        uses: actions/upload-artifact@v4
+        with:
+          name: circuitpython-folder-${{ github.sha }}
+          path: dist/circuitpython
           retention-days: 30
