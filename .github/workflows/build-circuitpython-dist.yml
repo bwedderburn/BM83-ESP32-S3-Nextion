@@ -40,6 +40,12 @@ jobs:
 
           if [[ -z "$KEY" ]]; then
             echo "Failed to locate mpy-cross key from S3 listing" >&2
+            echo "URL used: $XML_URL" >&2
+            echo "Raw S3 XML response:" >&2
+            curl -sL "$XML_URL" >&2
+            echo "" >&2
+            echo "Attempting to list available keys:" >&2
+            curl -sL "$XML_URL" | grep -oE '<Key>[^<]*</Key>' | sed -E 's#</?Key>##g' >&2
             exit 1
           fi
 
