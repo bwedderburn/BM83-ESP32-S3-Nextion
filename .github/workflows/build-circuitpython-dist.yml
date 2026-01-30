@@ -33,34 +33,35 @@ jobs:
           XML_URL="https://adafruit-circuit-python.s3.amazonaws.com/?prefix=bin/mpy-cross/linux-amd64/"
 
           echo "Fetching S3 listing from: $XML_URL"
-          XML_CONTENT="$(curl -fsSL "$XML_URL")"
+          # Pull listing (save for debugging)
+          curl -fsSL "$XML_URL" -o listing.xml || {
+            echo "ERROR: Failed to fetch S3 listing: $XML_URL" >&2
+            exit 1
+          }
 
           echo "Available mpy-cross binaries (first 50):"
-          echo "$XML_CONTENT" \
-            | grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' \
+          grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' listing.xml \
             | sed -E 's#</?Key>##g' \
             | head -n 50 || true
 
           # Find the latest key (handles suffixes like -beta.1, -alpha.2, -rc.3, -24-g47990e3f1b.static, etc.)
-          KEY="$(echo "$XML_CONTENT" \
-            | grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' \
+          KEY="$(grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' listing.xml \
             | sed -E 's#</?Key>##g' \
             | grep -E 'mpy-cross-linux-amd64-[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?' \
             | sort -V \
             | tail -n 1)"
 
           if [[ -z "$KEY" ]]; then
-            echo "Failed to locate mpy-cross key from S3 listing" >&2
+            echo "ERROR: Failed to locate mpy-cross key from S3 listing" >&2
             echo "URL used: $XML_URL" >&2
-            echo "Tried pattern: mpy-cross-linux-amd64-[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?" >&2
-            echo "Raw S3 XML response (first 120 lines):" >&2
-            echo "$XML_CONTENT" | sed -n '1,120p' >&2
+            echo "Tried pattern: mpy-cross-linux-amd64-[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?" >&2
+            echo "First 80 lines of raw XML response:" >&2
+            sed -n '1,80p' listing.xml >&2
             echo "" >&2
-            echo "Attempting to list available keys (first 50):" >&2
-            echo "$XML_CONTENT" \
-              | grep -oE '<Key>[^<]*</Key>' \
+            echo "Attempting to list available keys (first 30):" >&2
+            grep -oE '<Key>[^<]*</Key>' listing.xml \
               | sed -E 's#</?Key>##g' \
-              | head -n 50 >&2
+              | head -n 30 >&2 || true
             exit 1
           fi
 
@@ -70,9 +71,12 @@ jobs:
           curl -fL -o mpy-cross "https://adafruit-circuit-python.s3.amazonaws.com/$KEY"
           chmod +x mpy-cross
 
-          # Verify the binary is executable (help often exits 1; don't fail the job)
-          ./mpy-cross -h || echo "Note: mpy-cross -h exited with code $?, this can be expected for some CircuitPython builds"
+          # Verify without failing due to help exit codes (some builds exit non-zero for -h)
+          ./mpy-cross --version || true
           file ./mpy-cross
+          
+          # Clean up temporary listing file
+          rm -f listing.xml
 
       - name: Build dist/
         env:
@@ -100,4 +104,3 @@ jobs:
           name: circuitpython-folder-${{ github.sha }}
           path: dist/circuitpython
           retention-days: 30
-
