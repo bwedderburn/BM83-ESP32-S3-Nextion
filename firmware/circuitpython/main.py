@@ -14,6 +14,7 @@ NX_BAUD = 9600
 BM83_BAUD = 115200
 NX_TX, NX_RX = board.IO15, board.IO16
 BM83_TX, BM83_RX = board.IO17, board.IO18
+VOL_REPEAT_MAX = 10
 
 # endregion
 BLE_ENABLED = True
@@ -66,6 +67,7 @@ def main():
     vol_hold_active = None        # None, "up", or "down"
     vol_hold_start_at = 0.0       # When the button was first pressed
     vol_last_repeat_at = 0.0      # When we last sent a repeat
+    vol_repeat_count = 0          # How many steps have been sent in this hold
     vol_initial_delay_s = 0.5     # 500ms before repeat starts
     vol_repeat_interval_s = 0.08  # 80ms between repeats
 
@@ -333,10 +335,12 @@ def main():
                 vol_hold_active = "up"
                 vol_hold_start_at = now
                 vol_last_repeat_at = now
+                vol_repeat_count = 1
             elif tok == b"BT_VOLUP_R":
                 # Volume up released - stop hold-and-repeat
                 if vol_hold_active == "up":
                     vol_hold_active = None
+                    vol_repeat_count = 0
     # Conditional check
             elif tok == b"BT_VOLDN_P":
                 # Volume down pressed - check for double-tap mute, then start hold tracking
@@ -345,16 +349,19 @@ def main():
                     ble.mute()
                     last_voldn_at = 0.0
                     vol_hold_active = None  # Don't repeat after mute
+                    vol_repeat_count = 0
                 else:
                     ble.volume(False)
                     last_voldn_at = now
                     vol_hold_active = "down"
                     vol_hold_start_at = now
                     vol_last_repeat_at = now
+                    vol_repeat_count = 1
             elif tok == b"BT_VOLDN_R":
                 # Volume down released - stop hold-and-repeat
                 if vol_hold_active == "down":
                     vol_hold_active = None
+                    vol_repeat_count = 0
     # Conditional check
             elif tok == b"BT_EBIND":
                 ble.request_erase_bonds()
@@ -368,8 +375,9 @@ def main():
             if hold_elapsed >= vol_initial_delay_s:
                 # Safety cap: stop repeating after a maximum hold duration
                 # This prevents a missed release token from causing unbounded repeats.
-                if hold_elapsed > 2.0:
+                if hold_elapsed > 2.0 or vol_repeat_count >= VOL_REPEAT_MAX:
                     vol_hold_active = None
+                    vol_repeat_count = 0
                 else:
                     # Check if it's time for another repeat step
                     if (now - vol_last_repeat_at) >= vol_repeat_interval_s:
@@ -378,6 +386,7 @@ def main():
                         elif vol_hold_active == "down":
                             ble.volume(False)
                         vol_last_repeat_at = now
+                        vol_repeat_count += 1
 
         time.sleep(0.005)
 
