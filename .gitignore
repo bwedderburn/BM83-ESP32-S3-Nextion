@@ -5,15 +5,13 @@ __pycache__/
 .venv
 *.pyc
 *.egg-info/
+.pytest_cache/
+# Build outputs (generated locally / in CI artifacts)
 dist/
 build/
-!dist/
-!build/
-dist/**
-build/**
-!dist/**/*.mpy
-!build/**/*.mpy
-.pytest_cache/
+
+# CircuitPython compilied bytecode (generated; keep out of git)
+*.mpy
 
 # macOS
 .DS_Store
