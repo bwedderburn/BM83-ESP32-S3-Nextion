@@ -1,0 +1,53 @@
+name: Build CircuitPython drag-and-drop dist
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "firmware/circuitpython/**"
+      - "build_mpy.sh"
+      - ".github/workflows/build-circuitpython-dist.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch CircuitPython mpy-cross (linux-amd64)
+        run: |
+          set -euo pipefail
+          mkdir -p tools/mpy-cross
+          cd tools/mpy-cross
+          XML_URL="https://adafruit-circuit-python.s3.amazonaws.com/?prefix=bin/mpy-cross/linux-amd64/"
+          KEY="$(curl -sL "$XML_URL" \
+            | grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' \
+            | sed -E 's#</?Key>##g' \
+            | grep -E 'mpy-cross-linux-amd64-[0-9]+\.[0-9]+\.[0-9]+' \
+            | sort -V \
+            | tail -n 1)"
+          echo "Using: $KEY"
+          curl -L -o mpy-cross "https://adafruit-circuit-python.s3.amazonaws.com/$KEY"
+          chmod +x mpy-cross
+          ./mpy-cross -h
+
+      - name: Build dist/
+        env:
+          MPY_CROSS: ${{ github.workspace }}/tools/mpy-cross/mpy-cross
+        run: |
+          chmod +x ./build_mpy.sh
+          ./build_mpy.sh
+
+      - name: Zip drag-and-drop package
+        run: |
+          cd dist
+          zip -r circuitpython-dist.zip circuitpython
+
+      - name: Upload artifact (zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: circuitpython-dist
+          path: dist/circuitpython-dist.zip
+          retention-days: 30
