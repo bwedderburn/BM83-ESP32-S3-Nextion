@@ -39,7 +39,7 @@ jobs:
           echo "Available mpy-cross binaries:"
           echo "$XML_CONTENT" | grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' | sed -E 's#</?Key>##g' || true
           
-          # Updated pattern to handle version suffixes like -alpha, -beta, -rc, etc.
+          # Updated pattern to handle version suffixes like -beta.1, -alpha.2, -rc.3, -24-g47990e3f1b.static, etc.
           KEY="$(echo "$XML_CONTENT" \
             | grep -oE '<Key>bin/mpy-cross/linux-amd64/[^<]*</Key>' \
             | sed -E 's#</?Key>##g' \
@@ -58,7 +58,8 @@ jobs:
           # IMPORTANT: save as ./mpy-cross so MPY_CROSS can point to it predictably
           curl -L -o mpy-cross "https://adafruit-circuit-python.s3.amazonaws.com/$KEY"
           chmod +x mpy-cross
-          ./mpy-cross -h || true
+          # Verify the binary is executable (help command typically exits with code 1, which is expected)
+          ./mpy-cross -h > /dev/null 2>&1 || true
 
       - name: Build dist/
         env:
