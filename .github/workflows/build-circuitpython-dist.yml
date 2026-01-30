@@ -1,5 +1,8 @@
 name: Build CircuitPython drag-and-drop dist
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: ["main"]
@@ -39,11 +42,12 @@ jobs:
             echo "Failed to locate mpy-cross key from S3 listing" >&2
             echo "URL used: $XML_URL" >&2
             echo "Raw S3 XML response:" >&2
-            XML_CONTENT="$(curl -sL "$XML_URL")"
+            XML_CONTENT="$(curl -fsSL "$XML_URL" || true)"
             echo "$XML_CONTENT" >&2
             echo "" >&2
             echo "Attempting to list available keys:" >&2
             echo "$XML_CONTENT" | grep -oE '<Key>[^<]*</Key>' | sed -E 's#</?Key>##g' >&2
+main
             exit 1
           fi
 
