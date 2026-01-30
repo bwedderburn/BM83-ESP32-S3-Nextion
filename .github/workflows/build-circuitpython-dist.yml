@@ -1,5 +1,8 @@
 name: Build CircuitPython drag-and-drop dist
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: ["main"]
