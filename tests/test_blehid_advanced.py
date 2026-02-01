@@ -121,6 +121,7 @@ def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
     ble._erase_pending_since = 100.0
     ble._erase_debounce_s = 0.1
     ble._erase_max_wait_s = 2.0
+    # Set recent connection change so idle window has not elapsed when erase times out.
     ble._last_conn_change_at = 101.8
     ble._ble.advertising = True
 

@@ -443,9 +443,8 @@ class BleHid:
         if not self._ready or not self._ble:
             return
         now = time.monotonic()
-        if self._erase_pending:
-            if getattr(self._ble, "advertising", False):
-                self._stop_adv()
+        if self._erase_pending and getattr(self._ble, "advertising", False):
+            self._stop_adv()
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
             if self._is_ble_idle(now):
