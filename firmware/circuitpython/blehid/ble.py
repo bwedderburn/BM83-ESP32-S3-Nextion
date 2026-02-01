@@ -294,8 +294,14 @@ class BleHid:
             dprint("[BLE] name update err:", e)
 
 # endregion
+# Function: _is_ble_idle - Defines the behavior for `_is_ble_idle`.
     def _is_ble_idle(self, now):
 # region _is_ble_idle
+        """Return True when BLE is idle enough for erase operations.
+
+        Args:
+            now: Current monotonic timestamp used for idle timing.
+        """
     # _is_ble_idle returns True when BLE is idle enough for erase operations.
     # now is the current monotonic timestamp. #
         return not (

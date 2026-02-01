@@ -79,9 +79,16 @@ def test_blehid_tick_defers_erase_until_idle():
     assert ble._last_erase_at == 0.0
     assert ble._erase_requested_at == 101.0
 
+    ble._ble.advertising = True
+    with mock.patch("time.monotonic", return_value=102.5):
+        ble.tick()
+    assert ble._erase_pending is True
+    assert ble._last_erase_at == 0.0
+
+    ble._ble.advertising = False
     with mock.patch.object(ble, "erase_bonds") as erase_mock:
-        with mock.patch("time.monotonic", return_value=102.5):
+        with mock.patch("time.monotonic", return_value=103.5):
             ble.tick()
     erase_mock.assert_called_once()
     assert ble._erase_pending is False
-    assert ble._last_erase_at == 102.5
+    assert ble._last_erase_at == 103.5
