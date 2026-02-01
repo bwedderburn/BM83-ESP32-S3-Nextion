@@ -306,8 +306,8 @@ class BleHid:
         """
         connected = bool(getattr(self._ble, "connected", False))
         advertising = bool(getattr(self._ble, "advertising", False))
-        idle_wait_sufficient = (now - self._last_conn_change_at) >= self._erase_min_idle_s
-        return (not connected) and idle_wait_sufficient and (not advertising)
+        idle_time_elapsed = (now - self._last_conn_change_at) >= self._erase_min_idle_s
+        return (not connected) and idle_time_elapsed and (not advertising)
 
 # endregion
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
@@ -467,7 +467,6 @@ class BleHid:
                         ",".join(reasons)
                     )
                     self._erase_pending = False
-                    self._erase_requested_at = now
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:

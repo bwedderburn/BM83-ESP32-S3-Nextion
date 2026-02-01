@@ -71,6 +71,7 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     ble._erase_pending_since = 100.0
     ble._erase_debounce_s = 0.1
     ble._erase_min_idle_s = 1.0
+    # Use a partial idle window to stay under the threshold while still close to it.
     idle_margin_ratio = 0.4
     # Last connection change is within the idle window to force deferral on the first tick.
     ble._last_conn_change_at = 101.0 - (ble._erase_min_idle_s * idle_margin_ratio)
