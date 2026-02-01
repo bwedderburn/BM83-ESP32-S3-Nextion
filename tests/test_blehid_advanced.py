@@ -70,7 +70,7 @@ def test_blehid_tick_defers_erase_until_idle():
     ble._erase_requested_at = 100.0
     ble._erase_debounce_s = 0.1
     ble._erase_min_idle_s = 1.0
-    ble._last_conn_change_at = 100.8
+    ble._last_conn_change_at = 100.1
     ble._adv_inhibit_until = 200.0
 
     with mock.patch("time.monotonic", return_value=101.0):
