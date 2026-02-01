@@ -458,7 +458,6 @@ class BleHid:
                 if (now - self._erase_pending_since) >= self._erase_max_wait_s:
                     dprint("[BLE] erase_bonds deferred too long, cancelling")
                     self._erase_pending = False
-                    self._last_erase_at = now
                 else:
                     self._erase_requested_at = now
         connected = bool(getattr(self._ble, "connected", False))
