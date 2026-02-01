@@ -120,4 +120,9 @@ def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
         assert ble._last_erase_at == 102.0
         with mock.patch("time.monotonic", return_value=103.0):
             assert ble.request_erase_bonds() is False
-    erase_mock.assert_not_called()
+        with mock.patch("time.monotonic", return_value=106.0):
+            assert ble.request_erase_bonds() is True
+        ble._ble.advertising = False
+        with mock.patch("time.monotonic", return_value=106.2):
+            ble.tick()
+    assert erase_mock.call_count == 1
