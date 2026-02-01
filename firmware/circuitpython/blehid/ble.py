@@ -464,7 +464,7 @@ class BleHid:
                         reasons.append("recent-conn")
                     dprint(
                         "[BLE] erase_bonds deferred too long, cancelling:",
-                        ",".join(reasons) if reasons else "unknown"
+                        ",".join(reasons)
                     )
                     self._erase_pending = False
         connected = bool(getattr(self._ble, "connected", False))
