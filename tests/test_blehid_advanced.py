@@ -86,7 +86,6 @@ def test_blehid_tick_defers_erase_until_idle():
     assert ble._last_erase_at == 0.0
 
     ble._ble.advertising = False
-    assert ble._last_erase_at == 0.0
     with mock.patch.object(ble, "erase_bonds") as erase_mock:
         with mock.patch("time.monotonic", return_value=103.5):
             ble.tick()
