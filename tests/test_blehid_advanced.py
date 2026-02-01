@@ -259,7 +259,7 @@ def test_blehid_erase_bonds_with_advertising_already_stopped():
 
         # Should sleep for remaining time to reach stabilization delay
         since_stop = 100.02 - 100.0  # 0.02
-        expected_sleep = BLE_STACK_STABILIZATION_DELAY - since_stop  # 0.03
+        expected_sleep = BLE_STACK_STABILIZATION_DELAY - since_stop
 
         # The first sleep call should be for the settle delay
         # Note: there are multiple sleep calls in erase_bonds, so we check
