@@ -59,7 +59,7 @@ def test_blehid_request_erase_bonds_reentry_and_cooldown():
         assert ble.request_erase_bonds() is True
 
 
-def test_blehid_tick_defers_erase_until_idle():
+def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     ble = BleHid(True, "Mock")
     ble._ready = True
     ble._ble = MockBLE()
