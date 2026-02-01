@@ -41,6 +41,7 @@ def test_blehid_request_erase_bonds_reentry_and_cooldown():
     ble._adv = object()
     now = 100.0
     ble._last_conn_change_at = now - 10.0
+    ble._erase_pending_since = now
 
     with mock.patch("time.monotonic", return_value=now):
         assert ble.request_erase_bonds() is True
@@ -68,8 +69,10 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     ble._was_connected = False
     ble._erase_pending = True
     ble._erase_requested_at = 100.0
+    ble._erase_pending_since = 100.0
     ble._erase_debounce_s = 0.1
     ble._erase_min_idle_s = 1.0
+    # Last connection change is within the idle window to force deferral on the first tick.
     ble._last_conn_change_at = 100.1
     ble._adv_inhibit_until = 200.0
 

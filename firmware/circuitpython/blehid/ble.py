@@ -68,10 +68,12 @@ class BleHid:
 # endregion
         self._erase_pending = False
         self._erase_requested_at = 0.0
+        self._erase_pending_since = 0.0
         self._last_erase_at = 0.0
         self._erase_cooldown_s = 3.0
         self._erase_debounce_s = 0.15
         self._erase_min_idle_s = 1.0
+        self._erase_max_wait_s = 8.0
         self._last_conn_change_at = time.monotonic()
 
 # endregion
@@ -429,6 +431,7 @@ class BleHid:
             return False
         self._erase_pending = True
         self._erase_requested_at = now
+        self._erase_pending_since = now
         return True
 
 # endregion
@@ -452,7 +455,12 @@ class BleHid:
                 except Exception as e:
                     dprint("[BLE] erase_bonds crash:", e)
             else:
-                self._erase_requested_at = now
+                if (now - self._erase_pending_since) >= self._erase_max_wait_s:
+                    dprint("[BLE] erase_bonds deferred too long, cancelling")
+                    self._erase_pending = False
+                    self._last_erase_at = now
+                else:
+                    self._erase_requested_at = now
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
