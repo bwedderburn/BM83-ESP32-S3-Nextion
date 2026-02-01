@@ -427,7 +427,7 @@ class BleHid:
         except Exception as e:
             dprint("[BLE] adv restart after erase failed:", e)
             # Set inhibit to allow stack to recover; tick() will retry later
-            self._adv_inhibit_until = time.monotonic() + 2.0
+            self._adv_inhibit_until = time.monotonic() + 4.0
 
 # endregion
     # Loop through items
