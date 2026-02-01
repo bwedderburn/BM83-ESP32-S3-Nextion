@@ -53,6 +53,7 @@ def test_erase_bonds_when_ble_is_none():
 
 def test_ble_name_cycling():
     """Test that BLE name cycles with counter on erase_bonds."""
+    from unittest import mock
     # Create a temporary counter file for testing
     import blehid.ble as ble_module
     original_file = ble_module.BLE_COUNTER_FILE
@@ -87,7 +88,8 @@ def test_ble_name_cycling():
         assert blehid.base_name == "Test Device"
 
         # After erase_bonds, name should be updated with incremented counter
-        blehid.erase_bonds()
+        with mock.patch("time.sleep"):  # Skip delays in test for speed
+            blehid.erase_bonds()
         assert blehid.name == "Test Device07"
         assert blehid._ble.name == "Test Device07"
 
@@ -105,6 +107,8 @@ def test_ble_name_cycling():
 
 def test_erase_bonds_with_failing_connections():
     """Test that erase_bonds handles connection errors gracefully."""
+    from unittest import mock
+
     class FaultyConnection:
         def disconnect(self):
             raise RuntimeError("Connection error")
@@ -130,7 +134,8 @@ def test_erase_bonds_with_failing_connections():
     blehid._ready = True
 
     # Should not crash even when disconnections fail
-    blehid.erase_bonds()
+    with mock.patch("time.sleep"):  # Skip delays in test for speed
+        blehid.erase_bonds()
 
     # Should still attempt to restart advertising
     assert blehid._ble.advertising is True
@@ -138,6 +143,8 @@ def test_erase_bonds_with_failing_connections():
 
 def test_erase_bonds_with_failing_erase_bonding():
     """Test that erase_bonds handles erase_bonding errors gracefully."""
+    from unittest import mock
+
     class FaultyBLE:
         connected = False
         advertising = False
@@ -159,7 +166,8 @@ def test_erase_bonds_with_failing_erase_bonding():
     blehid._ready = True
 
     # Should not crash even when erase_bonding fails
-    blehid.erase_bonds()
+    with mock.patch("time.sleep"):  # Skip delays in test for speed
+        blehid.erase_bonds()
 
     # Should still attempt to restart advertising
     assert blehid._ble.advertising is True
@@ -197,7 +205,8 @@ def test_erase_bonds_with_advertising_failure():
 
     # Should not crash even when advertising restart fails after erase
     with mock.patch("time.monotonic", return_value=100.0):
-        blehid.erase_bonds()
+        with mock.patch("time.sleep"):  # Skip delays in test for speed
+            blehid.erase_bonds()
 
     # Advertising failed, so it should remain False
     assert blehid._ble.advertising is False
@@ -231,7 +240,8 @@ def test_erase_bonds_with_oserror_advertising_failure():
 
     # Should not crash even when OSError occurs during advertising
     with mock.patch("time.monotonic", return_value=100.0):
-        blehid.erase_bonds()
+        with mock.patch("time.sleep"):  # Skip delays in test for speed
+            blehid.erase_bonds()
 
     # Advertising failed, so it should remain False
     assert blehid._ble.advertising is False
@@ -241,6 +251,7 @@ def test_erase_bonds_with_oserror_advertising_failure():
 
 def test_erase_bonds_with_readonly_filesystem():
     """Test that erase_bonds works even when filesystem is read-only."""
+    from unittest import mock
     import sys
     ble_module = sys.modules["blehid.ble"]
 
@@ -262,7 +273,8 @@ def test_erase_bonds_with_readonly_filesystem():
         blehid._counter_persisted = False
 
         # Erase bonds should work even with read-only filesystem
-        blehid.erase_bonds()
+        with mock.patch("time.sleep"):  # Skip delays in test for speed
+            blehid.erase_bonds()
 
         # Name should be updated with in-memory counter
         assert blehid.name == "TestDevice06"
@@ -277,6 +289,7 @@ def test_erase_bonds_with_readonly_filesystem():
 
 def test_erase_bonds_filesystem_transition():
     """Test counter continues incrementing when filesystem becomes read-only mid-operation."""
+    from unittest import mock
     import sys
     ble_module = sys.modules["blehid.ble"]
 
@@ -306,23 +319,24 @@ def test_erase_bonds_filesystem_transition():
         blehid._ready = True
         blehid._counter_persisted = True  # Start with writable filesystem
 
-        # First erase: filesystem is writable
-        blehid.erase_bonds()
-        assert blehid.name == "TestDevice11"
-        assert blehid._memory_counter == 11
-        assert blehid._counter_persisted is True
+        with mock.patch("time.sleep"):  # Skip delays in test for speed
+            # First erase: filesystem is writable
+            blehid.erase_bonds()
+            assert blehid.name == "TestDevice11"
+            assert blehid._memory_counter == 11
+            assert blehid._counter_persisted is True
 
-        # Second erase: filesystem becomes read-only
-        blehid.erase_bonds()
-        assert blehid.name == "TestDevice12"
-        assert blehid._memory_counter == 12
-        assert blehid._counter_persisted is False  # Write failed
+            # Second erase: filesystem becomes read-only
+            blehid.erase_bonds()
+            assert blehid.name == "TestDevice12"
+            assert blehid._memory_counter == 12
+            assert blehid._counter_persisted is False  # Write failed
 
-        # Third erase: filesystem still read-only, counter should continue incrementing
-        blehid.erase_bonds()
-        assert blehid.name == "TestDevice13"
-        assert blehid._memory_counter == 13
-        assert blehid._counter_persisted is False
+            # Third erase: filesystem still read-only, counter should continue incrementing
+            blehid.erase_bonds()
+            assert blehid.name == "TestDevice13"
+            assert blehid._memory_counter == 13
+            assert blehid._counter_persisted is False
 
     finally:
         ble_module.BLE_COUNTER_FILE = original_file
