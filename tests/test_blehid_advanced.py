@@ -104,9 +104,10 @@ def test_blehid_tick_stops_advertising_while_erase_pending():
     ble._erase_debounce_s = 0.2
     ble._ble.advertising = True
 
-    with mock.patch("time.monotonic", return_value=100.05):
-        ble.tick()
-    assert ble._ble.advertising is False
+    with mock.patch.object(ble, "_stop_adv", side_effect=ble._stop_adv) as stop_adv:
+        with mock.patch("time.monotonic", return_value=100.05):
+            ble.tick()
+    stop_adv.assert_called_once()
 
 
 def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():

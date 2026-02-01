@@ -163,7 +163,7 @@ class BleHid:
         advertising = False
     # Try block to catch exceptions
         try:
-            advertising = bool(getattr(self._ble, "advertising", False))
+            advertising = bool(self._ble.advertising) if hasattr(self._ble, "advertising") else False
     # Handle exceptions
         except Exception:
             advertising = False
@@ -298,16 +298,30 @@ class BleHid:
 # endregion
 # Function: _is_ble_idle - Defines the behavior for `_is_ble_idle`.
     def _is_ble_idle(self, now):
-# region _is_ble_idle
+    # region _is_ble_idle
         """Return True when BLE is idle enough for erase operations.
 
         Args:
             now: Current monotonic timestamp used for idle timing.
         """
         connected = bool(getattr(self._ble, "connected", False))
-        advertising = bool(getattr(self._ble, "advertising", False))
+        advertising = self._is_advertising()
         idle_time_elapsed = (now - self._last_conn_change_at) >= self._erase_min_idle_s
         return (not connected) and idle_time_elapsed and (not advertising)
+
+# endregion
+# Function: _is_advertising - Defines the behavior for `_is_advertising`.
+    def _is_advertising(self):
+# region _is_advertising
+        advertising = False
+    # Try block to catch exceptions
+        try:
+            advertising = bool(self._ble.advertising) if hasattr(self._ble, "advertising") else False
+    # Handle exceptions
+        except Exception:
+            advertising = False
+    # Return the result
+        return advertising
 
 # endregion
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
@@ -443,7 +457,9 @@ class BleHid:
         if not self._ready or not self._ble:
             return
         now = time.monotonic()
-        if self._erase_pending and getattr(self._ble, "advertising", False):
+        advertising = self._is_advertising()
+    # Conditional check
+        if self._erase_pending and advertising:
             self._stop_adv()
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
@@ -483,13 +499,7 @@ class BleHid:
         if not connected:
             if self._erase_pending:
                 return
-            advertising = False
-    # Try block to catch exceptions
-            try:
-                advertising = bool(getattr(self._ble, "advertising", False))
-    # Handle exceptions
-            except Exception:
-                advertising = False
+            advertising = self._is_advertising()
     # Conditional check
             if not advertising:
                 self._start_adv(force=False)
