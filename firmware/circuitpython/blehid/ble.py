@@ -302,8 +302,6 @@ class BleHid:
         Args:
             now: Current monotonic timestamp used for idle timing.
         """
-    # _is_ble_idle returns True when BLE is idle enough for erase operations.
-    # now is the current monotonic timestamp. #
         return not (
             getattr(self._ble, "connected", False)
             or (now - self._last_conn_change_at) < self._erase_min_idle_s
