@@ -401,3 +401,85 @@ def test_erase_bonds_with_stop_adv_crash():
 
     # - Advertising was restarted successfully
     assert blehid._ble.advertising is True
+
+
+def test_erase_bonds_with_adv_already_stopped():
+    """Test that erase_bonds honors _erase_adv_stopped and uses stabilization delay correctly.
+
+    This tests the path where advertising has already been stopped by the tick loop
+    (via the two-phase erase flow), and erase_bonds should not re-stop advertising
+    at the beginning but should honor the settle interval relative to _last_adv_stop_at.
+    """
+    from unittest import mock
+    from blehid.ble import BLE_STACK_STABILIZATION_DELAY
+
+    blehid = BleHid(enabled=True, name="TestDevice")
+    blehid._ble = DummyBLE()
+    blehid._adv = object()
+    blehid._ready = True
+    blehid._ble.advertising = False
+    blehid._erase_adv_stopped = True
+
+    # Test case 1: Last stop was very recent (< stabilization delay)
+    # Should sleep for remaining time before proceeding
+    blehid._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY - 0.01)  # 0.01s ago
+
+    sleep_calls = []
+    original_stop_adv = blehid._stop_adv
+
+    def track_stop_adv_calls():
+        """Track if _stop_adv is called in the initial branch (not from _start_adv)."""
+        nonlocal initial_stop_adv_called
+        initial_stop_adv_called = True
+        original_stop_adv()
+
+    initial_stop_adv_called = False
+
+    with mock.patch("time.monotonic", return_value=100.0):
+        with mock.patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
+            # Patch _stop_adv to track calls, but only check if the initial branch uses it
+            with mock.patch.object(blehid, "_stop_adv", side_effect=track_stop_adv_calls):
+                # Temporarily patch _start_adv to prevent it from calling _stop_adv
+                # so we can isolate the initial branch behavior
+                with mock.patch.object(blehid, "_start_adv"):
+                    blehid.erase_bonds()
+
+    # The initial branch (line 344-355) should NOT have called _stop_adv
+    # because _erase_adv_stopped=True, taking the else branch
+    assert initial_stop_adv_called is False
+
+    # Should sleep for the remaining stabilization time (approximately)
+    assert len(sleep_calls) >= 1
+    # First sleep should be close to the remaining stabilization delay
+    assert 0.0 < sleep_calls[0] <= BLE_STACK_STABILIZATION_DELAY
+
+    # Test case 2: Last stop was long enough ago (>= stabilization delay)
+    # Should not sleep for initial stabilization but proceed directly
+    blehid2 = BleHid(enabled=True, name="TestDevice2")
+    blehid2._ble = DummyBLE()
+    blehid2._adv = object()
+    blehid2._ready = True
+    blehid2._ble.advertising = False
+    blehid2._erase_adv_stopped = True
+    blehid2._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY + 0.1)  # Well past delay
+
+    sleep_calls2 = []
+    initial_stop_adv_called2 = False
+    original_stop_adv2 = blehid2._stop_adv
+
+    def track_stop_adv_calls2():
+        nonlocal initial_stop_adv_called2
+        initial_stop_adv_called2 = True
+        original_stop_adv2()
+
+    with mock.patch("time.monotonic", return_value=100.0):
+        with mock.patch("time.sleep", side_effect=lambda d: sleep_calls2.append(d)):
+            with mock.patch.object(blehid2, "_stop_adv", side_effect=track_stop_adv_calls2):
+                with mock.patch.object(blehid2, "_start_adv"):
+                    blehid2.erase_bonds()
+
+    # The initial branch should NOT have called _stop_adv
+    assert initial_stop_adv_called2 is False
+
+    # First sleep should be for post-disconnect, not initial stabilization
+    # (since we're already past the stabilization window)
