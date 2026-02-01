@@ -160,13 +160,7 @@ class BleHid:
     # Conditional check
         if getattr(self._ble, "connected", False):
             return
-        advertising = False
-    # Try block to catch exceptions
-        try:
-            advertising = bool(self._ble.advertising) if hasattr(self._ble, "advertising") else False
-    # Handle exceptions
-        except Exception:
-            advertising = False
+        advertising = self._is_advertising()
     # Conditional check
         if advertising and not force:
             return
@@ -312,7 +306,7 @@ class BleHid:
 # endregion
 # Function: _is_advertising - Defines the behavior for `_is_advertising`.
     def _is_advertising(self):
-# region _is_advertising
+    # region _is_advertising
         advertising = False
     # Try block to catch exceptions
         try:
