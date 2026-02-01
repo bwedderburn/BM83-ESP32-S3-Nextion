@@ -432,7 +432,6 @@ class BleHid:
             # Avoid erasing bonds while BLE is actively connected or recently changed state.
             if getattr(self._ble, "connected", False) or (now - self._last_conn_change_at) < self._erase_min_idle_s:
                 self._erase_requested_at = now
-            # Conditional check
             elif getattr(self._ble, "advertising", False):
                 # Skip erase while advertising to reduce NimBLE memory pressure.
                 self._erase_requested_at = now

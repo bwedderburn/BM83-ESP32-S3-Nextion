@@ -64,14 +64,24 @@ def test_blehid_tick_defers_erase_until_idle():
     ble._ready = True
     ble._ble = MockBLE()
     ble._adv = object()
+    ble._ble.connected = False
+    ble._was_connected = False
     ble._erase_pending = True
     ble._erase_requested_at = 100.0
     ble._erase_debounce_s = 0.1
     ble._erase_min_idle_s = 1.0
-    ble._last_conn_change_at = 100.5
+    ble._last_conn_change_at = 100.8
+    ble._adv_inhibit_until = 200.0
 
     with mock.patch("time.monotonic", return_value=101.0):
         ble.tick()
     assert ble._erase_pending is True
     assert ble._last_erase_at == 0.0
     assert ble._erase_requested_at == 101.0
+
+    with mock.patch.object(ble, "erase_bonds") as erase_mock:
+        with mock.patch("time.monotonic", return_value=102.5):
+            ble.tick()
+    erase_mock.assert_called_once()
+    assert ble._erase_pending is False
+    assert ble._last_erase_at == 102.5
