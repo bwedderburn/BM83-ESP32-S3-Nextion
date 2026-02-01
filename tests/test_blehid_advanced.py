@@ -98,7 +98,7 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     assert ble._last_erase_at == 103.5
 
 
-def test_blehid_tick_cancels_erase_after_timeout():
+def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
     ble = BleHid(True, "Mock")
     ble._ready = True
     ble._ble = MockBLE()
