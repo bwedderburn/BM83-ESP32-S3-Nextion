@@ -310,7 +310,7 @@ class BleHid:
         advertising = False
     # Try block to catch exceptions
         try:
-            advertising = bool(self._ble.advertising) if hasattr(self._ble, "advertising") else False
+            advertising = bool(getattr(self._ble, "advertising", False))
     # Handle exceptions
         except Exception:
             advertising = False
