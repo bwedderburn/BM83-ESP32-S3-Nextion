@@ -329,3 +329,61 @@ def test_erase_bonds_filesystem_transition():
         ble_module._write_ble_counter = original_write
         if os.path.exists(test_file.name):
             os.unlink(test_file.name)
+
+
+def test_erase_bonds_with_stop_adv_crash():
+    """Test that erase_bonds handles _stop_adv crash gracefully.
+
+    This tests the defensive handling added to protect against hard crashes
+    that can occur when the Nimble BLE stack is under memory pressure.
+    The crash at _stop_adv was causing the E-BIND button to crash the device
+    when BM83 was off (issue #37).
+    """
+    from unittest import mock
+
+    class CrashingStopAdvBLE:
+        connected = False
+        advertising = True  # Start as advertising
+        name = ""
+        connections = []
+        _stop_called = False
+        _start_called = False
+        _erase_called = False
+
+        def start_advertising(self, adv):
+            self._start_called = True
+            self.advertising = True
+
+        def stop_advertising(self):
+            self._stop_called = True
+            # Simulate Nimble stack crash during stop_advertising
+            raise OSError("Nimble out of memory")
+
+        def erase_bonding(self):
+            self._erase_called = True
+
+    blehid = BleHid(enabled=True, name="TestDevice")
+    blehid._ble = CrashingStopAdvBLE()
+    blehid._adv = object()
+    blehid._ready = True
+
+    # Should not crash even when _stop_adv crashes
+    with mock.patch("time.monotonic", return_value=100.0):
+        with mock.patch("time.sleep"):  # Skip delays in test
+            blehid.erase_bonds()
+
+    # Verify stop_advertising was called (even though it crashed)
+    assert blehid._ble._stop_called is True
+
+    # Verify that despite the crash in _stop_adv, the function continued:
+    # - erase_bonding() was called
+    assert blehid._ble._erase_called is True
+
+    # - start_advertising was attempted at the end
+    assert blehid._ble._start_called is True
+
+    # - BLE name was updated (since erase_bonding succeeded)
+    assert "01" in blehid.name  # Counter incremented from 0 to 1
+
+    # - Advertising was restarted successfully
+    assert blehid._ble.advertising is True

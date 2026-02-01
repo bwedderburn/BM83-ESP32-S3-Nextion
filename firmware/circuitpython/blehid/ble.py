@@ -4,6 +4,12 @@ from utils.common import dprint
 
 BLE_COUNTER_FILE = "/ble_counter.txt"
 
+# Delay in seconds to allow BLE stack to stabilize between heavy operations.
+# The Nimble BLE stack on ESP32-S3 can be unstable when operations are performed
+# in rapid succession, especially under memory pressure. This delay gives the
+# stack time to complete internal cleanup before proceeding to the next operation.
+BLE_STACK_STABILIZATION_DELAY = 0.05
+
 
 def _read_ble_counter():
     """Read the BLE counter from persistent storage."""
@@ -328,8 +334,17 @@ class BleHid:
             print("[BLE] erase_bonding: Not ready or BLE not initialized")
             return
 
-        # Stop advertising first to reduce memory pressure
-        self._stop_adv()
+        # Stop advertising first to reduce memory pressure.
+        # Wrap in try/except as a defensive measure against hard crashes in the BLE stack.
+        # Even though _stop_adv() has internal exception handling, the BLE stack can crash
+        # at a lower level when under memory pressure (e.g., "Nimble out of memory").
+        try:
+            self._stop_adv()
+        except Exception as e:
+            dprint("[BLE] stop_adv crash in erase_bonds:", e)
+
+        # Brief delay to allow BLE stack to stabilize after stopping advertising.
+        time.sleep(BLE_STACK_STABILIZATION_DELAY)
 
         # Aggressive GC before heavy operations
         # Two consecutive gc.collect() calls ensure thorough cleanup: the first pass may leave
@@ -355,6 +370,9 @@ class BleHid:
             dprint("[BLE] connections list err:", e)
 
 # endregion
+        # Brief delay after disconnections to allow BLE stack to settle
+        time.sleep(BLE_STACK_STABILIZATION_DELAY)
+
         # Another GC pass after disconnections
         gc.collect()
 
@@ -389,6 +407,10 @@ class BleHid:
     # Conditional check
         print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
 
+        # Brief delay after erase_bonding to allow BLE stack to stabilize
+        # before updating name and restarting advertising
+        time.sleep(BLE_STACK_STABILIZATION_DELAY)
+
         # Increment counter and update BLE name only if erase succeeded
         if ok:
             # Read counter from appropriate source and increment
@@ -418,6 +440,9 @@ class BleHid:
         self._adv_oom_count = 0
         self._need_pairing_check = False
         self._pair_attempts = 0
+
+        # Brief delay before restarting advertising to ensure BLE stack is fully settled
+        time.sleep(BLE_STACK_STABILIZATION_DELAY)
 
         # Restart advertising with crash protection.
         # The BLE stack can be unstable after erase_bonding, especially with Nimble memory
