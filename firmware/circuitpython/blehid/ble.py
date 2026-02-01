@@ -294,18 +294,15 @@ class BleHid:
             dprint("[BLE] name update err:", e)
 
 # endregion
-# Function: _is_ble_idle - Defines the behavior for `_is_ble_idle`.
     def _is_ble_idle(self, now):
 # region _is_ble_idle
     # _is_ble_idle returns True when BLE is idle enough for erase operations.
     # now is the current monotonic timestamp. #
-        if getattr(self._ble, "connected", False):
-            return False
-        if (now - self._last_conn_change_at) < self._erase_min_idle_s:
-            return False
-        if getattr(self._ble, "advertising", False):
-            return False
-        return True
+        return not (
+            getattr(self._ble, "connected", False)
+            or (now - self._last_conn_change_at) < self._erase_min_idle_s
+            or getattr(self._ble, "advertising", False)
+        )
 
 # endregion
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
