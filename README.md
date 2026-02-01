@@ -107,6 +107,8 @@ pip install mpy-cross
 
 **Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All other modules under `firmware/circuitpython/` are compiled to `.mpy` and placed in `lib/`.
 
+**Important**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. If you encounter `ValueError: incompatible .mpy file` errors, reinstall `mpy-cross` matching your CircuitPython version or use uncompiled `.py` files directly from `firmware/circuitpython/`.
+
 ## 🧪 Testing
 
 Unit tests live under `tests/` and can be run with `pytest` on compatible platforms.
@@ -145,7 +147,7 @@ Unit tests live under `tests/` and can be run with `pytest` on compatible platfo
      - Implement backoff strategy for BLE reconnection attempts
   
   3. **Debouncing and Button Handling**: Prevent rapid-fire button events
-     - Add debounce delay for E-BIND button (current: 0.10s, increase to 0.25-0.5s)
+     - Increase debounce delay for E-BIND button to reduce event frequency
      - Disable E-BIND during active BLE pairing attempts
      - Add state machine to prevent overlapping BLE operations
   
