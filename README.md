@@ -72,12 +72,16 @@ pip install mpy-cross
 # ├── settings.toml     (config file, if present)
 # └── lib/              (compiled modules)
 #     ├── bm83/
+#     │   ├── __init__.mpy
 #     │   └── bm83.mpy
 #     ├── nextion/
+#     │   ├── __init__.mpy
 #     │   └── display.mpy
 #     ├── blehid/
+#     │   ├── __init__.mpy
 #     │   └── ble.mpy
 #     └── utils/
+#         ├── __init__.mpy
 #         └── common.mpy
 ```
 
