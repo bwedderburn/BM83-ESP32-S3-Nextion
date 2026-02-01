@@ -295,6 +295,23 @@ class BleHid:
 
 # endregion
     # Loop through items
+# Function: _is_ble_idle - Defines the behavior for `_is_ble_idle`.
+    def _is_ble_idle(self, now):
+# region _is_ble_idle
+    # _is_ble_idle handles BLE idle detection for erase operations. #
+    # Conditional check
+        if getattr(self._ble, "connected", False):
+            return False
+    # Conditional check
+        if (now - self._last_conn_change_at) < self._erase_min_idle_s:
+            return False
+    # Conditional check
+        if getattr(self._ble, "advertising", False):
+            return False
+        return True
+
+# endregion
+    # Loop through items
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
     def erase_bonds(self):
 # region erase_bonds
@@ -429,13 +446,7 @@ class BleHid:
         now = time.monotonic()
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
-            # Avoid erasing bonds while BLE is actively connected or recently changed state.
-            if getattr(self._ble, "connected", False) or (now - self._last_conn_change_at) < self._erase_min_idle_s:
-                self._erase_requested_at = now
-            elif getattr(self._ble, "advertising", False):
-                # Skip erase while advertising to reduce NimBLE memory pressure.
-                self._erase_requested_at = now
-            else:
+            if self._is_ble_idle(now):
                 self._erase_pending = False
                 self._last_erase_at = now
                 # Run erase inside try to avoid propagating BLE stack crashes
@@ -443,6 +454,8 @@ class BleHid:
                     self.erase_bonds()
                 except Exception as e:
                     dprint("[BLE] erase_bonds crash:", e)
+            else:
+                self._erase_requested_at = now
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
