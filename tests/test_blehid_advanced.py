@@ -41,7 +41,6 @@ def test_blehid_request_erase_bonds_reentry_and_cooldown():
     ble._adv = object()
     now = 100.0
     ble._last_conn_change_at = now - 10.0
-    ble._erase_pending_since = now
 
     with mock.patch("time.monotonic", return_value=now):
         assert ble.request_erase_bonds() is True
@@ -80,7 +79,7 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
         ble.tick()
     assert ble._erase_pending is True
     assert ble._last_erase_at == 0.0
-    assert ble._erase_requested_at == 101.0
+    assert ble._erase_requested_at == 100.0
 
     ble._ble.advertising = True
     with mock.patch("time.monotonic", return_value=102.5):

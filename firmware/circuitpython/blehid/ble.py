@@ -74,7 +74,7 @@ class BleHid:
         self._erase_debounce_s = 0.15
         self._erase_min_idle_s = 1.0
         self._erase_max_wait_s = 8.0
-        self._last_conn_change_at = time.monotonic()
+        self._last_conn_change_at = time.monotonic() - self._erase_min_idle_s
 
 # endregion
         # Counter state for BLE name cycling on erase_bonds:
@@ -467,8 +467,6 @@ class BleHid:
                         ",".join(reasons) if reasons else "unknown"
                     )
                     self._erase_pending = False
-                else:
-                    self._erase_requested_at = now
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
