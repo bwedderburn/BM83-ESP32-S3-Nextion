@@ -81,6 +81,9 @@ class BleHid:
         self._erase_min_idle_s = 1.0
         self._erase_max_wait_s = 8.0
         self._last_conn_change_at = time.monotonic() - self._erase_min_idle_s
+        self._erase_adv_stopped = False
+        self._last_adv_stop_at = 0.0
+        self._erase_adv_settle_s = 0.2
 
 # endregion
         # Counter state for BLE name cycling on erase_bonds:
@@ -144,6 +147,7 @@ class BleHid:
     # Conditional check
             if getattr(self._ble, "advertising", False):
                 self._ble.stop_advertising()
+                self._last_adv_stop_at = time.monotonic()
     # Handle exceptions
         except Exception as e:
             dprint("[BLE] stop adv err:", e)
@@ -333,18 +337,22 @@ class BleHid:
         if not self._ready or not self._ble:
             print("[BLE] erase_bonding: Not ready or BLE not initialized")
             return
-
-        # Stop advertising first to reduce memory pressure.
+        # Stop advertising first to reduce memory pressure when needed.
         # Wrap in try/except as a defensive measure against hard crashes in the BLE stack.
         # Even though _stop_adv() has internal exception handling, the BLE stack can crash
         # at a lower level when under memory pressure (e.g., "Nimble out of memory").
-        try:
-            self._stop_adv()
-        except Exception as e:
-            dprint("[BLE] stop_adv crash in erase_bonds:", e)
+        if not self._erase_adv_stopped:
+            try:
+                self._stop_adv()
+            except Exception as e:
+                dprint("[BLE] stop_adv crash in erase_bonds:", e)
 
-        # Brief delay to allow BLE stack to stabilize after stopping advertising.
-        time.sleep(BLE_STACK_STABILIZATION_DELAY)
+            # Brief delay to allow BLE stack to stabilize after stopping advertising.
+            time.sleep(BLE_STACK_STABILIZATION_DELAY)
+        else:
+            since_stop = time.monotonic() - self._last_adv_stop_at
+            if since_stop < BLE_STACK_STABILIZATION_DELAY:
+                time.sleep(BLE_STACK_STABILIZATION_DELAY - since_stop)
 
         # Aggressive GC before heavy operations
         # Two consecutive gc.collect() calls ensure thorough cleanup: the first pass may leave
@@ -440,6 +448,7 @@ class BleHid:
         self._adv_oom_count = 0
         self._need_pairing_check = False
         self._pair_attempts = 0
+        self._erase_adv_stopped = False
 
         # Brief delay before restarting advertising to ensure BLE stack is fully settled
         time.sleep(BLE_STACK_STABILIZATION_DELAY)
@@ -487,8 +496,14 @@ class BleHid:
     # Conditional check
         if self._erase_pending and advertising:
             self._stop_adv()
+            self._erase_adv_stopped = True
+            self._last_adv_stop_at = now
+            self._erase_requested_at = now
+            return
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
+            if (now - self._last_adv_stop_at) < self._erase_adv_settle_s:
+                return
             if self._is_ble_idle(now):
                 self._erase_pending = False
                 self._last_erase_at = now
@@ -512,6 +527,7 @@ class BleHid:
                     )
                     self._last_erase_at = now
                     self._erase_pending = False
+                    self._erase_adv_stopped = False
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
