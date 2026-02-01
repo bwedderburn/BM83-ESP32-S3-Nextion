@@ -466,6 +466,7 @@ class BleHid:
                         "[BLE] erase_bonds deferred too long, cancelling:",
                         ",".join(reasons)
                     )
+                    self._last_erase_at = now
                     self._erase_pending = False
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check

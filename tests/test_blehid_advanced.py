@@ -96,3 +96,26 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     erase_mock.assert_called_once()
     assert ble._erase_pending is False
     assert ble._last_erase_at == 103.5
+
+
+def test_blehid_tick_cancels_erase_after_timeout():
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._ble.connected = False
+    ble._was_connected = False
+    ble._erase_pending = True
+    ble._erase_requested_at = 100.0
+    ble._erase_pending_since = 100.0
+    ble._erase_debounce_s = 0.1
+    ble._erase_max_wait_s = 2.0
+    ble._last_conn_change_at = 100.0
+    ble._ble.advertising = True
+
+    with mock.patch.object(ble, "erase_bonds") as erase_mock:
+        with mock.patch("time.monotonic", return_value=103.0):
+            ble.tick()
+    erase_mock.assert_not_called()
+    assert ble._erase_pending is False
+    assert ble._last_erase_at == 103.0
