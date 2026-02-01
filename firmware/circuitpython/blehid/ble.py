@@ -304,11 +304,10 @@ class BleHid:
         Args:
             now: Current monotonic timestamp used for idle timing.
         """
-        return not (
-            getattr(self._ble, "connected", False)
-            or (now - self._last_conn_change_at) < self._erase_min_idle_s
-            or getattr(self._ble, "advertising", False)
-        )
+        connected = bool(getattr(self._ble, "connected", False))
+        advertising = bool(getattr(self._ble, "advertising", False))
+        idle_wait_sufficient = (now - self._last_conn_change_at) >= self._erase_min_idle_s
+        return (not connected) and idle_wait_sufficient and (not advertising)
 
 # endregion
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
@@ -456,7 +455,17 @@ class BleHid:
                     dprint("[BLE] erase_bonds crash:", e)
             else:
                 if (now - self._erase_pending_since) >= self._erase_max_wait_s:
-                    dprint("[BLE] erase_bonds deferred too long, cancelling")
+                    reasons = []
+                    if getattr(self._ble, "connected", False):
+                        reasons.append("connected")
+                    if getattr(self._ble, "advertising", False):
+                        reasons.append("advertising")
+                    if (now - self._last_conn_change_at) < self._erase_min_idle_s:
+                        reasons.append("recent-conn")
+                    dprint(
+                        "[BLE] erase_bonds deferred too long, cancelling:",
+                        ",".join(reasons) if reasons else "unknown"
+                    )
                     self._erase_pending = False
                 else:
                     self._erase_requested_at = now

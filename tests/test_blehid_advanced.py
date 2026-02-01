@@ -73,7 +73,7 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     ble._erase_debounce_s = 0.1
     ble._erase_min_idle_s = 1.0
     # Last connection change is within the idle window to force deferral on the first tick.
-    ble._last_conn_change_at = 100.6
+    ble._last_conn_change_at = 101.0 - (ble._erase_min_idle_s * 0.4)
     ble._adv_inhibit_until = 200.0
 
     with mock.patch("time.monotonic", return_value=101.0):
