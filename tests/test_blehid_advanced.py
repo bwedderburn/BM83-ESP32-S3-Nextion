@@ -144,10 +144,10 @@ def test_blehid_tick_two_phase_erase_with_settle_window():
     assert ble._last_adv_stop_at == 100.15
     assert ble._erase_requested_at == 100.15
 
-    # Phase 2a: Try too soon (before settle window) - should defer
+    # Phase 2a: Try within settle window (before it expires) - should defer
     ble._ble.advertising = False
     with mock.patch.object(ble, "erase_bonds") as erase_mock:
-        with mock.patch("time.monotonic", return_value=100.25):  # Only 0.1s after stop
+        with mock.patch("time.monotonic", return_value=100.25):  # Only 0.1s after stop, settle is 0.2s
             ble.tick()
     erase_mock.assert_not_called()
     assert ble._erase_pending is True

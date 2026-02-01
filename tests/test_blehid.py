@@ -420,7 +420,7 @@ def test_erase_bonds_with_adv_already_stopped():
     blehid._ble.advertising = False
     blehid._erase_adv_stopped = True
 
-    # Test case 1: Last stop was very recent (< stabilization delay)
+    # Test case 1: Last stop was 0.01s ago (within stabilization delay window)
     # Should sleep for remaining time before proceeding
     blehid._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY - 0.01)  # 0.01s ago
 
