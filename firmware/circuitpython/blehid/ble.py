@@ -419,8 +419,15 @@ class BleHid:
         self._need_pairing_check = False
         self._pair_attempts = 0
 
-        # Restart advertising
-        self._start_adv(force=True)
+        # Restart advertising with crash protection.
+        # The BLE stack can be unstable after erase_bonding, especially with Nimble memory
+        # issues. Wrap in try/except to prevent hard crashes and defer advertising to tick().
+        try:
+            self._start_adv(force=True)
+        except Exception as e:
+            dprint("[BLE] adv restart after erase failed:", e)
+            # Set inhibit to allow stack to recover; tick() will retry later
+            self._adv_inhibit_until = time.monotonic() + 4.0
 
 # endregion
     # Loop through items

@@ -169,6 +169,76 @@ def test_erase_bonds_with_failing_erase_bonding():
     assert blehid._ble.name == ""  # Name not updated
 
 
+def test_erase_bonds_with_advertising_failure():
+    """Test that erase_bonds handles advertising restart failures gracefully."""
+    from unittest import mock
+
+    class FailingAdvBLE:
+        connected = False
+        advertising = False
+        name = ""
+        connections = []
+        _adv_call_count = 0
+
+        def start_advertising(self, adv):
+            self._adv_call_count += 1
+            raise RuntimeError("Nimble out of memory")
+
+        def stop_advertising(self):
+            self.advertising = False
+
+        def erase_bonding(self):
+            pass
+
+    blehid = BleHid(enabled=True, name="TestDevice")
+    blehid._ble = FailingAdvBLE()
+    blehid._adv = object()
+    blehid._ready = True
+
+    # Should not crash even when advertising restart fails after erase
+    with mock.patch("time.monotonic", return_value=100.0):
+        blehid.erase_bonds()
+
+    # Advertising failed, so it should remain False
+    assert blehid._ble.advertising is False
+    # Inhibit should be set to allow stack to recover
+    assert blehid._adv_inhibit_until > 100.0
+
+
+def test_erase_bonds_with_oserror_advertising_failure():
+    """Test that erase_bonds handles OSError (BLE stack issue) gracefully."""
+    from unittest import mock
+
+    class OSErrorAdvBLE:
+        connected = False
+        advertising = False
+        name = ""
+        connections = []
+
+        def start_advertising(self, adv):
+            raise OSError("BLE stack failure")
+
+        def stop_advertising(self):
+            self.advertising = False
+
+        def erase_bonding(self):
+            pass
+
+    blehid = BleHid(enabled=True, name="TestDevice")
+    blehid._ble = OSErrorAdvBLE()
+    blehid._adv = object()
+    blehid._ready = True
+
+    # Should not crash even when OSError occurs during advertising
+    with mock.patch("time.monotonic", return_value=100.0):
+        blehid.erase_bonds()
+
+    # Advertising failed, so it should remain False
+    assert blehid._ble.advertising is False
+    # Inhibit should be set to allow stack to recover
+    assert blehid._adv_inhibit_until > 100.0
+
+
 def test_erase_bonds_with_readonly_filesystem():
     """Test that erase_bonds works even when filesystem is read-only."""
     import sys
