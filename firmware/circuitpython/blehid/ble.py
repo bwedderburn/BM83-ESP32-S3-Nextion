@@ -68,9 +68,13 @@ class BleHid:
 # endregion
         self._erase_pending = False
         self._erase_requested_at = 0.0
+        self._erase_pending_since = 0.0
         self._last_erase_at = 0.0
         self._erase_cooldown_s = 3.0
         self._erase_debounce_s = 0.15
+        self._erase_min_idle_s = 1.0
+        self._erase_max_wait_s = 8.0
+        self._last_conn_change_at = time.monotonic() - self._erase_min_idle_s
 
 # endregion
         # Counter state for BLE name cycling on erase_bonds:
@@ -196,6 +200,7 @@ class BleHid:
 # region _on_connect
     # _on_connect handles  on connect logic. #
         print("[BLE] Connected")
+        self._last_conn_change_at = time.monotonic()
     # Try block to catch exceptions
         try:
             from adafruit_hid.consumer_control import ConsumerControl
@@ -214,6 +219,7 @@ class BleHid:
 # region _on_disconnect
     # _on_disconnect handles  on disconnect logic. #
         print("[BLE] Disconnected")
+        self._last_conn_change_at = time.monotonic()
         self._need_pairing_check = False
         self._pair_attempts = 0
         self._start_adv(force=True)
@@ -290,7 +296,20 @@ class BleHid:
             dprint("[BLE] name update err:", e)
 
 # endregion
-    # Loop through items
+# Function: _is_ble_idle - Defines the behavior for `_is_ble_idle`.
+    def _is_ble_idle(self, now):
+# region _is_ble_idle
+        """Return True when BLE is idle enough for erase operations.
+
+        Args:
+            now: Current monotonic timestamp used for idle timing.
+        """
+        connected = bool(getattr(self._ble, "connected", False))
+        advertising = bool(getattr(self._ble, "advertising", False))
+        idle_time_elapsed = (now - self._last_conn_change_at) >= self._erase_min_idle_s
+        return (not connected) and idle_time_elapsed and (not advertising)
+
+# endregion
 # Function: erase_bonds - Defines the behavior for `erase_bonds`.
     def erase_bonds(self):
 # region erase_bonds
@@ -411,6 +430,7 @@ class BleHid:
             return False
         self._erase_pending = True
         self._erase_requested_at = now
+        self._erase_pending_since = now
         return True
 
 # endregion
@@ -425,13 +445,29 @@ class BleHid:
         now = time.monotonic()
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
-            self._erase_pending = False
-            self._last_erase_at = now
-            # Run erase inside try to avoid propagating BLE stack crashes
-            try:
-                self.erase_bonds()
-            except Exception as e:
-                dprint("[BLE] erase_bonds crash:", e)
+            if self._is_ble_idle(now):
+                self._erase_pending = False
+                self._last_erase_at = now
+                # Run erase inside try to avoid propagating BLE stack crashes
+                try:
+                    self.erase_bonds()
+                except Exception as e:
+                    dprint("[BLE] erase_bonds crash:", e)
+            else:
+                if (now - self._erase_pending_since) >= self._erase_max_wait_s:
+                    reasons = []
+                    if getattr(self._ble, "connected", False):
+                        reasons.append("connected")
+                    if getattr(self._ble, "advertising", False):
+                        reasons.append("advertising")
+                    if (now - self._last_conn_change_at) < self._erase_min_idle_s:
+                        reasons.append("recent-conn")
+                    dprint(
+                        "[BLE] erase_bonds deferred too long, cancelling:",
+                        ",".join(reasons)
+                    )
+                    self._last_erase_at = now
+                    self._erase_pending = False
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
