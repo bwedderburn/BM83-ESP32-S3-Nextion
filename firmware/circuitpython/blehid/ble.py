@@ -500,6 +500,9 @@ class BleHid:
                 return
             self._stop_adv()
             self._erase_adv_stopped = True
+            self._last_adv_stop_at = now
+            self._erase_requested_at = now
+            return
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
             if self._is_ble_idle(now):
