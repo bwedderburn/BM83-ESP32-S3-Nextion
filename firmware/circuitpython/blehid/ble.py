@@ -495,15 +495,13 @@ class BleHid:
         advertising = self._is_advertising()
     # Conditional check
         if self._erase_pending and advertising:
+            # Check settle window before stopping advertising (only if we already stopped it for this erase)
+            if self._erase_adv_stopped and (now - self._last_adv_stop_at) < self._erase_adv_settle_s:
+                return
             self._stop_adv()
             self._erase_adv_stopped = True
-            self._last_adv_stop_at = now
-            self._erase_requested_at = now
-            return
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
-            if (now - self._last_adv_stop_at) < self._erase_adv_settle_s:
-                return
             if self._is_ble_idle(now):
                 self._erase_pending = False
                 self._last_erase_at = now
