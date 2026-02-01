@@ -1,17 +1,22 @@
 from unittest import mock
+
 from blehid.ble import BleHid, BLE_STACK_STABILIZATION_DELAY
 
 
 class MockConnection:
     def __init__(self):
         self._paired = False
+
     @property
     def paired(self):
         return self._paired
+
     def pair(self):
         self._paired = True
+
     def disconnect(self):
         pass
+
 
 class MockBLE:
     def __init__(self):
@@ -19,8 +24,13 @@ class MockBLE:
         self.advertising = False
         self.name = ""
         self.connections = [MockConnection()]
-    def start_advertising(self, adv): self.advertising = True
-    def stop_advertising(self): self.advertising = False
+
+    def start_advertising(self, adv):
+        self.advertising = True
+
+    def stop_advertising(self):
+        self.advertising = False
+
 
 def test_blehid_pairing_logic():
     ble = BleHid(True, "Mock")
@@ -61,8 +71,9 @@ def test_blehid_request_erase_bonds_reentry_and_cooldown():
 
 def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     """Test that tick() defers erase until both not advertising and BLE is idle.
-    This test now accounts for the two-phase erase flow where advertising must
-    be stopped first, then after a settle delay, erase_bonds is called.
+    Accounts for two-phase erase:
+      1) stop advertising, then
+      2) after settle delay and idle window, call erase_bonds()
     """
     ble = BleHid(True, "Mock")
     ble._ready = True
@@ -76,40 +87,45 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     ble._erase_debounce_s = 0.1
     ble._erase_min_idle_s = 1.0
     ble._erase_adv_settle_s = 0.2
-    # Use a partial idle window to stay under the threshold while still close to it.
-    idle_margin_ratio = 0.4
-    # Last connection change is within the idle window to force deferral on the first tick.
-    ble._last_conn_change_at = 101.0 - (ble._erase_min_idle_s * idle_margin_ratio)
     ble._adv_inhibit_until = 200.0
 
-    with mock.patch("time.monotonic", return_value=101.0):
-        ble.tick()
+    # Make "idle" NOT satisfied at first: last change is recent.
+    ble._last_conn_change_at = 100.9
+
+    # Start advertising so phase-1 behavior triggers.
+    ble._ble.advertising = True
+
+    # Phase 1: advertising=True -> stop advertising and return
+    with mock.patch.object(ble, "_stop_adv", wraps=ble._stop_adv) as stop_adv_mock:
+        with mock.patch("time.monotonic", return_value=100.2):
+            ble.tick()
+    stop_adv_mock.assert_called_once()
+    assert ble._erase_adv_stopped is True
+    assert ble._last_adv_stop_at == 100.2
+    assert ble._erase_requested_at == 100.2
     assert ble._erase_pending is True
     assert ble._last_erase_at == 0.0
-    assert ble._erase_requested_at == 100.0
+    assert ble._ble.advertising is False
 
-    # Now set advertising=True and advance time past idle window
-    ble._ble.advertising = True
-    ble._last_conn_change_at = 100.0  # Ensure idle condition is met
+    # Phase 2 attempt: after settle but still NOT idle -> should defer
     with mock.patch.object(ble, "erase_bonds") as erase_mock:
-        # First tick with advertising=True: will stop advertising and return
-        with mock.patch("time.monotonic", return_value=102.5):
+        with mock.patch("time.monotonic", return_value=100.6):  # settle passed (0.4s)
             ble.tick()
-        # Advertising should be stopped but erase_bonds not called yet
-        assert ble._ble.advertising is False
-        erase_mock.assert_not_called()
-        assert ble._erase_pending is True
-        assert ble._erase_adv_stopped is True
+    erase_mock.assert_not_called()
+    assert ble._erase_pending is True
 
-        # Second tick after settle delay: will call erase_bonds
-        with mock.patch("time.monotonic", return_value=102.8):
+    # Now satisfy idle window and try again -> should execute
+    ble._last_conn_change_at = 99.0  # plenty idle
+    with mock.patch.object(ble, "erase_bonds") as erase_mock:
+        with mock.patch("time.monotonic", return_value=101.5):
             ble.tick()
-        erase_mock.assert_called_once()
-        assert ble._erase_pending is False
-        assert ble._last_erase_at == 102.8
+    erase_mock.assert_called_once()
+    assert ble._erase_pending is False
+    assert ble._last_erase_at == 101.5
 
 
 def test_blehid_tick_stops_advertising_while_erase_pending():
+    """Test that tick stops advertising immediately when erase is pending and advertising is active."""
     ble = BleHid(True, "Mock")
     ble._ready = True
     ble._ble = MockBLE()
@@ -125,13 +141,12 @@ def test_blehid_tick_stops_advertising_while_erase_pending():
         with mock.patch("time.monotonic", return_value=100.05):
             ble.tick()
     stop_adv.assert_called_once()
+    assert ble._erase_adv_stopped is True
+    assert ble._last_adv_stop_at == 100.05
 
 
-def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
-    """Test that tick() cancels erase after timeout and enforces cooldown.
-    This test now accounts for the two-phase erase flow where advertising
-    must be stopped first before the timeout logic can be evaluated.
-    """
+def test_blehid_tick_two_phase_erase_with_settle_window():
+    """Test that tick enforces the settle window between stopping advertising and calling erase_bonds."""
     ble = BleHid(True, "Mock")
     ble._ready = True
     ble._ble = MockBLE()
@@ -142,14 +157,59 @@ def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
     ble._erase_requested_at = 100.0
     ble._erase_pending_since = 100.0
     ble._erase_debounce_s = 0.1
+    ble._erase_adv_settle_s = 0.2
+    ble._erase_min_idle_s = 0.5
+    ble._last_conn_change_at = 99.0
+    ble._ble.advertising = True
+
+    # Phase 1: Stop advertising
+    with mock.patch("time.monotonic", return_value=100.15):
+        ble.tick()
+    assert ble._erase_adv_stopped is True
+    assert ble._last_adv_stop_at == 100.15
+    assert ble._erase_requested_at == 100.15
+
+    # Phase 2a: Try within settle window (before it expires) - should defer
+    ble._ble.advertising = False
+    with mock.patch.object(ble, "erase_bonds") as erase_mock:
+        with mock.patch("time.monotonic", return_value=100.25):  # Only 0.1s after stop, settle is 0.2s
+            ble.tick()
+    erase_mock.assert_not_called()
+    assert ble._erase_pending is True
+
+    # Phase 2b: Try after settle window - should execute
+    with mock.patch.object(ble, "erase_bonds") as erase_mock:
+        with mock.patch("time.monotonic", return_value=100.45):  # 0.3s after stop, past settle
+            ble.tick()
+    erase_mock.assert_called_once()
+    assert ble._erase_pending is False
+    assert ble._last_erase_at == 100.45
+
+
+def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
+    """Test that tick() cancels erase after timeout and cooldown is enforced.
+    Accounts for two-phase erase: advertising must be stopped first.
+    """
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._ble.connected = False
+    ble._was_connected = False
+
+    ble._erase_pending = True
+    ble._erase_requested_at = 100.0
+    ble._erase_pending_since = 100.0
+    ble._erase_debounce_s = 0.1
     ble._erase_max_wait_s = 2.0
     ble._erase_adv_settle_s = 0.2
-    # Set recent connection change so idle window has not elapsed when erase times out.
+
+    # Recent connection change => not idle when timeout hits.
     ble._last_conn_change_at = 101.8
     ble._ble.advertising = True
 
     with mock.patch.object(ble, "erase_bonds") as erase_mock:
-        # First tick: stops advertising and returns
+        # First tick: stops advertising and returns (phase 1)
         with mock.patch("time.monotonic", return_value=100.2):
             ble.tick()
         assert ble._erase_pending is True
@@ -157,24 +217,25 @@ def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
         assert ble._erase_adv_stopped is True
         erase_mock.assert_not_called()
 
-        # Second tick: after settle delay but before timeout, still not idle
+        # Second tick: after settle delay but before timeout; still not idle, so defer
         with mock.patch("time.monotonic", return_value=101.0):
             ble.tick()
         assert ble._erase_pending is True
         erase_mock.assert_not_called()
 
-        # Third tick: timeout has been reached (2.0s from pending_since)
+        # Third tick: timeout reached (>= 2.0s from pending_since) -> cancel
         with mock.patch("time.monotonic", return_value=102.0):
             ble.tick()
-        # Should cancel the erase due to timeout
         assert ble._erase_pending is False
         assert ble._last_erase_at == 102.0
-        assert ble._erase_adv_stopped is False  # Reset on cancellation
+        assert ble._erase_adv_stopped is False  # should reset on cancellation
         erase_mock.assert_not_called()
 
-        # Test cooldown enforcement
+        # Cooldown enforcement
         with mock.patch("time.monotonic", return_value=103.0):
             assert ble.request_erase_bonds() is False
+
+        # After cooldown, should be allowed again
         with mock.patch("time.monotonic", return_value=106.0):
             assert ble.request_erase_bonds() is True
 
@@ -183,6 +244,7 @@ def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
         ble._last_conn_change_at = 100.0
         with mock.patch("time.monotonic", return_value=106.2):
             ble.tick()
+
     assert erase_mock.call_count == 1
 
 
@@ -261,7 +323,6 @@ def test_blehid_erase_bonds_with_advertising_already_stopped():
         since_stop = 100.02 - 100.0  # 0.02
         expected_sleep = BLE_STACK_STABILIZATION_DELAY - since_stop
 
-        # The first sleep call should be for the settle delay
         # Note: there are multiple sleep calls in erase_bonds, so we check
         # that at least one sleep matches our expected settle delay
         sleep_calls = [call[0][0] for call in sleep_mock.call_args_list if call[0]]
@@ -276,7 +337,5 @@ def test_blehid_erase_bonds_with_advertising_already_stopped():
             # Call erase_bonds when 0.15s has elapsed (more than STABILIZATION_DELAY)
             ble.erase_bonds()
 
-        # When enough time has passed, the settle delay should not sleep
-        # Since 0.15 > 0.05 (STABILIZATION_DELAY), the settle logic should not add a sleep
-        # but other sleep calls will happen (after erase, before restart)
-        # We just verify no exception occurred and the function completed
+        # When enough time has passed, the settle delay should not sleep.
+        # Other sleeps may still occur (post-erase, restart), so we just ensure no exception.
