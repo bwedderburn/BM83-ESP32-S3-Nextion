@@ -1,5 +1,5 @@
 from unittest import mock
-from blehid.ble import BleHid
+from blehid.ble import BleHid, BLE_STACK_STABILIZATION_DELAY
 
 
 class MockConnection:
@@ -252,36 +252,21 @@ def test_blehid_erase_bonds_with_advertising_already_stopped():
     ble._last_adv_stop_at = 100.0  # Recent stop time
     ble._erase_adv_settle_s = 0.2
 
-    # Track _stop_adv calls to distinguish initial stop from final restart stop
-    stop_adv_calls = []
-    original_stop_adv = ble._stop_adv
+    with mock.patch("time.sleep") as sleep_mock:
+        with mock.patch("time.monotonic", return_value=100.02):
+            # Call erase_bonds when only 0.02s has elapsed since stop
+            ble.erase_bonds()
 
-    def tracked_stop_adv():
-        stop_adv_calls.append(mock.MagicMock())
-        return original_stop_adv()
+        # Should sleep for remaining time to reach stabilization delay
+        since_stop = 100.02 - 100.0  # 0.02
+        expected_sleep = BLE_STACK_STABILIZATION_DELAY - since_stop  # 0.03
 
-    with mock.patch.object(ble, "_stop_adv", side_effect=tracked_stop_adv):
-        with mock.patch("time.sleep") as sleep_mock:
-            with mock.patch("time.monotonic", return_value=100.02):
-                # Call erase_bonds when only 0.02s has elapsed since stop
-                ble.erase_bonds()
-
-            # _stop_adv should be called only ONCE: by _start_adv(force=True) at the end
-            # NOT at the beginning because _erase_adv_stopped=True
-            # We can't easily distinguish which call is which without more intrusive mocking,
-            # but we can verify the sleep behavior which is the key part of the feature
-
-            # Should sleep for remaining time to reach stabilization delay
-            from blehid.ble import BLE_STACK_STABILIZATION_DELAY
-            since_stop = 100.02 - 100.0  # 0.02
-            expected_sleep = BLE_STACK_STABILIZATION_DELAY - since_stop  # 0.03
-
-            # The first sleep call should be for the settle delay
-            # Note: there are multiple sleep calls in erase_bonds, so we check
-            # that at least one sleep matches our expected settle delay
-            sleep_calls = [call[0][0] for call in sleep_mock.call_args_list if call[0]]
-            assert any(abs(s - expected_sleep) < 0.001 for s in sleep_calls), \
-                f"Expected sleep of {expected_sleep}s not found in {sleep_calls}"
+        # The first sleep call should be for the settle delay
+        # Note: there are multiple sleep calls in erase_bonds, so we check
+        # that at least one sleep matches our expected settle delay
+        sleep_calls = [call[0][0] for call in sleep_mock.call_args_list if call[0]]
+        assert any(abs(s - expected_sleep) < 0.001 for s in sleep_calls), \
+            f"Expected sleep of {expected_sleep}s not found in {sleep_calls}"
 
     # Reset for test where enough time has already passed
     ble._erase_adv_stopped = True
@@ -292,10 +277,6 @@ def test_blehid_erase_bonds_with_advertising_already_stopped():
             ble.erase_bonds()
 
         # When enough time has passed, the settle delay should not sleep
-        # (or sleep for 0 or a small amount)
-        # Check that no sleep call is for the full stabilization delay from the settle logic
-        from blehid.ble import BLE_STACK_STABILIZATION_DELAY
-        since_stop = 100.15 - 100.0  # 0.15
         # Since 0.15 > 0.05 (STABILIZATION_DELAY), the settle logic should not add a sleep
         # but other sleep calls will happen (after erase, before restart)
         # We just verify no exception occurred and the function completed
