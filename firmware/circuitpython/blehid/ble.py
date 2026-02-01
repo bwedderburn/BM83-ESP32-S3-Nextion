@@ -71,6 +71,8 @@ class BleHid:
         self._last_erase_at = 0.0
         self._erase_cooldown_s = 3.0
         self._erase_debounce_s = 0.15
+        self._erase_min_idle_s = 1.0
+        self._last_conn_change_at = 0.0
 
 # endregion
         # Counter state for BLE name cycling on erase_bonds:
@@ -196,6 +198,7 @@ class BleHid:
 # region _on_connect
     # _on_connect handles  on connect logic. #
         print("[BLE] Connected")
+        self._last_conn_change_at = time.monotonic()
     # Try block to catch exceptions
         try:
             from adafruit_hid.consumer_control import ConsumerControl
@@ -214,6 +217,7 @@ class BleHid:
 # region _on_disconnect
     # _on_disconnect handles  on disconnect logic. #
         print("[BLE] Disconnected")
+        self._last_conn_change_at = time.monotonic()
         self._need_pairing_check = False
         self._pair_attempts = 0
         self._start_adv(force=True)
@@ -425,13 +429,21 @@ class BleHid:
         now = time.monotonic()
     # Conditional check
         if self._erase_pending and (now - self._erase_requested_at) >= self._erase_debounce_s:
-            self._erase_pending = False
-            self._last_erase_at = now
-            # Run erase inside try to avoid propagating BLE stack crashes
-            try:
-                self.erase_bonds()
-            except Exception as e:
-                dprint("[BLE] erase_bonds crash:", e)
+            # Avoid erasing bonds while BLE is actively connected or recently changed state.
+            if getattr(self._ble, "connected", False) or (now - self._last_conn_change_at) < self._erase_min_idle_s:
+                self._erase_requested_at = now
+            # Conditional check
+            elif getattr(self._ble, "advertising", False):
+                # Skip erase while advertising to reduce NimBLE memory pressure.
+                self._erase_requested_at = now
+            else:
+                self._erase_pending = False
+                self._last_erase_at = now
+                # Run erase inside try to avoid propagating BLE stack crashes
+                try:
+                    self.erase_bonds()
+                except Exception as e:
+                    dprint("[BLE] erase_bonds crash:", e)
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:

@@ -40,6 +40,7 @@ def test_blehid_request_erase_bonds_reentry_and_cooldown():
     ble._ble = MockBLE()
     ble._adv = object()
     now = 100.0
+    ble._last_conn_change_at = now - 10.0
 
     with mock.patch("time.monotonic", return_value=now):
         assert ble.request_erase_bonds() is True
@@ -56,3 +57,21 @@ def test_blehid_request_erase_bonds_reentry_and_cooldown():
     # Advance past cooldown and not pending -> allowed again
     with mock.patch("time.monotonic", return_value=now + 4.0):
         assert ble.request_erase_bonds() is True
+
+
+def test_blehid_tick_defers_erase_until_idle():
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._erase_pending = True
+    ble._erase_requested_at = 100.0
+    ble._erase_debounce_s = 0.1
+    ble._erase_min_idle_s = 1.0
+    ble._last_conn_change_at = 100.5
+
+    with mock.patch("time.monotonic", return_value=101.0):
+        ble.tick()
+    assert ble._erase_pending is True
+    assert ble._last_erase_at == 0.0
+    assert ble._erase_requested_at == 101.0
