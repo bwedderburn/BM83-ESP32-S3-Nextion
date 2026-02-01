@@ -45,6 +45,68 @@ esp32_project/
 
 **For firmware updates or troubleshooting deployment issues, see [DEPLOYMENT.md](DEPLOYMENT.md)**
 
+### 📦 Building Optimized .mpy Files
+
+The repository includes a `build_mpy.sh` script to compile Python modules into bytecode (`.mpy` files) for improved performance and reduced memory usage on CircuitPython devices.
+
+#### Prerequisites
+
+You need `mpy-cross` installed:
+
+```bash
+# Install via pip
+pip install mpy-cross
+
+# Or download from CircuitPython releases
+# https://github.com/adafruit/circuitpython/releases
+```
+
+#### Building with bash (Linux/macOS/Git Bash)
+
+```bash
+# Run the build script
+./build_mpy.sh
+
+# Output will be in dist/circuitpython/
+# ├── main.py           (kept as .py - entry point must not be compiled)
+# ├── settings.toml     (config file, if present)
+# └── lib/              (compiled modules)
+#     ├── bm83/
+#     │   └── bm83.mpy
+#     ├── nextion/
+#     │   └── display.mpy
+#     ├── blehid/
+#     │   └── ble.mpy
+#     └── utils/
+#         └── common.mpy
+```
+
+#### Building with WSL (Windows Subsystem for Linux)
+
+```bash
+# Open WSL terminal (Ubuntu, Debian, etc.)
+cd /mnt/c/path/to/BM83-ESP32-S3-Nextion
+
+# Install mpy-cross if not already installed
+pip install mpy-cross
+
+# Run the build script
+./build_mpy.sh
+
+# The output in dist/circuitpython/ can be copied to your CIRCUITPY drive
+# from Windows Explorer at the WSL path shown after build completes
+```
+
+#### Deployment After Build
+
+1. Copy the entire contents of `dist/circuitpython/` to your `CIRCUITPY` drive
+2. Make sure to also install the required Adafruit libraries in `CIRCUITPY/lib/`:
+   - `adafruit_ble/`
+   - `adafruit_hid/`
+3. Reset the board
+
+**Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All other modules under `firmware/circuitpython/` are compiled to `.mpy` and placed in `lib/`.
+
 ## 🧪 Testing
 
 Unit tests live under `tests/` and can be run with `pytest` on compatible platforms.
@@ -61,7 +123,44 @@ Unit tests live under `tests/` and can be run with `pytest` on compatible platfo
 - If metadata stops updating, ensure AVRCP is supported by the source device.
 - If CircuitPython auto-reloads on file save, it's disabled in code.
 
-## Open investigations (keep issues open)
+## 🐛 Known Issues & Current Investigations
 
-- **#35 Hard crash after EQ/power interactions** – crash observed while cycling EQ presets and power events; awaiting on-device confirmation of any fix before closure.
-- **#37 E-BIND button crash with BLE pairing** – crash seen when pressing E-BIND with repeated AVRCP metadata requests and BLE pairing attempts; will remain open until validated on hardware.
+### Active Issues
+
+- **#37 E-BIND button crash with BLE pairing** – Hard crash observed when pressing E-BIND button during active BLE pairing attempts combined with repeated AVRCP metadata requests. The crash appears to be related to memory exhaustion ("Nimble out of memory") when BLE operations overlap with intensive BM83 UART traffic.
+  
+  **Symptoms**:
+  - Device freezes when BM83 is powered on while BLE HID is connected
+  - Hard crash when E-BIND button is pressed during metadata polling
+  - CircuitPython connection lost (Thonny shows "PROBLEM IN THONNY'S BACK-END: Exception while handling 'Run' (ConnectionError: EOF)")
+  
+  **Possible Implementations to Fix**:
+  1. **Rate Limiting for AVRCP Requests**: Add throttling to reduce metadata request frequency during BLE operations
+     - Implement minimum time between AVRCP requests (e.g., 500ms)
+     - Skip metadata requests if BLE operations are in progress
+  
+  2. **Memory Management for BLE Operations**: Improve memory allocation handling
+     - Add explicit `gc.collect()` calls before BLE operations (advertising, pairing)
+     - Reduce buffer sizes for UART operations during BLE activity
+     - Implement backoff strategy for BLE reconnection attempts
+  
+  3. **Debouncing and Button Handling**: Prevent rapid-fire button events
+     - Add debounce delay for E-BIND button (current: 0.10s, increase to 0.25-0.5s)
+     - Disable E-BIND during active BLE pairing attempts
+     - Add state machine to prevent overlapping BLE operations
+  
+  4. **Async Operation Coordination**: Better synchronization between BLE and UART
+     - Add semaphore/flag to indicate active BLE operation
+     - Queue BM83 commands when BLE is busy instead of sending immediately
+     - Implement timeout and recovery for stuck operations
+  
+  5. **Error Recovery**: Add fault tolerance for memory exhaustion
+     - Catch and handle BLE "out of memory" errors gracefully
+     - Implement soft reset mechanism instead of hard crash
+     - Add watchdog timer to detect and recover from freezes
+
+### Previously Resolved (Monitoring for Regression)
+
+- **#35 Hard crash after EQ/power interactions** – Crash observed while cycling EQ presets and power events. Issue was addressed but monitoring continues for regression. If the crash reappears during EQ cycling or power state transitions, it may be related to the same memory management issues as #37.
+  
+  **Status**: Closed, awaiting on-device validation of stability over extended use.
