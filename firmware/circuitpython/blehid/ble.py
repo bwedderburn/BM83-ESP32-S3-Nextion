@@ -72,7 +72,7 @@ class BleHid:
         self._erase_cooldown_s = 3.0
         self._erase_debounce_s = 0.15
         self._erase_min_idle_s = 1.0
-        self._last_conn_change_at = 0.0
+        self._last_conn_change_at = time.monotonic()
 
 # endregion
         # Counter state for BLE name cycling on erase_bonds:
@@ -298,7 +298,8 @@ class BleHid:
 # Function: _is_ble_idle - Defines the behavior for `_is_ble_idle`.
     def _is_ble_idle(self, now):
 # region _is_ble_idle
-    # _is_ble_idle handles BLE idle detection for erase operations. #
+    # _is_ble_idle returns True when BLE is idle enough for erase operations.
+    # now is the current monotonic timestamp. #
     # Conditional check
         if getattr(self._ble, "connected", False):
             return False
