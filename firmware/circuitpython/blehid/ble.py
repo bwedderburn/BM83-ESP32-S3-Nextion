@@ -467,6 +467,7 @@ class BleHid:
                         ",".join(reasons)
                     )
                     self._erase_pending = False
+                    self._erase_requested_at = now
         connected = bool(getattr(self._ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
