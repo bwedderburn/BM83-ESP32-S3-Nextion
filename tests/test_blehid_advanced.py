@@ -84,18 +84,30 @@ def test_blehid_tick_defers_erase_until_not_advertising_and_idle():
     assert ble._erase_requested_at == 100.0
 
     ble._ble.advertising = True
-    with mock.patch("time.monotonic", return_value=102.5):
-        ble.tick()
-    assert ble._erase_pending is True
-    assert ble._last_erase_at == 0.0
-
-    ble._ble.advertising = False
     with mock.patch.object(ble, "erase_bonds") as erase_mock:
-        with mock.patch("time.monotonic", return_value=103.5):
+        with mock.patch("time.monotonic", return_value=102.5):
             ble.tick()
     erase_mock.assert_called_once()
     assert ble._erase_pending is False
-    assert ble._last_erase_at == 103.5
+    assert ble._last_erase_at == 102.5
+
+
+def test_blehid_tick_stops_advertising_while_erase_pending():
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._ble.connected = False
+    ble._was_connected = False
+    ble._erase_pending = True
+    ble._erase_requested_at = 100.0
+    ble._erase_debounce_s = 0.2
+    ble._ble.advertising = True
+
+    with mock.patch.object(ble, "_stop_adv", wraps=ble._stop_adv) as stop_adv:
+        with mock.patch("time.monotonic", return_value=100.05):
+            ble.tick()
+    stop_adv.assert_called_once()
 
 
 def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
@@ -110,7 +122,8 @@ def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
     ble._erase_pending_since = 100.0
     ble._erase_debounce_s = 0.1
     ble._erase_max_wait_s = 2.0
-    ble._last_conn_change_at = 100.0
+    # Set recent connection change so idle window has not elapsed when erase times out.
+    ble._last_conn_change_at = 101.8
     ble._ble.advertising = True
 
     with mock.patch.object(ble, "erase_bonds") as erase_mock:
@@ -123,6 +136,7 @@ def test_blehid_tick_cancels_erase_after_timeout_and_enforces_cooldown():
         with mock.patch("time.monotonic", return_value=106.0):
             assert ble.request_erase_bonds() is True
         ble._ble.advertising = False
+        ble._last_conn_change_at = 100.0
         with mock.patch("time.monotonic", return_value=106.2):
             ble.tick()
     assert erase_mock.call_count == 1
