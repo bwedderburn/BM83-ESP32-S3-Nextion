@@ -420,9 +420,9 @@ def test_erase_bonds_with_adv_already_stopped():
     blehid._ble.advertising = False
     blehid._erase_adv_stopped = True
 
-    # Test case 1: Last stop was 0.01s ago (within stabilization delay window)
-    # Should sleep for remaining time before proceeding
-    blehid._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY - 0.01)  # 0.01s ago
+    # Test case 1: Last stop was BLE_STACK_STABILIZATION_DELAY - 0.01s ago
+    # (i.e., 0.01s of stabilization time still remaining). Should sleep for remaining time.
+    blehid._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY - 0.01)  # 0.01s remaining
 
     sleep_calls = []
     original_stop_adv = blehid._stop_adv
@@ -444,8 +444,8 @@ def test_erase_bonds_with_adv_already_stopped():
                 with mock.patch.object(blehid, "_start_adv"):
                     blehid.erase_bonds()
 
-    # The initial branch (line 344-355) should NOT have called _stop_adv
-    # because _erase_adv_stopped=True, taking the else branch
+    # The initial erase_bonds branch taken when _erase_adv_stopped is True
+    # should NOT call _stop_adv, since advertising is already considered stopped
     assert initial_stop_adv_called is False
 
     # Should sleep for the remaining stabilization time (approximately)
