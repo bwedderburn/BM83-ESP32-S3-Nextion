@@ -40,6 +40,24 @@ def main():
     ble.setup()
 
 # endregion
+    # Local bindings for speed/low allocation on mpy
+    monotonic = time.monotonic
+    sleep = time.sleep
+    nx_tick = nx.tick
+    nx_read = nx.read
+    nx_set_text = nx.set_text_active_page
+    bm_poll = bm.poll
+    bm_ack = bm.ack_event
+    bm_tick_power = bm.tick_power
+    bm_tick_avrcp = bm.tick_avrcp
+    bm_avrcp_get_play_status = bm.avrcp_get_play_status
+    ble_tick = ble.tick
+    ble_volume = ble.volume
+    ble_mute = ble.mute
+    ble_request_erase_bonds = ble.request_erase_bonds
+    eq_labels = bm.EQ_L
+
+# endregion
     print("=== ESP32-S3 BM83 + Nextion + BLE HID (VOLUME ONLY) ===")
 
 # endregion
@@ -79,14 +97,14 @@ def main():
     # flush_page handles flush page logic. #
     # Conditional check
         if pageid == 0:
-            nx.set_text_active_page(EQ_OBJ_PAGE0, desired_eq)
+            nx_set_text(EQ_OBJ_PAGE0, desired_eq)
     # Conditional check
         elif pageid == 1:
-            nx.set_text_active_page(EQ_OBJ_PAGE1, desired_eq)
-            nx.set_text_active_page(AUX_OBJ_PAGE1, desired_aux)
+            nx_set_text(EQ_OBJ_PAGE1, desired_eq)
+            nx_set_text(AUX_OBJ_PAGE1, desired_aux)
     # Loop through items
             for k, obj in NX_RUNTIME.items():
-                nx.set_text_active_page(obj, desired_meta.get(k, "—"))
+                nx_set_text(obj, desired_meta.get(k, "—"))
 
 # endregion
     # Loop through items
@@ -137,11 +155,11 @@ def main():
     # exit_aux_mode handles exit aux mode logic. #
         nonlocal desired_aux
         desired_aux = ""
-        bm._next_playstatus_at = time.monotonic() + 0.05
+        bm._next_playstatus_at = monotonic() + 0.05
         bm.schedule_attrs(0.3)
 
 # endregion
-    last_gc = time.monotonic()
+    last_gc = monotonic()
     gc_interval_s = 4.0  # Empirically chosen: 4s strikes a balance between GC overhead and memory pressure
     # On this workload (BM83 + Nextion event floods), 8s GC caused occasional alloc failures,
     # while <=2s GC increased pause time without reducing peak usage further. Tweak if patterns change.
@@ -149,26 +167,26 @@ def main():
 # endregion
     # While loop execution
     while True:
-        now = time.monotonic()
+        now = monotonic()
     # Conditional check
         if now - last_gc > gc_interval_s:
             gc.collect()
             last_gc = now
 
 # endregion
-        nx.tick()
-        tokens, page_changed = nx.read()
+        nx_tick()
+        tokens, page_changed = nx_read()
     # Conditional check
         if page_changed and nx.current_page is not None:
             dprint("[NX] page=", nx.current_page)
             flush_page(nx.current_page)
 
 # endregion
-        ble.tick()
+        ble_tick()
 
 # endregion
         # Tick non-blocking power state machine
-        bm.tick_power()
+        bm_tick_power()
 
 # endregion
         streaming_seems_active = bm.connected and last_avrcp_rx_at > 0.0 and (now - last_avrcp_rx_at) < AVRCP_SILENCE_TO_AUX_S
@@ -192,17 +210,17 @@ def main():
 # endregion
     # Conditional check
         if not aux_mode:
-            bm.tick_avrcp()
+            bm_tick_avrcp()
         else:
     # Conditional check
             if bm.connected and now >= next_avrcp_probe_at:
                 next_avrcp_probe_at = now + AVRCP_PROBE_PERIOD_S
-                bm.avrcp_get_play_status(0)
+                bm_avrcp_get_play_status(0)
 
 # endregion
     # Loop through items
-        for op, params in bm.poll():
-            bm.ack_event(op)
+        for op, params in bm_poll():
+            bm_ack(op)
     # Conditional check
             if op == bm.EVT_BTM_STATUS and params:
                 state = params[0]
@@ -219,7 +237,7 @@ def main():
     # Conditional check
             elif op == bm.EVT_EQ_MODE_IND and params:
                 mode = params[0]
-                desired_eq = bm.EQ_L.get(mode, "OFF")
+                desired_eq = eq_labels.get(mode, "OFF")
                 dprint("[EQ_IND] mode=%d label=%s" % (mode, desired_eq))
     # Conditional check
                 if nx.current_page is not None:
@@ -331,7 +349,7 @@ def main():
     # Conditional check
             elif tok == b"BT_VOLUP_P":
                 # Volume up pressed - send immediate volume up and start hold tracking
-                ble.volume(True)
+                ble_volume(True)
                 vol_hold_active = "up"
                 vol_hold_start_at = now
                 vol_last_repeat_at = now
@@ -346,12 +364,12 @@ def main():
                 # Volume down pressed - check for double-tap mute, then start hold tracking
     # Conditional check
                 if (now - last_voldn_at) <= mute_window_s:
-                    ble.mute()
+                    ble_mute()
                     last_voldn_at = 0.0
                     vol_hold_active = None  # Don't repeat after mute
                     vol_repeat_count = 0
                 else:
-                    ble.volume(False)
+                    ble_volume(False)
                     last_voldn_at = now
                     vol_hold_active = "down"
                     vol_hold_start_at = now
@@ -364,7 +382,7 @@ def main():
                     vol_repeat_count = 0
     # Conditional check
             elif tok == b"BT_EBIND":
-                ble.request_erase_bonds()
+                ble_request_erase_bonds()
 
 # endregion
         # Handle volume hold-and-repeat
@@ -382,13 +400,13 @@ def main():
                     # Check if it's time for another repeat step
                     if (now - vol_last_repeat_at) >= vol_repeat_interval_s:
                         if vol_hold_active == "up":
-                            ble.volume(True)
+                            ble_volume(True)
                         elif vol_hold_active == "down":
-                            ble.volume(False)
+                            ble_volume(False)
                         vol_last_repeat_at = now
                         vol_repeat_count += 1
 
-        time.sleep(0.005)
+        sleep(0.005)
 
 # endregion
     # Conditional check
