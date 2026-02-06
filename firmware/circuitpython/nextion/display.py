@@ -75,6 +75,7 @@ class Nextion:
 
 # endregion
         self._txq = []
+        self._tx_head = 0
         self._last_tx_at = 0.0
         self._tx_interval_s = 0.035
         self._max_queue_size = 50  # Prevent unbounded growth
@@ -85,18 +86,18 @@ class Nextion:
         self._last_token = None  # Track last token value for smarter throttling
 
 # endregion
-    
+
     # Properties for test compatibility
     @property
     def rx_buffer(self):
         """Alias for _rx buffer for test compatibility."""
         return self._rx
-    
+
     @property
     def tx_queue(self):
         """Alias for _txq for test compatibility."""
-        return self._txq
-    
+        return self._txq[self._tx_head:]
+
     def send_cmd(self, cmd):
         """Alias for enqueue() for test compatibility."""
         self.enqueue(cmd)
@@ -110,6 +111,7 @@ class Nextion:
         time.sleep(delay_s)
         self._rx = bytearray()
         self._txq.clear()
+        self._tx_head = 0
         self.current_page = None
         self._last_sendme_at = 0.0
         self._last_tx_at = 0.0
@@ -122,7 +124,8 @@ class Nextion:
     def enqueue(self, cmd):
 # region enqueue
     # enqueue handles enqueue logic. #
-        if len(self._txq) >= self._max_queue_size:
+        active_len = len(self._txq) - self._tx_head
+        if active_len >= self._max_queue_size:
             # Truncate command for readability in debug logs (30 chars is enough to identify command type)
             dprint("[NX] queue full, dropping:", cmd[:30])
             return
@@ -149,9 +152,14 @@ class Nextion:
         self.sendme_tick()
         now = time.monotonic()
     # Conditional check
-        if not self._txq or (now - self._last_tx_at) < self._tx_interval_s:
+        if (len(self._txq) - self._tx_head) <= 0 or (now - self._last_tx_at) < self._tx_interval_s:
             return
-        cmd = self._txq.pop(0)
+        cmd = self._txq[self._tx_head]
+        self._tx_head += 1
+        # Compact the queue periodically to avoid unbounded growth of consumed items
+        if self._tx_head >= 16 and self._tx_head >= (len(self._txq) // 2):
+            del self._txq[:self._tx_head]
+            self._tx_head = 0
     # Try block to catch exceptions
         try:
             self.uart.write(cmd.encode("ascii", "replace") + TERM)
@@ -191,7 +199,7 @@ class Nextion:
             return None
 # endregion
         frame = bytes(self._rx[:i])
-        self._rx = self._rx[i + 3:]
+        del self._rx[: i + 3]
     # Return the result
         return frame
 # endregion
@@ -206,17 +214,17 @@ class Nextion:
         f = frame.strip()
         if not f:
             return None
-        
+
         # Remove leading and trailing non-token bytes (filter noise)
         # Valid token bytes: A-Z (65-90), 0-9 (48-57), _ (95)
         start = 0
         while start < len(f) and not (48 <= f[start] <= 57 or 65 <= f[start] <= 90 or f[start] == 95):
             start += 1
-        
+
         end = len(f)
-        while end > start and not (48 <= f[end-1] <= 57 or 65 <= f[end-1] <= 90 or f[end-1] == 95):
+        while end > start and not (48 <= f[end - 1] <= 57 or 65 <= f[end - 1] <= 90 or f[end - 1] == 95):
             end -= 1
-        
+
         return f[start:end] if start < end else None
 # endregion
 
@@ -294,16 +302,16 @@ class Nextion:
         """Process incoming bytes and call token_handler for each valid token found."""
         if not data:
             return
-        
+
         # Add data to buffer
         self._rx.extend(data)
-        
+
         # Extract and process tokens
         while True:
             frame = self._pop_frame()
             if frame is None:
                 break
-            
+
             # Check if it's a valid token and get cleaned token
             clean_token = self._is_token_frame(frame)
             if clean_token and token_handler:

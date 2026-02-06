@@ -24,4 +24,3 @@ def test_volume_repeat_cap_constant():
     import main  # noqa: WPS433
 
     assert getattr(main, "VOL_REPEAT_MAX", None) == 10
-

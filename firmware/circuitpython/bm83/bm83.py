@@ -1,6 +1,7 @@
 import time
-from utils.common import dprint, _sanitize_text
+from utils.common import dprint
 
+# endregion
 # endregion
 # Class: Bm83 - Represents the Bm83 class.
 class Bm83:
@@ -184,7 +185,7 @@ class Bm83:
                 break
     # Conditional check
             if sof > 0:
-                self._rx = self._rx[sof:]
+                del self._rx[:sof]
     # Conditional check
             if len(self._rx) < 4:
                 break
@@ -198,13 +199,13 @@ class Bm83:
             chk = self._rx[3 + ln]
     # Conditional check
             if chk != self._checksum(hi, lo, body):
-                self._rx = self._rx[1:]
+                del self._rx[0]
                 continue
             op = body[0]
             params = body[1:]
             dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
-            self._rx = self._rx[total:]
+            del self._rx[:total]
     # Return the result
         return out
 # endregion
@@ -550,35 +551,35 @@ class Bm83:
 # region parse_avrcp_metadata
     # parse_avrcp_metadata handles simple parsing logic for tests. #
         """Parse simple AVRCP metadata from raw attribute data.
-        
+
         Test format: attr_id (1 byte), charset (1 byte), length (1 byte), text
         Maps attr_id: 1=title, 2=artist, 3=album, 4=track_num, 5=total_tracks, 6=genre
         """
         if len(data) < 3:
             return {}
-        
+
         attr_id = data[0]
         # Skip charset byte at data[1]
         length = data[2]
-        
+
         # Validate that data contains enough bytes for the declared length
         if len(data) < 3 + length:
             return {}
-        
+
         text = data[3:3 + length].decode("utf-8", "replace")
-        
+
         # Map attribute IDs to names
         attr_names = {
             1: "title",
-            2: "artist", 
+            2: "artist",
             3: "album",
             4: "track_num",
             5: "total_tracks",
-            6: "genre"
+            6: "genre",
         }
-        
+
         result = {}
         if attr_id in attr_names:
             result[attr_names[attr_id]] = text
         return result
-# endregion
+    # endregion

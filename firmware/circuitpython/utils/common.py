@@ -1,5 +1,3 @@
-import time
-
 # endregion
 DEBUG = True
 
@@ -24,17 +22,20 @@ def _sanitize_text(txt, max_len=48):
         return "—"
 # endregion
     out = []
+    out_append = out.append
+    ord_ = ord
+    max_len_minus_one = max_len - 1
     # Loop through items
     for ch in str(txt):
-        o = ord(ch)
-        out.append(ch if 32 <= o <= 126 else " ")
+        o = ord_(ch)
+        out_append(ch if 32 <= o <= 126 else " ")
     s = "".join(out).replace('"', "'").strip()
     # Conditional check
     if not s:
         s = "—"
     # Conditional check
     if len(s) > max_len:
-        s = s[: max_len - 1] + "…"
+        s = s[:max_len_minus_one] + "…"
     # Return the result
     return s
 # endregion
@@ -94,20 +95,22 @@ def sanitize_text(txt, max_len=100):
     """Sanitize text for display (public API with test-compatible defaults)."""
     if txt is None:
         return "—"
-    
+
     out = []
+    out_append = out.append
+    ord_ = ord
     for ch in str(txt):
-        o = ord(ch)
-        out.append(ch if 32 <= o <= 126 else " ")
+        o = ord_(ch)
+        out_append(ch if 32 <= o <= 126 else " ")
     s = "".join(out).replace('"', "'").strip()
-    
+
     if not s:
         s = "—"
-    
+
     # Use "..." instead of "…" for test compatibility
     if len(s) > max_len:
         s = s[: max_len - 3] + "..."
-    
+
     return s
 
 
@@ -116,20 +119,20 @@ def fmt_ms(ms):
     """Format milliseconds as time string (public API with test-compatible formatting)."""
     # Reuse internal _fmt_ms logic to avoid duplication
     base = _fmt_ms(ms)
-    
+
     # Preserve special/invalid outputs as-is
     if base == "—":
         return base
-    
+
     parts = base.split(":")
     # h:mm:ss case (three parts) or unexpected formats are returned unchanged
     if len(parts) != 2:
         return base
-    
+
     minutes, seconds = parts
     # Only adjust if both components are purely digits
     if minutes.isdigit() and seconds.isdigit() and len(minutes) == 1:
         # Zero-pad minutes for test compatibility (e.g., "0:05" -> "00:05")
         return "0%s:%s" % (minutes, seconds)
-    
+
     return base

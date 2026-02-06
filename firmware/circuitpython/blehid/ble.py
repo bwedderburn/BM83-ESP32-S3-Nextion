@@ -492,13 +492,20 @@ class BleHid:
         if not self._ready or not self._ble:
             return
         now = time.monotonic()
-        advertising = self._is_advertising()
+        ble = self._ble
+        is_advertising = self._is_advertising
+        stop_adv = self._stop_adv
+        start_adv = self._start_adv
+        on_connect = self._on_connect
+        on_disconnect = self._on_disconnect
+        ensure_paired = self._ensure_paired
+        advertising = is_advertising()
     # Conditional check
         if self._erase_pending and advertising:
             # Check settle window before stopping advertising (only if we already stopped it for this erase)
             if self._erase_adv_stopped and (now - self._last_adv_stop_at) < self._erase_adv_settle_s:
                 return
-            self._stop_adv()
+            stop_adv()
             self._erase_adv_stopped = True
             self._last_adv_stop_at = now
             self._erase_requested_at = now
@@ -516,9 +523,9 @@ class BleHid:
             else:
                 if (now - self._erase_pending_since) >= self._erase_max_wait_s:
                     reasons = []
-                    if getattr(self._ble, "connected", False):
+                    if getattr(ble, "connected", False):
                         reasons.append("connected")
-                    if getattr(self._ble, "advertising", False):
+                    if getattr(ble, "advertising", False):
                         reasons.append("advertising")
                     if (now - self._last_conn_change_at) < self._erase_min_idle_s:
                         reasons.append("recent-conn")
@@ -529,30 +536,30 @@ class BleHid:
                     self._last_erase_at = now
                     self._erase_pending = False
                     self._erase_adv_stopped = False
-        connected = bool(getattr(self._ble, "connected", False))
+        connected = bool(getattr(ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
             self._was_connected = connected
     # Conditional check
             if connected:
-                self._on_connect()
+                on_connect()
             else:
-                self._on_disconnect()
+                on_disconnect()
     # Conditional check
         if not connected:
             if self._erase_pending:
                 return
-            advertising = self._is_advertising()
+            advertising = is_advertising()
     # Conditional check
             if not advertising:
-                self._start_adv(force=False)
+                start_adv(force=False)
     # Conditional check
             elif (now - self._last_adv_kick_at) > self._adv_kick_period_s:
                 self._last_adv_kick_at = now
         else:
     # Conditional check
             if self._need_pairing_check:
-                self._ensure_paired()
+                ensure_paired()
 
 # endregion
     # Loop through items

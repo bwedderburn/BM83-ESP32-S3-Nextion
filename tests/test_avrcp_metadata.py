@@ -8,7 +8,6 @@ def test_avrcp_parse_metadata_attrs():
     attr_id = (1).to_bytes(4, "big")     # title
     str_val = b"Test Song"
     str_len = len(str_val).to_bytes(2, "big")
-    attr_header = b"\x00\x00" + (1).to_bytes(1, "big") + (len(attr_id) + 2 + len(str_val)).to_bytes(2, "big")
     full_payload = attr_id + b"\x00\x00" + str_len + str_val
 
     params = bytes([

@@ -16,6 +16,7 @@ class MockUART:
         self.in_waiting = len(self.to_read)
         return out
 
+
 def frame_to_bytes(op, payload):
     b = bytes([op]) + payload
     ln = len(b)
@@ -23,12 +24,14 @@ def frame_to_bytes(op, payload):
     checksum = (-((hi + lo + sum(b)) & 0xFF)) & 0xFF
     return bytes([0xAA, hi, lo]) + b + bytes([checksum])
 
+
 def test_bm83_send_command():
     uart = MockUART()
     bm = Bm83(uart)
     bm.send(Bm83.OP_READ_BD_ADDR)
     assert uart.writes  # something was written
     assert uart.writes[0].startswith(b'\xAA')  # start of frame
+
 
 def test_bm83_poll_event_parsing():
     uart = MockUART()
@@ -44,6 +47,7 @@ def test_bm83_poll_event_parsing():
     evt_op, evt_data = events[0]
     assert evt_op == op
     assert evt_data == payload
+
 
 def test_bm83_invalid_checksum_skips_packet():
     uart = MockUART()
