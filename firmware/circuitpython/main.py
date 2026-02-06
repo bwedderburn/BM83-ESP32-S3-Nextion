@@ -17,7 +17,7 @@ except ImportError:
 from utils.common import dprint, _fmt_ms, _sanitize_text
 from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE1
 from blehid.ble import BleHid
-from bm83.bm83 import Bm83
+import bm83.bm83
 
 # endregion
 
@@ -53,7 +53,7 @@ def main():
 
 # endregion
     nx = Nextion(nx_uart)
-    bm = Bm83(bm_uart)
+    bm = bm83.bm83.Bm83(bm_uart)
 
 # endregion
     ble = BleHid(BLE_ENABLED, BLE_NAME)
