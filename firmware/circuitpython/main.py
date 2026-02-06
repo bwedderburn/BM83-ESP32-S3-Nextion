@@ -1,7 +1,17 @@
 import gc
 import time
-import board
-import busio
+try:
+    import board  # noqa: F401
+except ImportError:
+    # board is a CircuitPython built-in; not available in host environment
+    board = None
+
+# endregion
+try:
+    import busio
+except ImportError:
+    # busio is a CircuitPython built-in; not available in host environment
+    pass
 
 # endregion
 from utils.common import dprint, _fmt_ms, _sanitize_text
@@ -10,10 +20,20 @@ from blehid.ble import BleHid
 from bm83.bm83 import Bm83
 
 # endregion
+
+
+def _get_pin(pin_name):
+    """Convert pin name string (e.g. 'IO43') to board pin object."""
+    if board is None:
+        return None
+    return getattr(board, pin_name)
+
+
+# endregion
 NX_BAUD = 9600
 BM83_BAUD = 115200
-NX_TX, NX_RX = board.IO15, board.IO16
-BM83_TX, BM83_RX = board.IO17, board.IO18
+NX_TX, NX_RX = _get_pin("IO43"), _get_pin("IO44")
+BM83_TX, BM83_RX = _get_pin("IO17"), _get_pin("IO18")
 VOL_REPEAT_MAX = 10
 
 # endregion
