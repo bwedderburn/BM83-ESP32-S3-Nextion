@@ -185,7 +185,7 @@ class Bm83:
                 break
     # Conditional check
             if sof > 0:
-                del self._rx[:sof]
+                self._rx = self._rx[sof:]
     # Conditional check
             if len(self._rx) < 4:
                 break
@@ -199,13 +199,13 @@ class Bm83:
             chk = self._rx[3 + ln]
     # Conditional check
             if chk != self._checksum(hi, lo, body):
-                del self._rx[0]
+                self._rx = self._rx[1:]
                 continue
             op = body[0]
             params = body[1:]
             dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
-            del self._rx[:total]
+            self._rx = self._rx[total:]
     # Return the result
         return out
 # endregion

@@ -199,7 +199,7 @@ class Nextion:
             return None
 # endregion
         frame = bytes(self._rx[:i])
-        del self._rx[: i + 3]
+        self._rx = self._rx[i + 3:]
     # Return the result
         return frame
 # endregion
