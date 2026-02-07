@@ -34,7 +34,6 @@ TOKENS = TOK_BT | TOK_EQ  # Combined token set
 
 
 def ascii_upper_uscore(token):
-    """Check if token contains only uppercase ASCII, digits, underscores, and spaces."""
     if not token:
         return False
     for b in token:
@@ -60,6 +59,21 @@ NX_RUNTIME = {
 class Nextion:
 # region Nextion
 # Nextion class encapsulates functionality related to nextion. #
+    __slots__ = (
+        "uart",
+        "_rx",
+        "current_page",
+        "_last_sendme_at",
+        "_sendme_period_s",
+        "_txq",
+        "_tx_head",
+        "_last_tx_at",
+        "_tx_interval_s",
+        "_max_queue_size",
+        "_last_token_at",
+        "_token_throttle_s",
+        "_last_token",
+    )
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
     def __init__(self, uart=None):
@@ -90,16 +104,13 @@ class Nextion:
     # Properties for test compatibility
     @property
     def rx_buffer(self):
-        """Alias for _rx buffer for test compatibility."""
         return self._rx
 
     @property
     def tx_queue(self):
-        """Alias for _txq for test compatibility."""
         return self._txq[self._tx_head:]
 
     def send_cmd(self, cmd):
-        """Alias for enqueue() for test compatibility."""
         self.enqueue(cmd)
 
 # endregion
@@ -299,7 +310,6 @@ class Nextion:
     def process_bytes(self, data, token_handler=None):
 # region process_bytes
     # process_bytes handles byte processing logic for test compatibility. #
-        """Process incoming bytes and call token_handler for each valid token found."""
         if not data:
             return
 

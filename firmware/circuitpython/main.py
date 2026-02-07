@@ -15,6 +15,7 @@ except ImportError:
 
 # endregion
 from utils.common import dprint, _fmt_ms, _sanitize_text
+from utils.compat import const
 from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE1
 from blehid.ble import BleHid
 import bm83.bm83
@@ -23,18 +24,17 @@ import bm83.bm83
 
 
 def _get_pin(pin_name):
-    """Convert pin name string (e.g. 'IO43') to board pin object."""
     if board is None:
         return None
     return getattr(board, pin_name)
 
 
 # endregion
-NX_BAUD = 9600
-BM83_BAUD = 115200
+NX_BAUD = const(9600)
+BM83_BAUD = const(115200)
 NX_TX, NX_RX = _get_pin("IO43"), _get_pin("IO44")
 BM83_TX, BM83_RX = _get_pin("IO17"), _get_pin("IO18")
-VOL_REPEAT_MAX = 10
+VOL_REPEAT_MAX = const(10)
 
 # endregion
 BLE_ENABLED = True

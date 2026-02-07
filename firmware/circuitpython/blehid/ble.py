@@ -12,7 +12,6 @@ BLE_STACK_STABILIZATION_DELAY = 0.05
 
 
 def _read_ble_counter():
-    """Read the BLE counter from persistent storage."""
     try:
         with open(BLE_COUNTER_FILE, "r") as f:
             return int(f.read().strip())
@@ -21,8 +20,6 @@ def _read_ble_counter():
 
 
 def _write_ble_counter(count):
-    """Write the BLE counter to persistent storage.
-    Returns True if successful, False otherwise."""
     try:
         with open(BLE_COUNTER_FILE, "w") as f:
             f.write(str(count))
@@ -34,6 +31,43 @@ def _write_ble_counter(count):
 class BleHid:
 # region BleHid
 # BleHid class encapsulates functionality related to blehid. #
+    __slots__ = (
+        "enabled",
+        "base_name",
+        "name",
+        "_ble",
+        "_adv",
+        "_hid",
+        "_cc",
+        "_CCC",
+        "_ready",
+        "_was_connected",
+        "_adv_inhibit_until",
+        "_adv_oom_count",
+        "_adv_kick_period_s",
+        "_last_adv_kick_at",
+        "_last_cc_at",
+        "_cc_min_interval_s",
+        "_need_pairing_check",
+        "_last_pair_try_at",
+        "_pair_retry_s",
+        "_pair_attempts",
+        "_pair_attempt_limit",
+        "_erase_pending",
+        "_erase_requested_at",
+        "_erase_pending_since",
+        "_last_erase_at",
+        "_erase_cooldown_s",
+        "_erase_debounce_s",
+        "_erase_min_idle_s",
+        "_erase_max_wait_s",
+        "_last_conn_change_at",
+        "_erase_adv_stopped",
+        "_last_adv_stop_at",
+        "_erase_adv_settle_s",
+        "_memory_counter",
+        "_counter_persisted",
+    )
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
     def __init__(self, enabled, name):
@@ -303,11 +337,6 @@ class BleHid:
 # Function: _is_ble_idle - Defines the behavior for `_is_ble_idle`.
     def _is_ble_idle(self, now):
     # region _is_ble_idle
-        """Return True when BLE is idle enough for erase operations.
-
-        Args:
-            now: Current monotonic timestamp used for idle timing.
-        """
         connected = bool(getattr(self._ble, "connected", False))
         advertising = self._is_advertising()
         idle_time_elapsed = (now - self._last_conn_change_at) >= self._erase_min_idle_s

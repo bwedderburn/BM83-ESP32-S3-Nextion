@@ -1,4 +1,3 @@
-"""Nextion display module interface."""
 from .display import (
     AUX_OBJ_PAGE1,
     EQ_MAP,
@@ -13,7 +12,7 @@ from .display import (
     ascii_upper_uscore,
 )
 
-__all__ = [
+__all__ = (
     "Nextion",
     "TERM",
     "TOKENS",
@@ -25,4 +24,4 @@ __all__ = [
     "EQ_OBJ_PAGE0",
     "EQ_OBJ_PAGE1",
     "AUX_OBJ_PAGE1",
-]
+)

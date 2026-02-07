@@ -1,39 +1,75 @@
 import time
 from utils.common import dprint
+from utils.compat import const
 
 # endregion
 # endregion
+_AVRCP_ATTR_IDS = (1, 2, 3, 6, 4, 5, 7)
+_AVRCP_ATTR_PAYLOAD = bytes([len(_AVRCP_ATTR_IDS)]) + b"".join(
+    int(a).to_bytes(4, "big") for a in _AVRCP_ATTR_IDS
+)
+_AVRCP_ATTR_NAMES = {
+    1: "title",
+    2: "artist",
+    3: "album",
+    4: "track_num",
+    5: "total_tracks",
+    6: "genre",
+}
 # Class: Bm83 - Represents the Bm83 class.
 class Bm83:
 # region Bm83
 # Bm83 class encapsulates functionality related to bm83. #
-    OP_MMI_ACTION = 0x02
-    OP_EVENT_FILTER = 0x03
-    OP_MUSIC_CONTROL = 0x04
-    OP_AVC_VENDOR_CMD = 0x0B
-    OP_READ_BD_ADDR = 0x0F
-    OP_BTM_UTILITY_FUNC = 0x13
-    OP_EVENT_ACK = 0x14
-    OP_EQ_MODE_SETTING = 0x1C
-    OP_AVRCP_VENDOR_DEP_CMD = 0x4A
+    __slots__ = (
+        "uart",
+        "_rx",
+        "_rx_max",
+        "power_on",
+        "eq_index",
+        "connected",
+        "_last_connected_seen",
+        "_disconnect_hold_s",
+        "_next_playstatus_at",
+        "_playstatus_period_s",
+        "_next_attrs_at",
+        "_attrs_throttle_s",
+        "_last_attrs_req_at",
+        "_gea_frag",
+        "_gea_expect_len",
+        "_power_state",
+        "_power_next_at",
+        "_last_eq_cmd_at",
+        "_eq_throttle_s",
+        "_last_track_changed_reg_at",
+        "_track_changed_reg_throttle_s",
+    )
+    OP_MMI_ACTION = const(0x02)
+    OP_EVENT_FILTER = const(0x03)
+    OP_MUSIC_CONTROL = const(0x04)
+    OP_AVC_VENDOR_CMD = const(0x0B)
+    OP_READ_BD_ADDR = const(0x0F)
+    OP_BTM_UTILITY_FUNC = const(0x13)
+    OP_EVENT_ACK = const(0x14)
+    OP_EQ_MODE_SETTING = const(0x1C)
+    OP_AVRCP_VENDOR_DEP_CMD = const(0x4A)
 
 # endregion
-    EVT_BTM_STATUS = 0x01
-    EVT_EQ_MODE_IND = 0x10
-    EVT_AVC_VENDOR_RSP = 0x1A
-    EVT_AVRCP_VENDOR_DEP_RSP = 0x5D
+    EVT_BTM_STATUS = const(0x01)
+    EVT_EQ_MODE_IND = const(0x10)
+    EVT_AVC_VENDOR_RSP = const(0x1A)
+    EVT_AVRCP_VENDOR_DEP_RSP = const(0x5D)
 
 # endregion
-    MMI_POWER_ON_PRESS = 0x51
-    MMI_POWER_ON_RELEASE = 0x52
-    MMI_POWER_OFF_PRESS = 0x53
-    MMI_POWER_OFF_RELEASE = 0x54
-    MMI_ENTER_PAIRING = 0x5D
+    MMI_POWER_ON_PRESS = const(0x51)
+    MMI_POWER_ON_RELEASE = const(0x52)
+    MMI_POWER_OFF_PRESS = const(0x53)
+    MMI_POWER_OFF_RELEASE = const(0x54)
+    MMI_ENTER_PAIRING = const(0x5D)
 
 # endregion
-    MC_PLAY_PAUSE = 0x07
-    MC_NEXT = 0x09
-    MC_PREV = 0x0A
+    MC_PLAY_PAUSE = const(0x07)
+    MC_NEXT = const(0x09)
+    MC_PREV = const(0x0A)
 
 # endregion
     EQ_SEQ = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11)
@@ -103,7 +139,6 @@ class Bm83:
 # endregion
     # Public alias for testing
     def frame(self, op, params=b""):
-        """Public wrapper for _frame() to support tests."""
         return self._frame(op, params)
 
 # endregion
@@ -418,12 +453,7 @@ class Bm83:
     def avrcp_get_element_attributes(self, db=0):
 # region avrcp_get_element_attributes
     # avrcp_get_element_attributes handles avrcp get element attributes logic. #
-        attr_ids = (1, 2, 3, 6, 4, 5, 7)
-        p = bytes([len(attr_ids)])
-    # Loop through items
-        for a in attr_ids:
-            p += int(a).to_bytes(4, "big")
-        self.send(self.OP_AVRCP_VENDOR_DEP_CMD, bytes([db, 0x20]) + p)
+        self.send(self.OP_AVRCP_VENDOR_DEP_CMD, bytes([db, 0x20]) + _AVRCP_ATTR_PAYLOAD)
 
 # endregion
     # Loop through items
@@ -550,11 +580,6 @@ class Bm83:
     def parse_avrcp_metadata(data):
 # region parse_avrcp_metadata
     # parse_avrcp_metadata handles simple parsing logic for tests. #
-        """Parse simple AVRCP metadata from raw attribute data.
-
-        Test format: attr_id (1 byte), charset (1 byte), length (1 byte), text
-        Maps attr_id: 1=title, 2=artist, 3=album, 4=track_num, 5=total_tracks, 6=genre
-        """
         if len(data) < 3:
             return {}
 
@@ -568,18 +593,8 @@ class Bm83:
 
         text = data[3:3 + length].decode("utf-8", "replace")
 
-        # Map attribute IDs to names
-        attr_names = {
-            1: "title",
-            2: "artist",
-            3: "album",
-            4: "track_num",
-            5: "total_tracks",
-            6: "genre",
-        }
-
         result = {}
-        if attr_id in attr_names:
-            result[attr_names[attr_id]] = text
+        if attr_id in _AVRCP_ATTR_NAMES:
+            result[_AVRCP_ATTR_NAMES[attr_id]] = text
         return result
     # endregion

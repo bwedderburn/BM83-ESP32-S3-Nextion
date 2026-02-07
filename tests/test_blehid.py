@@ -425,23 +425,23 @@ def test_erase_bonds_with_adv_already_stopped():
     blehid._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY - 0.01)  # 0.01s remaining
 
     sleep_calls = []
-    original_stop_adv = blehid._stop_adv
+    original_stop_adv = BleHid._stop_adv
 
-    def track_stop_adv_calls():
+    def track_stop_adv_calls(_self):
         """Track if _stop_adv is called in the initial branch (not from _start_adv)."""
         nonlocal initial_stop_adv_called
         initial_stop_adv_called = True
-        original_stop_adv()
+        original_stop_adv(_self)
 
     initial_stop_adv_called = False
 
     with mock.patch("time.monotonic", return_value=100.0):
         with mock.patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
             # Patch _stop_adv to track calls, but only check if the initial branch uses it
-            with mock.patch.object(blehid, "_stop_adv", side_effect=track_stop_adv_calls):
+            with mock.patch.object(BleHid, "_stop_adv", autospec=True, side_effect=track_stop_adv_calls):
                 # Temporarily patch _start_adv to prevent it from calling _stop_adv
                 # so we can isolate the initial branch behavior
-                with mock.patch.object(blehid, "_start_adv"):
+                with mock.patch.object(BleHid, "_start_adv", autospec=True):
                     blehid.erase_bonds()
 
     # The initial erase_bonds branch taken when _erase_adv_stopped is True
@@ -465,17 +465,17 @@ def test_erase_bonds_with_adv_already_stopped():
 
     sleep_calls2 = []
     initial_stop_adv_called2 = False
-    original_stop_adv2 = blehid2._stop_adv
+    original_stop_adv2 = BleHid._stop_adv
 
-    def track_stop_adv_calls2():
+    def track_stop_adv_calls2(_self):
         nonlocal initial_stop_adv_called2
         initial_stop_adv_called2 = True
-        original_stop_adv2()
+        original_stop_adv2(_self)
 
     with mock.patch("time.monotonic", return_value=100.0):
         with mock.patch("time.sleep", side_effect=lambda d: sleep_calls2.append(d)):
-            with mock.patch.object(blehid2, "_stop_adv", side_effect=track_stop_adv_calls2):
-                with mock.patch.object(blehid2, "_start_adv"):
+            with mock.patch.object(BleHid, "_stop_adv", autospec=True, side_effect=track_stop_adv_calls2):
+                with mock.patch.object(BleHid, "_start_adv", autospec=True):
                     blehid2.erase_bonds()
 
     # The initial branch should NOT have called _stop_adv

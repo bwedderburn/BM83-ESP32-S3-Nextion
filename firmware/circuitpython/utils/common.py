@@ -13,31 +13,30 @@ def dprint(*a):
 # endregion
     # Loop through items
 # Function: _sanitize_text - Defines the behavior for `_sanitize_text`.
-def _sanitize_text(txt, max_len=48):
-# region _sanitize_text
-# _sanitize_text handles  sanitize text logic. #
-    # Conditional check
+def _sanitize_impl(txt, max_len, ellipsis):
     if txt is None:
-    # Return the result
         return "—"
-# endregion
     out = []
     out_append = out.append
     ord_ = ord
-    max_len_minus_one = max_len - 1
-    # Loop through items
     for ch in str(txt):
         o = ord_(ch)
         out_append(ch if 32 <= o <= 126 else " ")
     s = "".join(out).replace('"', "'").strip()
-    # Conditional check
     if not s:
         s = "—"
-    # Conditional check
     if len(s) > max_len:
-        s = s[:max_len_minus_one] + "…"
-    # Return the result
+        trim = max_len - len(ellipsis)
+        if trim < 0:
+            trim = 0
+        s = s[:trim] + ellipsis
     return s
+
+
+def _sanitize_text(txt, max_len=48):
+# region _sanitize_text
+# _sanitize_text handles  sanitize text logic. #
+    return _sanitize_impl(txt, max_len, "…")
 # endregion
 
 # endregion
@@ -78,7 +77,6 @@ def _fmt_ms(ms):
 
 # Function: hexdump - Hex dump utility for debugging
 def hexdump(data, width=16):
-    """Format bytes as hex string for debugging."""
     if not data:
         return "<empty>"
     hex_strs = ["%02X" % b for b in data]
@@ -92,31 +90,12 @@ def hexdump(data, width=16):
 
 # Public wrapper for sanitize_text with test-compatible defaults
 def sanitize_text(txt, max_len=100):
-    """Sanitize text for display (public API with test-compatible defaults)."""
-    if txt is None:
-        return "—"
-
-    out = []
-    out_append = out.append
-    ord_ = ord
-    for ch in str(txt):
-        o = ord_(ch)
-        out_append(ch if 32 <= o <= 126 else " ")
-    s = "".join(out).replace('"', "'").strip()
-
-    if not s:
-        s = "—"
-
     # Use "..." instead of "…" for test compatibility
-    if len(s) > max_len:
-        s = s[: max_len - 3] + "..."
-
-    return s
+    return _sanitize_impl(txt, max_len, "...")
 
 
 # Public wrapper for fmt_ms with test-compatible formatting
 def fmt_ms(ms):
-    """Format milliseconds as time string (public API with test-compatible formatting)."""
     # Reuse internal _fmt_ms logic to avoid duplication
     base = _fmt_ms(ms)
 
