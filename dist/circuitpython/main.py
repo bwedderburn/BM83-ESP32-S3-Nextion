@@ -1,20 +1,40 @@
 import gc
 import time
-import board
-import busio
+try:
+    import board  # noqa: F401
+except ImportError:
+    # board is a CircuitPython built-in; not available in host environment
+    board = None
+
+# endregion
+try:
+    import busio
+except ImportError:
+    # busio is a CircuitPython built-in; not available in host environment
+    pass
 
 # endregion
 from utils.common import dprint, _fmt_ms, _sanitize_text
+from utils.compat import const
 from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE1
 from blehid.ble import BleHid
-from bm83.bm83 import Bm83
+import bm83.bm83
 
 # endregion
-NX_BAUD = 9600
-BM83_BAUD = 115200
-NX_TX, NX_RX = board.IO15, board.IO16
-BM83_TX, BM83_RX = board.IO17, board.IO18
-VOL_REPEAT_MAX = 10
+
+
+def _get_pin(pin_name):
+    if board is None:
+        return None
+    return getattr(board, pin_name)
+
+
+# endregion
+NX_BAUD = const(9600)
+BM83_BAUD = const(115200)
+NX_TX, NX_RX = _get_pin("IO43"), _get_pin("IO44")
+BM83_TX, BM83_RX = _get_pin("IO17"), _get_pin("IO18")
+VOL_REPEAT_MAX = const(10)
 
 # endregion
 BLE_ENABLED = True
@@ -33,7 +53,7 @@ def main():
 
 # endregion
     nx = Nextion(nx_uart)
-    bm = Bm83(bm_uart)
+    bm = bm83.bm83.Bm83(bm_uart)
 
 # endregion
     ble = BleHid(BLE_ENABLED, BLE_NAME)
