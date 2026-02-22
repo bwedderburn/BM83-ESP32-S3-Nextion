@@ -10,6 +10,10 @@ SOURCE_DIR="${SOURCE_DIR:-$REPO_DIR/dist/circuitpython}"
 if [[ ! -d "$SOURCE_DIR" ]]; then
   SOURCE_DIR="$REPO_DIR/firmware/circuitpython"
 fi
+if [[ ! -d "$SOURCE_DIR" ]]; then
+  echo "Firmware source not found. Checked dist/circuitpython and firmware/circuitpython." >&2
+  exit 1
+fi
 
 if [ ! -d "$CIRCUITPY_PATH" ]; then
   echo "CIRCUITPY drive not found at $CIRCUITPY_PATH"
@@ -20,7 +24,10 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/circuitpy-$STAMP"
 mkdir -p "$BACKUP_DIR"
 echo "Saving backup from $CIRCUITPY_PATH to $BACKUP_DIR..."
-rsync -a "$CIRCUITPY_PATH"/ "$BACKUP_DIR"/
+if ! rsync -a "$CIRCUITPY_PATH"/ "$BACKUP_DIR"/; then
+  echo "Backup failed; deployment aborted." >&2
+  exit 1
+fi
 
 if [[ "${1:-}" == "--backup-only" ]]; then
   echo "✅ Backup complete (no deployment performed)."
