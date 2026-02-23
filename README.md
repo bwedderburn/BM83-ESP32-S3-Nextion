@@ -137,11 +137,14 @@ If you lose feature branches but still have a local clone, use `scripts/recover_
 # Show likely candidates
 ./scripts/recover_git_candidates.sh
 
-# Create rescue/* branches for candidates
+# Create rescue/auto-* branches for candidates (default prefix)
 ./scripts/recover_git_candidates.sh --create-branches
+
+# Or use a custom prefix, e.g. rescue/* instead of rescue/auto-*
+./scripts/recover_git_candidates.sh --create-branches --branch-prefix rescue/
 ```
 
-This is especially useful when your board still runs (`main.py` + `lib/*.mpy`) but source branches were deleted.
+This is especially useful when your board still runs (`main.py` + `lib/*.mpy`) but you've deleted your local feature branches.
 
 ## 🐛 Known Issues & Current Investigations
 

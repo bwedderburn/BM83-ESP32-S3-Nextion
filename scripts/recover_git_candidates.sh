@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 # Discover potentially recoverable commits and optionally create rescue branches.
@@ -6,6 +6,10 @@ set -euo pipefail
 #   ./scripts/recover_git_candidates.sh
 #   ./scripts/recover_git_candidates.sh --create-branches
 #   ./scripts/recover_git_candidates.sh --pattern 'whitespace|format|cleanup' --limit 200
+#
+# --pattern VALUE  Extended regex (ERE) pattern matched against reflog messages.
+# --limit  VALUE   Max number of reflog lines to scan (must be a positive integer).
+# --branch-prefix VALUE  Prefix for created rescue branches (default: rescue/auto).
 
 PATTERN='whitespace|space|format|cleanup|mpy|circuitpython|refactor|fix'
 LIMIT=120
@@ -15,11 +19,20 @@ BRANCH_PREFIX='rescue/auto'
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pattern)
-      PATTERN="${2:-}"
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --pattern requires a non-empty value." >&2; exit 1
+      fi
+      PATTERN="${2}"
       shift 2
       ;;
     --limit)
-      LIMIT="${2:-}"
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --limit requires a non-empty value." >&2; exit 1
+      fi
+      if ! [[ "${2}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --limit must be a positive integer, got '${2}'." >&2; exit 1
+      fi
+      LIMIT="${2}"
       shift 2
       ;;
     --create-branches)
@@ -27,11 +40,14 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --branch-prefix)
-      BRANCH_PREFIX="${2:-}"
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --branch-prefix requires a non-empty value." >&2; exit 1
+      fi
+      BRANCH_PREFIX="${2}"
       shift 2
       ;;
     -h|--help)
-      sed -n '1,25p' "$0"
+      sed -n '1,12p' "$0"
       exit 0
       ;;
     *)
@@ -102,15 +118,25 @@ if [[ "$CREATE_BRANCHES" -eq 1 ]]; then
   echo
   echo '== Creating rescue branches =='
   for sha in "${SHAS[@]}"; do
-    short_sha="$(git rev-parse --short "$sha")"
+    # Skip SHAs that no longer resolve to an object (e.g. stale reflog entries).
+    if ! git rev-parse --quiet --verify "${sha}^{object}" >/dev/null 2>&1; then
+      echo "skip (invalid SHA): ${sha}"
+      continue
+    fi
+
+    short_sha="$(git rev-parse --short "$sha" 2>/dev/null || true)"
+    short_sha="${short_sha:-$sha}"
     branch_name="${BRANCH_PREFIX}-${short_sha}"
     if git show-ref --verify --quiet "refs/heads/${branch_name}"; then
       echo "skip (exists): ${branch_name}"
       continue
     fi
 
-    git branch "$branch_name" "$sha"
-    echo "created: ${branch_name} -> ${sha}"
+    if git branch "$branch_name" "$sha"; then
+      echo "created: ${branch_name} -> ${sha}"
+    else
+      echo "failed to create branch: ${branch_name} -> ${sha}" >&2
+    fi
   done
 fi
 
