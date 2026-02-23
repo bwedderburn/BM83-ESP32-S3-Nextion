@@ -129,6 +129,20 @@ Unit tests live under `tests/` and can be run with `pytest` on compatible platfo
 - If metadata stops updating, ensure AVRCP is supported by the source device.
 - If CircuitPython auto-reloads on file save, it's disabled in code.
 
+### 🔄 Recovery Helper for Lost Branches
+
+If you lose feature branches but still have a local clone, use `scripts/recover_git_candidates.sh` to scan reflog and dangling objects for recoverable commit SHAs and optionally create rescue branches.
+
+```bash
+# Show likely candidates
+./scripts/recover_git_candidates.sh
+
+# Create rescue/* branches for candidates
+./scripts/recover_git_candidates.sh --create-branches
+```
+
+This is especially useful when your board still runs (`main.py` + `lib/*.mpy`) but source branches were deleted.
+
 ## 🐛 Known Issues & Current Investigations
 
 ### Active Issues
