@@ -61,11 +61,15 @@ git reflog --date=iso --all | head -n 25
 echo
 echo '== Dangling objects =='
 # no --no-reflogs here; we want all candidates available locally.
-git fsck --lost-found 2>/dev/null | grep -E 'dangling commit|dangling tag|dangling blob' || true
+FSCK_OUT="$(git fsck --lost-found 2>/dev/null | grep -E 'dangling commit|dangling tag|dangling blob' || true)"
+echo "${FSCK_OUT}"
+# Extract commit SHAs from dangling objects so they can be rescued even when
+# reflog entries have expired or the branch has been deleted.
+mapfile -t DANGLING_SHAS < <(echo "${FSCK_OUT}" | awk '/dangling commit/{print $3}' || true)
 
 echo
 echo '== Candidate SHAs from reflog messages =='
-mapfile -t SHAS < <(
+mapfile -t REFLOG_SHAS < <(
   git reflog --all \
   | head -n "$LIMIT" \
   | grep -Ei "$PATTERN" \
@@ -73,8 +77,15 @@ mapfile -t SHAS < <(
   | sort -u
 )
 
+# Combine dangling commit SHAs with reflog-sourced SHAs, deduplicating.
+mapfile -t SHAS < <(
+  { printf '%s\n' "${DANGLING_SHAS[@]+"${DANGLING_SHAS[@]}"}"; \
+    printf '%s\n' "${REFLOG_SHAS[@]+"${REFLOG_SHAS[@]}"}"; } \
+  | sort -u | grep -v '^$' || true
+)
+
 if [[ ${#SHAS[@]} -eq 0 ]]; then
-  echo 'No matching SHAs found in reflog with current pattern.'
+  echo 'No matching SHAs found in reflog or dangling objects.'
   echo "Try: $0 --pattern 'your-term|branch-name|ticket' --limit 500"
   exit 0
 fi
