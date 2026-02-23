@@ -17,11 +17,11 @@ Connect your ESP32-S3 to your computer via USB. It should appear as a drive name
 
 ### Step 2: Update the Changed Files
 
-Copy the updated files from your local repository to the `CIRCUITPY` drive:
+Run the deployment script from your repository directory:
 
 ```bash
 # From your repository directory
-cp -r firmware/circuitpython/* /path/to/CIRCUITPY/
+./deploy.sh
 ```
 
 **Important files to update** (if you've made changes):
