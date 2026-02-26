@@ -267,13 +267,13 @@ class Bm83:
             if len(self._rx) < total:
                 break
             body_start = 3
-            body_end = body_start + ln
-            chk = self._rx[body_end]
-            body = self._rx[body_start:body_end]
-    # Conditional check
-            if chk != self._checksum(hi, lo, body):
+            chk_idx = body_start + ln
+            chk = self._rx[chk_idx]
+            if chk != self._checksum(hi, lo, (self._rx[i] for i in range(body_start, chk_idx))):
                 del self._rx[:1]
                 continue
+            body = self._rx[body_start:chk_idx]
+    # Conditional check
             op = body[0]
             params = bytes(body[1:])
             if DEBUG:
