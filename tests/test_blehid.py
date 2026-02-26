@@ -291,6 +291,12 @@ def test_erase_bonds_erase_failure_defers_advertising_restart():
     assert blehid._ble.advertising is False
     assert blehid._erase_failures == 5
 
+    # Once backoff expires, advertising restart is attempted.
+    with mock.patch("time.monotonic", return_value=108.0):
+        blehid._start_adv(force=False)
+    assert blehid._ble.start_calls == 1
+    assert blehid._adv_failures == 1
+
 
 def test_erase_bonds_with_readonly_filesystem():
     """Test that erase_bonds works even when filesystem is read-only."""
