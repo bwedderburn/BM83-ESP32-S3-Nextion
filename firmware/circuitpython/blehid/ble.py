@@ -338,6 +338,7 @@ class BleHid:
         self._need_pairing_check = True
         self._pair_attempts = 0
         self._last_pair_try_at = 0.0
+        self._next_pair_try_at = 0.0
 
 # endregion
     # Loop through items
@@ -399,6 +400,7 @@ class BleHid:
                 if paired:
                     self._need_pairing_check = False
                     self._pair_attempts = 0
+                    self._next_pair_try_at = 0.0
                     print("[BLE] Paired/encrypted")
     # Handle exceptions
             except Exception as e:
@@ -409,9 +411,6 @@ class BleHid:
                     self._backoff_delay(self._pair_attempts, base_s=1.0, step_s=0.5, cap_s=6.0)
                 )
                 dprint("[BLE] pair err (attempt %d):" % self._pair_attempts, e)
-            else:
-                # Clear any backoff once a pairing attempt succeeds
-                self._next_pair_try_at = 0.0
 
 # endregion
     # Loop through items
@@ -550,12 +549,7 @@ class BleHid:
             self._erase_adv_stopped = False
 
             time.sleep(BLE_STACK_STABILIZATION_DELAY)
-            try:
-                self._start_adv(force=erase_succeeded)
-            except Exception as e:
-                dprint("[BLE] adv restart after erase failed:", e)
-                new_inhibit = self._record_retry("readv", 4.0)
-                self._adv_inhibit_until = max(self._adv_inhibit_until, new_inhibit)
+            self._start_adv(force=erase_succeeded)
         finally:
             self._heavy_op_inflight = None
             self._set_critical_window("erase", 0.6)
