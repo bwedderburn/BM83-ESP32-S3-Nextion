@@ -266,14 +266,24 @@ class Bm83:
     # Conditional check
             if len(self._rx) < total:
                 break
-            body = self._rx[3 : 3 + ln]
-            chk = self._rx[3 + ln]
+            mv = memoryview(self._rx)
+            body = mv[3 : 3 + ln]
+            chk = mv[3 + ln]
+            release = getattr(mv, "release", None)
     # Conditional check
             if chk != self._checksum(hi, lo, body):
+                if release:
+                    release()
+                body = None
+                mv = None
                 del self._rx[:1]
                 continue
             op = body[0]
             params = bytes(body[1:])
+            if release:
+                release()
+            body = None
+            mv = None
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
