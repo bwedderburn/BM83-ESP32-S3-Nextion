@@ -244,6 +244,11 @@ class Bm83:
         if len(self._rx) > self._rx_max:
             dprint("[BM83] buffer overflow, clearing to prevent corruption")
             self._rx.clear()
+        def _release_views(rel, body_rel):
+            if body_rel:
+                body_rel()
+            if rel:
+                rel()
     # While loop execution
         while len(out) < max_events:
     # Conditional check
@@ -269,22 +274,17 @@ class Bm83:
             mv = memoryview(self._rx)
             body = mv[3 : 3 + ln]
             chk = mv[3 + ln]
+            # CPython/CircuitPython may or may not expose release; check per view
             release = getattr(mv, "release", None)
             body_release = getattr(body, "release", None)
     # Conditional check
             if chk != self._checksum(hi, lo, body):
-                if body_release:
-                    body_release()
-                if release:
-                    release()
+                _release_views(release, body_release)
                 del self._rx[:1]
                 continue
             op = body[0]
             params = bytes(body[1:])
-            if body_release:
-                body_release()
-            if release:
-                release()
+            _release_views(release, body_release)
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
