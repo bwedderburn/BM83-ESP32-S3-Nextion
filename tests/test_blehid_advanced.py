@@ -44,6 +44,39 @@ def test_blehid_pairing_logic():
     assert ble._need_pairing_check is False
 
 
+def test_on_connect_clears_pair_backoff():
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._next_pair_try_at = 999.0
+
+    with mock.patch("time.monotonic", return_value=100.0):
+        ble._on_connect()
+
+    assert ble._next_pair_try_at == 0.0
+
+
+def test_ensure_paired_does_not_clear_backoff_without_success():
+    class UnknownPairConnection:
+        paired = None
+
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._ble.connections = [UnknownPairConnection()]
+    ble._adv = object()
+    ble._need_pairing_check = True
+    ble._pair_attempts = 0
+    ble._last_pair_try_at = 0.0
+    ble._next_pair_try_at = 100.0
+
+    with mock.patch("time.monotonic", return_value=200.0):
+        ble._ensure_paired()
+
+    assert ble._next_pair_try_at == 100.0
+
+
 def test_blehid_request_erase_bonds_reentry_and_cooldown():
     ble = BleHid(True, "Mock")
     ble._ready = True
