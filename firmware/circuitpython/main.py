@@ -82,6 +82,7 @@ def main():
     ble_volume = ble.volume
     ble_mute = ble.mute
     ble_request_erase_bonds = ble.request_erase_bonds
+    ble_in_critical = ble.in_critical_section
     eq_labels = bm.EQ_L
 
 # endregion
@@ -107,6 +108,8 @@ def main():
     last_total_ms = None
     last_voldn_at = 0.0
     mute_window_s = 0.25
+    BLE_CRITICAL_PLAYSTATUS_PERIOD_S = 2.5
+    BLE_CRITICAL_META_DELAY_S = 1.2
 
     # Hold-and-repeat state for volume controls
     vol_hold_active = None        # None, "up", or "down"
@@ -160,6 +163,12 @@ def main():
         return changed
 # endregion
 
+    def schedule_attrs_with_ble_guard(delay_s=0.35, critical_delay_s=BLE_CRITICAL_META_DELAY_S):
+        if ble_in_critical():
+            bm.schedule_attrs(max(delay_s, critical_delay_s))
+        else:
+            bm.schedule_attrs(delay_s)
+
 # endregion
     # Loop through items
 # Function: enter_aux_mode - Defines the behavior for `enter_aux_mode`.
@@ -183,7 +192,7 @@ def main():
         nonlocal desired_aux
         desired_aux = ""
         bm._next_playstatus_at = monotonic() + 0.05
-        bm.schedule_attrs(0.3)
+        schedule_attrs_with_ble_guard(0.3)
 
 # endregion
     last_gc = monotonic()
@@ -211,6 +220,7 @@ def main():
 
 # endregion
         ble_tick()
+        ble_critical = ble_in_critical()
 
 # endregion
         # Tick non-blocking power state machine
@@ -238,12 +248,18 @@ def main():
 # endregion
     # Conditional check
         if not aux_mode:
-            bm_tick_avrcp()
+            if ble_critical:
+                if now >= bm._next_playstatus_at:
+                    bm._next_playstatus_at = now + BLE_CRITICAL_PLAYSTATUS_PERIOD_S
+            else:
+                bm_tick_avrcp()
         else:
     # Conditional check
             if bm.connected and now >= next_avrcp_probe_at:
-                next_avrcp_probe_at = now + AVRCP_PROBE_PERIOD_S
-                bm_avrcp_get_play_status(0)
+                probe_period = AVRCP_PROBE_PERIOD_S * (2 if ble_critical else 1)
+                next_avrcp_probe_at = now + probe_period
+                if not ble_critical:
+                    bm_avrcp_get_play_status(0)
 
 # endregion
     # Loop through items
@@ -261,7 +277,7 @@ def main():
                     bm.avrcp_register_notification(0x02, interval_s=0)
                     bm.avrcp_register_notification(0x05, interval_s=1)
                     bm._next_playstatus_at = now + 0.05
-                    bm.schedule_attrs(0.8)
+                    schedule_attrs_with_ble_guard(0.8)
     # Conditional check
             elif op == bm.EVT_EQ_MODE_IND and params:
                 mode = params[0]
@@ -292,7 +308,7 @@ def main():
     # Conditional check
                     if maybe_track_changed(pos_ms, total_ms):
                         dprint("[TRACK] inferred change -> request metadata")
-                        bm.schedule_attrs(0.25)
+                        schedule_attrs_with_ble_guard(0.25)
     # Conditional check
                     if nx.current_page == 1 and not aux_mode:
                         flush_page(1)
@@ -302,7 +318,7 @@ def main():
     # Conditional check
                     if event_id == 0x02:
                         dprint("[AVRCP] TrackChanged -> request metadata")
-                        bm.schedule_attrs(0.25)
+                        schedule_attrs_with_ble_guard(0.25)
                         bm.avrcp_reregister_track_changed()
     # Conditional check
                     elif event_id == 0x05 and len(avp) >= 5:

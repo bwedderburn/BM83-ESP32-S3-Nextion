@@ -339,3 +339,43 @@ def test_blehid_erase_bonds_with_advertising_already_stopped():
 
         # When enough time has passed, the settle delay should not sleep.
         # Other sleeps may still occur (post-erase, restart), so we just ensure no exception.
+
+
+def test_blehid_repeated_erase_requests_with_reconnect_churn():
+    """Stress BLE tick loop under repeated erase requests and reconnect churn."""
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._ble.connected = False
+    ble._ble.advertising = True
+    ble._was_connected = False
+    ble._erase_debounce_s = 0.02
+    ble._erase_min_idle_s = 0.01
+    ble._erase_adv_settle_s = 0.0
+    ble._erase_cooldown_s = 0.0
+    ble._erase_max_wait_s = 0.4
+
+    erased = {"count": 0}
+
+    def fake_erase(self):
+        erased["count"] += 1
+        self._erase_adv_stopped = False
+        self._adv_inhibit_until = 0.0
+        self._start_adv(force=True)
+
+    with mock.patch.object(BleHid, "erase_bonds", autospec=True, side_effect=fake_erase):
+        now = 100.0
+        for i in range(120):
+            now += 0.01
+            ble._ble.connected = (i % 10) == 1
+            ble._ble.advertising = not ble._ble.connected
+            if i % 3 == 0:
+                first = ble.request_erase_bonds()
+                if first:
+                    assert ble.request_erase_bonds() is False
+            with mock.patch("time.monotonic", return_value=now):
+                ble.tick()
+
+    assert ble._heavy_op_inflight is None
+    assert ble._erase_timeouts <= 20
