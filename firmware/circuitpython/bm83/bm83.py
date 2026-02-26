@@ -284,7 +284,7 @@ class Bm83:
     # Conditional check
             op = self._rx[body_start]
             # Copy params before trimming the RX buffer.
-            params = bytes(self._rx[body_start + 1 : chk_idx])
+            params = bytes(memoryview(self._rx)[body_start + 1 : chk_idx])
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
