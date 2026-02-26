@@ -554,7 +554,9 @@ class BleHid:
                 self._start_adv(force=erase_succeeded)
             except Exception as e:
                 dprint("[BLE] adv restart after erase failed:", e)
-                self._adv_inhibit_until = self._record_retry("readv", 4.0)
+                current_inhibit = getattr(self, "_adv_inhibit_until", 0.0)
+                new_inhibit = self._record_retry("readv", 4.0)
+                self._adv_inhibit_until = max(current_inhibit, new_inhibit)
         finally:
             self._heavy_op_inflight = None
             self._set_critical_window("erase", 0.6)
