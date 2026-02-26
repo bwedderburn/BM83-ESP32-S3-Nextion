@@ -134,6 +134,7 @@ class BleHid:
         self._mem_free_low = None
         self._tick_burst_hwm = 0
         self._tick_samples = 0
+
     def enable_telemetry(self, enabled=True):
         self._telemetry_enabled = bool(enabled)
 
