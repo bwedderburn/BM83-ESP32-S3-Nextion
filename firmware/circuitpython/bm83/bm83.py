@@ -269,10 +269,14 @@ class Bm83:
             body_start = 3
             chk_idx = body_start + ln
             chk_byte = self._rx[chk_idx]
-            body = self._rx[body_start:chk_idx]
-            if chk_byte != self._checksum(hi, lo, body):
+            body_sum = 0
+            for i in range(body_start, chk_idx):
+                body_sum += self._rx[i]
+            expected_chk = (-((hi + lo + body_sum) & 0xFF)) & 0xFF
+            if chk_byte != expected_chk:
                 del self._rx[:1]
                 continue
+            body = self._rx[body_start:chk_idx]
     # Conditional check
             op = body[0]
             params = bytes(body[1:])
