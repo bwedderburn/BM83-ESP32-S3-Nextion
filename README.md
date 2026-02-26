@@ -32,18 +32,35 @@ esp32_project/
 
 ## 🚀 Deployment Instructions
 
+Deployment is intentionally split into two explicit modes:
+
+### 1) Baseline Mode (.py, recommended first)
+
+Use this mode while bringing up new hardware, debugging regressions, or reproducing bugs.
+
 1. Flash **CircuitPython 10.x** to your ESP32-S3 DevKitC-1.
-2. Copy all project files into the mounted `CIRCUITPY` USB drive.
+2. Copy all files from `firmware/circuitpython/` into the mounted `CIRCUITPY` USB drive.
 3. Install required libraries:
    - `adafruit_ble`
    - `adafruit_hid`
 4. Connect:
    - **BM83** via UART (IO17/IO18)
    - **Nextion** via UART (IO15/IO16)
-5. **Configure Nextion HMI buttons** - See [NEXTION_SETUP.md](NEXTION_SETUP.md) for press/release event configuration
+5. **Configure Nextion HMI buttons** - See [NEXTION_SETUP.md](NEXTION_SETUP.md) for press/release event configuration.
 6. Reset the board. `main.py` will execute and start all services.
 
-**For firmware updates or troubleshooting deployment issues, see [DEPLOYMENT.md](DEPLOYMENT.md)**
+### 2) Optimized Mode (.mpy, production)
+
+Switch to this mode only after baseline `.py` deployment is validated on-device.
+
+1. Build optimized output with `./build_mpy.sh`.
+2. Copy the contents of `dist/circuitpython/` to `CIRCUITPY`.
+3. Ensure required Adafruit libraries are still present in `CIRCUITPY/lib/`:
+   - `adafruit_ble/`
+   - `adafruit_hid/`
+4. Reset and validate runtime behavior.
+
+**For deployment workflows, rollbacks, and troubleshooting, see [DEPLOYMENT.md](DEPLOYMENT.md).**
 
 ### 📦 Building Optimized .mpy Files
 
@@ -103,15 +120,22 @@ pip install mpy-cross
 
 #### Deployment After Build
 
-1. Copy the entire contents of `dist/circuitpython/` to your `CIRCUITPY` drive
-2. Make sure to also install the required Adafruit libraries in `CIRCUITPY/lib/`:
+1. Copy the entire contents of `dist/circuitpython/` to your `CIRCUITPY` drive.
+2. Make sure the required Adafruit libraries are present in `CIRCUITPY/lib/`:
    - `adafruit_ble/`
    - `adafruit_hid/`
-3. Reset the board
+3. Reset the board.
+
+**Recommended flow**: Always validate first with plain `.py` files from `firmware/circuitpython/`, then switch to compiled `.mpy` artifacts from `dist/circuitpython/` for production.
 
 **Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All other modules under `firmware/circuitpython/` are compiled to `.mpy` and placed in `lib/`.
 
-**Important**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. If you encounter `ValueError: incompatible .mpy file` errors, reinstall `mpy-cross` matching your CircuitPython version or use uncompiled `.py` files directly from `firmware/circuitpython/`.
+**Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. If you encounter `ValueError: incompatible .mpy file` errors, reinstall `mpy-cross` matching your CircuitPython version.
+
+**Quick rollback (.mpy → .py)**:
+1. Delete deployed project folders/files from `CIRCUITPY` (`lib/bm83`, `lib/nextion`, `lib/blehid`, `lib/utils`, and project `main.py` if needed).
+2. Recopy `firmware/circuitpython/*` to `CIRCUITPY`.
+3. Reset the board and re-test in baseline `.py` mode.
 
 ## 🧪 Testing
 
