@@ -266,13 +266,10 @@ class Bm83:
     # Conditional check
             if len(self._rx) < total:
                 break
-            frame = memoryview(self._rx)
-            body = frame[3 : 3 + ln]
-            chk = frame[3 + ln]
+            body = self._rx[3 : 3 + ln]
+            chk = self._rx[3 + ln]
     # Conditional check
             if chk != self._checksum(hi, lo, body):
-                body = None
-                frame = None
                 del self._rx[:1]
                 continue
             op = body[0]
@@ -280,8 +277,6 @@ class Bm83:
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
-            body = None
-            frame = None
             del self._rx[:total]
         if self._telemetry_enabled:
             burst = len(out)
