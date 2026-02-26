@@ -274,7 +274,7 @@ class BleHid:
 # endregion
     # Loop through items
 # Function: _start_adv - Defines the behavior for `_start_adv`.
-    def _start_adv(self, force=False):
+    def _start_adv(self, force=False, bypass_inhibit=False):
 # region _start_adv
     # _start_adv handles  start adv logic. #
     # Conditional check
@@ -284,7 +284,7 @@ class BleHid:
 
 # endregion
     # Conditional check
-        if (now < self._adv_inhibit_until) and (not force):
+        if (now < self._adv_inhibit_until) and (not bypass_inhibit):
             return
     # Conditional check
         if getattr(self._ble, "connected", False):
@@ -549,7 +549,7 @@ class BleHid:
             self._erase_adv_stopped = False
 
             time.sleep(BLE_STACK_STABILIZATION_DELAY)
-            self._start_adv(force=erase_succeeded)
+            self._start_adv(force=erase_succeeded, bypass_inhibit=erase_succeeded)
         finally:
             self._heavy_op_inflight = None
             self._set_critical_window("erase", 0.6)
