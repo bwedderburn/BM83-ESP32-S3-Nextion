@@ -296,7 +296,7 @@ class Nextion:
         ):
             end -= 1
 
-        return bytes(memoryview(frame)[start:end]) if start < end else None
+        return frame[start:end] if start < end else None
 # endregion
 
 # endregion
