@@ -44,6 +44,39 @@ def test_blehid_pairing_logic():
     assert ble._need_pairing_check is False
 
 
+def test_on_connect_clears_pair_backoff():
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._next_pair_try_at = 999.0
+
+    with mock.patch("time.monotonic", return_value=100.0):
+        ble._on_connect()
+
+    assert ble._next_pair_try_at == 0.0
+
+
+def test_ensure_paired_does_not_clear_backoff_without_success():
+    class UnknownPairConnection:
+        paired = None
+
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._ble.connections = [UnknownPairConnection()]
+    ble._adv = object()
+    ble._need_pairing_check = True
+    ble._pair_attempts = 0
+    ble._last_pair_try_at = 0.0
+    ble._next_pair_try_at = 100.0
+
+    with mock.patch("time.monotonic", return_value=200.0):
+        ble._ensure_paired()
+
+    assert ble._next_pair_try_at == 100.0
+
+
 def test_blehid_request_erase_bonds_reentry_and_cooldown():
     ble = BleHid(True, "Mock")
     ble._ready = True
@@ -339,3 +372,49 @@ def test_blehid_erase_bonds_with_advertising_already_stopped():
 
         # When enough time has passed, the settle delay should not sleep.
         # Other sleeps may still occur (post-erase, restart), so we just ensure no exception.
+
+
+def test_blehid_repeated_erase_requests_with_reconnect_churn():
+    """Stress BLE tick loop under repeated erase requests and reconnect churn."""
+    ble = BleHid(True, "Mock")
+    ble._ready = True
+    ble._ble = MockBLE()
+    ble._adv = object()
+    ble._ble.connected = False
+    ble._ble.advertising = True
+    ble._was_connected = False
+    ble._erase_debounce_s = 0.02
+    ble._erase_min_idle_s = 0.01
+    ble._erase_adv_settle_s = 0.0
+    ble._erase_cooldown_s = 0.0
+    ble._erase_max_wait_s = 0.4
+
+    erased = {"count": 0}
+
+    def fake_erase(self):
+        self._heavy_op_inflight = "erase"
+        try:
+            # Re-entry should be blocked while an erase is inflight.
+            assert self.request_erase_bonds() is False
+            erased["count"] += 1
+            self._erase_adv_stopped = False
+            self._adv_inhibit_until = 0.0
+            self._start_adv(force=True)
+        finally:
+            self._heavy_op_inflight = None
+
+    with mock.patch.object(BleHid, "erase_bonds", autospec=True, side_effect=fake_erase):
+        now = 100.0
+        for i in range(120):
+            now += 0.01
+            ble._ble.connected = (i % 10) == 1
+            ble._ble.advertising = not ble._ble.connected
+            with mock.patch("time.monotonic", return_value=now):
+                if i % 3 == 0:
+                    erase_initiated = ble.request_erase_bonds()
+                    if erase_initiated:
+                        assert ble.request_erase_bonds() is False
+                ble.tick()
+
+    assert ble._heavy_op_inflight is None
+    assert ble._erase_timeouts <= 20

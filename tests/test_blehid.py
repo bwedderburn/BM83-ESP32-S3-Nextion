@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from blehid.ble import BleHid, _read_ble_counter, _write_ble_counter
 
 
@@ -169,8 +170,9 @@ def test_erase_bonds_with_failing_erase_bonding():
     with mock.patch("time.sleep"):  # Skip delays in test for speed
         blehid.erase_bonds()
 
-    # Should still attempt to restart advertising
-    assert blehid._ble.advertising is True
+    # On erase failure, re-advertise should be deferred via backoff
+    assert blehid._ble.advertising is False
+    assert blehid._adv_inhibit_until > time.monotonic()
 
     # BLE name should NOT be updated when erase_bonding fails
     assert blehid.name == "TestDevice"
@@ -247,6 +249,53 @@ def test_erase_bonds_with_oserror_advertising_failure():
     assert blehid._ble.advertising is False
     # Inhibit should be set to allow stack to recover
     assert blehid._adv_inhibit_until > 100.0
+
+
+def test_erase_bonds_erase_failure_defers_advertising_restart():
+    """Test that erase failure backoff defers advertising restart attempts."""
+    from unittest import mock
+
+    class BothFailBLE:
+        connected = False
+        advertising = False
+        name = ""
+        connections = []
+        start_calls = 0
+
+        def start_advertising(self, adv):
+            self.start_calls += 1
+            raise RuntimeError("Nimble out of memory")
+
+        def stop_advertising(self):
+            self.advertising = False
+
+        def erase_bonding(self):
+            raise RuntimeError("Erase bonding error")
+
+    blehid = BleHid(enabled=True, name="TestDevice")
+    blehid._ble = BothFailBLE()
+    blehid._adv = object()
+    blehid._ready = True
+    # Set high failure count to verify erase backoff is honored.
+    # backoff = min(8.0, 2.0 + 5*1.0) = 7.0 -> erase inhibit = now + 7.0
+    blehid._erase_failures = 4  # will be incremented to 5 inside erase_bonds
+
+    with mock.patch("time.monotonic", return_value=100.0):
+        with mock.patch("time.sleep"):
+            blehid.erase_bonds()
+
+    # Erase failure sets backoff and advertising restart is deferred (no start call yet)
+    assert blehid._adv_inhibit_until == 107.0
+    assert blehid._ble.start_calls == 0
+    assert blehid._adv_failures == 0
+    assert blehid._ble.advertising is False
+    assert blehid._erase_failures == 5
+
+    # Once backoff expires, advertising restart is attempted.
+    with mock.patch("time.monotonic", return_value=108.0):
+        blehid._start_adv(force=False)
+    assert blehid._ble.start_calls == 1
+    assert blehid._adv_failures == 1
 
 
 def test_erase_bonds_with_readonly_filesystem():
