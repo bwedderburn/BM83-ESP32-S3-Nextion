@@ -50,6 +50,7 @@ class BleHid:
         "_cc_min_interval_s",
         "_need_pairing_check",
         "_last_pair_try_at",
+        "_next_pair_try_at",
         "_pair_retry_s",
         "_pair_attempts",
         "_pair_attempt_limit",
@@ -114,6 +115,7 @@ class BleHid:
 # endregion
         self._need_pairing_check = False
         self._last_pair_try_at = 0.0
+        self._next_pair_try_at = 0.0
         self._pair_retry_s = 2.0
         self._pair_attempts = 0
         self._pair_attempt_limit = 4
@@ -166,7 +168,7 @@ class BleHid:
             "erase_timeouts": self._erase_timeouts,
             "pair_failures": self._pair_failures,
             "adv_failures": self._adv_failures,
-            "retry_counts": self._retry_counts,
+            "retry_counts": dict(self._retry_counts),
             "ble_critical_active": self.in_critical_section(),
         }
 
@@ -363,9 +365,11 @@ class BleHid:
             self._need_pairing_check = False
             return
         now = time.monotonic()
-    # Conditional check
+        # _next_pair_try_at: backoff after failures (cleared on success); _last_pair_try_at: steady-state spacing.
+        if now < self._next_pair_try_at:
+            return  # respect backoff after previous failure
         if (now - self._last_pair_try_at) < self._pair_retry_s:
-            return
+            return  # steady-state spacing between pairing attempts
         self._last_pair_try_at = now
 
 # endregion
@@ -400,11 +404,14 @@ class BleHid:
             except Exception as e:
                 self._pair_attempts += 1
                 self._pair_failures += 1
-                self._last_pair_try_at = self._record_retry(
+                self._next_pair_try_at = self._record_retry(
                     "pair",
                     self._backoff_delay(self._pair_attempts, base_s=1.0, step_s=0.5, cap_s=6.0)
                 )
                 dprint("[BLE] pair err (attempt %d):" % self._pair_attempts, e)
+            else:
+                # Clear any backoff once a pairing attempt succeeds
+                self._next_pair_try_at = 0.0
 
 # endregion
     # Loop through items
@@ -496,27 +503,27 @@ class BleHid:
             gc.collect()
             self._telemetry_touch(1)
 
-            ok = False
+            erase_succeeded = False
             try:
                 if hasattr(self._ble, "erase_bonding"):
                     self._ble.erase_bonding()
-                    ok = True
+                    erase_succeeded = True
             except Exception as e:
                 dprint("[BLE] erase_bonding err:", e)
 
-            if not ok:
+            if not erase_succeeded:
                 try:
                     import _bleio
                     if hasattr(_bleio.adapter, "erase_bonding"):
                         _bleio.adapter.erase_bonding()
-                        ok = True
+                        erase_succeeded = True
                 except Exception as e:
                     dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
 
-            print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
+            print("[BLE] erase_bonding:", "OK" if erase_succeeded else "Unavailable on this build")
             time.sleep(BLE_STACK_STABILIZATION_DELAY)
 
-            if ok:
+            if erase_succeeded:
                 if self._counter_persisted:
                     persisted_counter = _read_ble_counter()
                     counter = max(persisted_counter, self._memory_counter) + 1
@@ -535,7 +542,7 @@ class BleHid:
             gc.collect()
             self._telemetry_touch(1)
 
-            if ok:
+            if erase_succeeded:
                 self._adv_inhibit_until = 0.0
                 self._adv_oom_count = 0
             self._need_pairing_check = False
@@ -544,7 +551,7 @@ class BleHid:
 
             time.sleep(BLE_STACK_STABILIZATION_DELAY)
             try:
-                self._start_adv(force=True)
+                self._start_adv(force=erase_succeeded)
             except Exception as e:
                 dprint("[BLE] adv restart after erase failed:", e)
                 self._adv_inhibit_until = self._record_retry("readv", 4.0)
