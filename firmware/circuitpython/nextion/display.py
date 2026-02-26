@@ -4,6 +4,12 @@ from utils.common import dprint, _sanitize_text
 
 # endregion
 TERM = b"\xFF\xFF\xFF"
+_TOKEN_BYTE_MIN_NUM = 48
+_TOKEN_BYTE_MAX_NUM = 57
+_TOKEN_BYTE_MIN_ALPHA = 65
+_TOKEN_BYTE_MAX_ALPHA = 90
+_TOKEN_BYTE_USCORE = 95
+_TRIM_BYTES = b" \t\n\r\x0b\x0c"
 
 # EQ mapping for test compatibility
 EQ_MAP = {
@@ -251,7 +257,7 @@ class Nextion:
             return None
 # endregion
         frame = bytes(self._rx[:i])
-        self._rx = self._rx[i + 3:]
+        del self._rx[: i + 3]
     # Return the result
         return frame
 # endregion
@@ -263,21 +269,34 @@ class Nextion:
     def _extract_token(frame):
 # region _extract_token
     # _extract_token handles token extraction logic. #
-        f = frame.strip()
-        if not f:
+        if not frame:
+            return None
+
+        # strip() without intermediate bytes allocation
+        start = 0
+        end = len(frame)
+        while start < end and frame[start] in _TRIM_BYTES:
+            start += 1
+        while end > start and frame[end - 1] in _TRIM_BYTES:
+            end -= 1
+        if start >= end:
             return None
 
         # Remove leading and trailing non-token bytes (filter noise)
-        # Valid token bytes: A-Z (65-90), 0-9 (48-57), _ (95)
-        start = 0
-        while start < len(f) and not (48 <= f[start] <= 57 or 65 <= f[start] <= 90 or f[start] == 95):
+        while start < end and not (
+            _TOKEN_BYTE_MIN_NUM <= frame[start] <= _TOKEN_BYTE_MAX_NUM
+            or _TOKEN_BYTE_MIN_ALPHA <= frame[start] <= _TOKEN_BYTE_MAX_ALPHA
+            or frame[start] == _TOKEN_BYTE_USCORE
+        ):
             start += 1
-
-        end = len(f)
-        while end > start and not (48 <= f[end - 1] <= 57 or 65 <= f[end - 1] <= 90 or f[end - 1] == 95):
+        while end > start and not (
+            _TOKEN_BYTE_MIN_NUM <= frame[end - 1] <= _TOKEN_BYTE_MAX_NUM
+            or _TOKEN_BYTE_MIN_ALPHA <= frame[end - 1] <= _TOKEN_BYTE_MAX_ALPHA
+            or frame[end - 1] == _TOKEN_BYTE_USCORE
+        ):
             end -= 1
 
-        return f[start:end] if start < end else None
+        return frame[start:end] if start < end else None
 # endregion
 
 # endregion

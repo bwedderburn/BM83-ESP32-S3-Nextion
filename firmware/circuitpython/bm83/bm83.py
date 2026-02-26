@@ -1,6 +1,6 @@
 import time
 import gc
-from utils.common import dprint
+from utils.common import dprint, DEBUG
 from utils.compat import const
 
 # endregion
@@ -154,6 +154,14 @@ class Bm83:
     # _checksum handles  checksum logic. #
     # Return the result
         return (-((hi + lo + sum(body)) & 0xFF)) & 0xFF
+
+    @staticmethod
+    def _checksum_range(hi, lo, buf, start, end):
+        """Compute checksum over buf[start:end] without creating an intermediate view."""
+        body_sum = 0
+        for i in range(start, end):
+            body_sum += buf[i]
+        return (-((hi + lo + body_sum) & 0xFF)) & 0xFF
 # endregion
 
 # endregion
@@ -256,7 +264,7 @@ class Bm83:
                 break
     # Conditional check
             if sof > 0:
-                self._rx = self._rx[sof:]
+                del self._rx[:sof]
     # Conditional check
             if len(self._rx) < 4:
                 break
@@ -266,17 +274,21 @@ class Bm83:
     # Conditional check
             if len(self._rx) < total:
                 break
-            body = bytes(self._rx[3 : 3 + ln])
-            chk = self._rx[3 + ln]
-    # Conditional check
-            if chk != self._checksum(hi, lo, body):
-                self._rx = self._rx[1:]
+            body_start = 3
+            chk_idx = body_start + ln
+            chk_byte = self._rx[chk_idx]
+            expected_chk = self._checksum_range(hi, lo, self._rx, body_start, chk_idx)
+            if chk_byte != expected_chk:
+                del self._rx[:1]
                 continue
-            op = body[0]
-            params = body[1:]
-            dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
+    # Conditional check
+            op = self._rx[body_start]
+            # Copy params before trimming the RX buffer.
+            params = bytes(memoryview(self._rx)[body_start + 1 : chk_idx])
+            if DEBUG:
+                dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
-            self._rx = self._rx[total:]
+            del self._rx[:total]
         if self._telemetry_enabled:
             burst = len(out)
             self._poll_samples += 1
