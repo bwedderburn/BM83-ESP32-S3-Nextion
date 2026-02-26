@@ -50,13 +50,13 @@ class Bm83:
         "_mem_free_low",
     )
     @staticmethod
-    def _release_views(frame_release_fn, body_release_fn):
+    def _release_views(frame_release, body_release):
         # Drop the child view first so releasing the parent view cannot fail on
         # runtimes that track outstanding exports.
-        if body_release_fn:
-            body_release_fn()
-        if frame_release_fn:
-            frame_release_fn()
+        if body_release:
+            body_release()
+        if frame_release:
+            frame_release()
     OP_MMI_ACTION = const(0x02)
     OP_EVENT_FILTER = const(0x03)
     OP_MUSIC_CONTROL = const(0x04)
