@@ -3,6 +3,8 @@ import gc
 from utils.common import dprint, DEBUG
 from utils.compat import const
 
+_MV_HAS_RELEASE = hasattr(memoryview(b""), "release")
+
 # endregion
 # endregion
 _AVRCP_ATTR_IDS = (1, 2, 3, 6, 4, 5, 7)
@@ -269,21 +271,22 @@ class Bm83:
             mv = memoryview(self._rx)
             body = mv[3 : 3 + ln]
             chk = mv[3 + ln]
-            release = getattr(mv, "release", None)
+            release = mv.release if _MV_HAS_RELEASE else None
+            body_release = body.release if _MV_HAS_RELEASE else None
     # Conditional check
             if chk != self._checksum(hi, lo, body):
+                if body_release:
+                    body_release()
                 if release:
                     release()
-                body = None
-                mv = None
                 del self._rx[:1]
                 continue
             op = body[0]
             params = bytes(body[1:])
+            if body_release:
+                body_release()
             if release:
                 release()
-            body = None
-            mv = None
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
