@@ -50,11 +50,13 @@ class Bm83:
         "_mem_free_low",
     )
     @staticmethod
-    def _release_views(frame_release, body_release):
-        if body_release:
-            body_release()
-        if frame_release:
-            frame_release()
+    def _release_views(frame_release_fn, body_release_fn):
+        # Drop the child view first so releasing the parent view cannot fail on
+        # runtimes that track outstanding exports.
+        if body_release_fn:
+            body_release_fn()
+        if frame_release_fn:
+            frame_release_fn()
     OP_MMI_ACTION = const(0x02)
     OP_EVENT_FILTER = const(0x03)
     OP_MUSIC_CONTROL = const(0x04)
@@ -276,16 +278,16 @@ class Bm83:
             body = mv[3 : 3 + ln]
             chk = mv[3 + ln]
             # CPython/CircuitPython may or may not expose release; check per view
-            release = getattr(mv, "release", None)
+            frame_release = getattr(mv, "release", None)
             body_release = getattr(body, "release", None)
     # Conditional check
             if chk != self._checksum(hi, lo, body):
-                self._release_views(release, body_release)
+                self._release_views(frame_release, body_release)
                 del self._rx[:1]
                 continue
             op = body[0]
             params = bytes(body[1:])
-            self._release_views(release, body_release)
+            self._release_views(frame_release, body_release)
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
