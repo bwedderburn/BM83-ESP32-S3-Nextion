@@ -49,6 +49,12 @@ class Bm83:
         "_poll_samples",
         "_mem_free_low",
     )
+    @staticmethod
+    def _release_views(frame_release, body_release):
+        if body_release:
+            body_release()
+        if frame_release:
+            frame_release()
     OP_MMI_ACTION = const(0x02)
     OP_EVENT_FILTER = const(0x03)
     OP_MUSIC_CONTROL = const(0x04)
@@ -244,11 +250,6 @@ class Bm83:
         if len(self._rx) > self._rx_max:
             dprint("[BM83] buffer overflow, clearing to prevent corruption")
             self._rx.clear()
-        def _release_views(frame_release, body_release):
-            if body_release:
-                body_release()
-            if frame_release:
-                frame_release()
     # While loop execution
         while len(out) < max_events:
     # Conditional check
@@ -279,12 +280,12 @@ class Bm83:
             body_release = getattr(body, "release", None)
     # Conditional check
             if chk != self._checksum(hi, lo, body):
-                _release_views(release, body_release)
+                self._release_views(release, body_release)
                 del self._rx[:1]
                 continue
             op = body[0]
             params = bytes(body[1:])
-            _release_views(release, body_release)
+            self._release_views(release, body_release)
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
