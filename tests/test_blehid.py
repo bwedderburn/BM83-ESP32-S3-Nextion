@@ -251,6 +251,46 @@ def test_erase_bonds_with_oserror_advertising_failure():
     assert blehid._adv_inhibit_until > 100.0
 
 
+def test_erase_bonds_with_both_erase_and_adv_failure():
+    """Test that when both erase_bonding AND advertising restart fail,
+    max() preserves the longer erase backoff over the fixed readv delay."""
+    from unittest import mock
+
+    class BothFailBLE:
+        connected = False
+        advertising = False
+        name = ""
+        connections = []
+
+        def start_advertising(self, adv):
+            raise RuntimeError("Nimble out of memory")
+
+        def stop_advertising(self):
+            self.advertising = False
+
+        def erase_bonding(self):
+            raise RuntimeError("Erase bonding error")
+
+    blehid = BleHid(enabled=True, name="TestDevice")
+    blehid._ble = BothFailBLE()
+    blehid._adv = object()
+    blehid._ready = True
+    # Set high failure count so erase backoff exceeds the 4s readv delay.
+    # backoff = min(8.0, 2.0 + 5*1.0) = 7.0 -> erase inhibit = now + 7.0
+    # readv inhibit = now + 4.0
+    # max(now+7.0, now+4.0) should be now+7.0
+    blehid._erase_failures = 4  # will be incremented to 5 inside erase_bonds
+
+    with mock.patch("time.monotonic", return_value=100.0):
+        with mock.patch("time.sleep"):
+            blehid.erase_bonds()
+
+    # The erase backoff (7.0s) is longer than readv (4.0s), so it must be preserved
+    assert blehid._adv_inhibit_until == 107.0
+    assert blehid._ble.advertising is False
+    assert blehid._erase_failures == 5
+
+
 def test_erase_bonds_with_readonly_filesystem():
     """Test that erase_bonds works even when filesystem is read-only."""
     from unittest import mock
