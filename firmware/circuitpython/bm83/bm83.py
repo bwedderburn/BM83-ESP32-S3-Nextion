@@ -157,6 +157,7 @@ class Bm83:
 
     @staticmethod
     def _checksum_range(hi, lo, buf, start, end):
+        """Compute checksum over buf[start:end] without creating an intermediate view."""
         body_sum = 0
         for i in range(start, end):
             body_sum += buf[i]
@@ -282,6 +283,7 @@ class Bm83:
                 continue
     # Conditional check
             op = self._rx[body_start]
+            # Copy params before trimming the RX buffer.
             params = bytes(self._rx[body_start + 1 : chk_idx])
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
