@@ -111,7 +111,7 @@ If that happens:
 If optimized deployment fails, quickly return to known-good source mode:
 
 1. Remove deployed project artifacts from `CIRCUITPY` (compiled project modules under `lib/` and project `main.py` if needed).
-2. Recopy plain files from `firmware/circuitpython/`:
+2. Re-copy plain files from `firmware/circuitpython/`:
    ```bash
    cp -r firmware/circuitpython/* /path/to/CIRCUITPY/
    ```

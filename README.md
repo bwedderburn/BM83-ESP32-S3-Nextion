@@ -134,7 +134,7 @@ pip install mpy-cross
 
 **Quick rollback (.mpy → .py)**:
 1. Delete deployed project folders/files from `CIRCUITPY` (`lib/bm83`, `lib/nextion`, `lib/blehid`, `lib/utils`, and project `main.py` if needed).
-2. Recopy `firmware/circuitpython/*` to `CIRCUITPY`.
+2. Re-copy `firmware/circuitpython/*` to `CIRCUITPY`.
 3. Reset the board and re-test in baseline `.py` mode.
 
 ## 🧪 Testing
