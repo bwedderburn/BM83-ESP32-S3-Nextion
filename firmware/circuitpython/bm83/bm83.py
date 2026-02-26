@@ -244,11 +244,11 @@ class Bm83:
         if len(self._rx) > self._rx_max:
             dprint("[BM83] buffer overflow, clearing to prevent corruption")
             self._rx.clear()
-        def _release_views(rel, body_rel):
-            if body_rel:
-                body_rel()
-            if rel:
-                rel()
+        def _release_views(frame_release, body_release):
+            if body_release:
+                body_release()
+            if frame_release:
+                frame_release()
     # While loop execution
         while len(out) < max_events:
     # Conditional check
