@@ -269,11 +269,10 @@ class Bm83:
             body_start = 3
             chk_idx = body_start + ln
             chk_byte = self._rx[chk_idx]
-            # _checksum sums the iterable once; generator avoids extra slicing.
-            if chk_byte != self._checksum(hi, lo, (self._rx[i] for i in range(body_start, chk_idx))):
+            body = self._rx[body_start:chk_idx]
+            if chk_byte != self._checksum(hi, lo, body):
                 del self._rx[:1]
                 continue
-            body = self._rx[body_start:chk_idx]
     # Conditional check
             op = body[0]
             params = bytes(body[1:])
