@@ -11,6 +11,16 @@ def test_checksum():
     assert total == 0
 
 
+def test_checksum_range_matches_checksum():
+    """_checksum_range over buf[start:end] must equal _checksum for the same bytes."""
+    hi, lo = 0x00, 0x03
+    body = bytearray([0x01, 0x02, 0x03])
+    assert Bm83._checksum_range(hi, lo, body, 0, len(body)) == Bm83._checksum(hi, lo, body)
+    # With an offset into a larger buffer
+    buf = bytearray([0xFF, 0x01, 0x02, 0x03, 0xFF])
+    assert Bm83._checksum_range(hi, lo, buf, 1, 4) == Bm83._checksum(hi, lo, buf[1:4])
+
+
 def test_avc_payload():
     pdu = 0x30
     params = b"\x01\x02"
