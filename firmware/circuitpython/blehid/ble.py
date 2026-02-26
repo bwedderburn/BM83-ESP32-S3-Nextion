@@ -67,6 +67,10 @@ class BleHid:
         "_erase_adv_settle_s",
         "_memory_counter",
         "_counter_persisted",
+        "_telemetry_enabled",
+        "_mem_free_low",
+        "_tick_burst_hwm",
+        "_tick_samples",
     )
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
@@ -126,6 +130,35 @@ class BleHid:
         # When filesystem is read-only, _memory_counter continues to increment while _counter_persisted=False
         self._memory_counter = 0
         self._counter_persisted = False
+        self._telemetry_enabled = False
+        self._mem_free_low = None
+        self._tick_burst_hwm = 0
+        self._tick_samples = 0
+    def enable_telemetry(self, enabled=True):
+        self._telemetry_enabled = bool(enabled)
+
+    def telemetry_snapshot(self):
+        return {
+            "mem_free_low": self._mem_free_low,
+            "tick_burst_hwm": self._tick_burst_hwm,
+            "tick_samples": self._tick_samples,
+            "adv_oom_count": self._adv_oom_count,
+        }
+
+    def _telemetry_touch(self, burst=0):
+        if not self._telemetry_enabled:
+            return
+        self._tick_samples += 1
+        if burst > self._tick_burst_hwm:
+            self._tick_burst_hwm = burst
+        free = None
+        try:
+            free = gc.mem_free()
+        except Exception:
+            free = None
+        if free is not None and (self._mem_free_low is None or free < self._mem_free_low):
+            self._mem_free_low = free
+
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
@@ -389,6 +422,7 @@ class BleHid:
         # run and freed their memory. This is critical before memory-intensive BLE operations.
         gc.collect()
         gc.collect()
+        self._telemetry_touch(1)
 
         # Disconnect all connections with individual error handling
     # Try block to catch exceptions
@@ -412,6 +446,7 @@ class BleHid:
 
         # Another GC pass after disconnections
         gc.collect()
+        self._telemetry_touch(1)
 
         ok = False
     # Try block to catch exceptions
@@ -471,6 +506,7 @@ class BleHid:
 
         # Final GC pass before restarting advertising
         gc.collect()
+        self._telemetry_touch(1)
 
         # Reset state
         self._adv_inhibit_until = 0.0
@@ -520,6 +556,7 @@ class BleHid:
     # Conditional check
         if not self._ready or not self._ble:
             return
+        burst = 0
         now = time.monotonic()
         ble = self._ble
         is_advertising = self._is_advertising
@@ -535,6 +572,7 @@ class BleHid:
             if self._erase_adv_stopped and (now - self._last_adv_stop_at) < self._erase_adv_settle_s:
                 return
             stop_adv()
+            burst += 1
             self._erase_adv_stopped = True
             self._last_adv_stop_at = now
             self._erase_requested_at = now
@@ -547,6 +585,7 @@ class BleHid:
                 # Run erase inside try to avoid propagating BLE stack crashes
                 try:
                     self.erase_bonds()
+                    burst += 1
                 except Exception as e:
                     dprint("[BLE] erase_bonds crash:", e)
             else:
@@ -572,8 +611,10 @@ class BleHid:
     # Conditional check
             if connected:
                 on_connect()
+                burst += 1
             else:
                 on_disconnect()
+                burst += 1
     # Conditional check
         if not connected:
             if self._erase_pending:
@@ -582,6 +623,7 @@ class BleHid:
     # Conditional check
             if not advertising:
                 start_adv(force=False)
+                burst += 1
     # Conditional check
             elif (now - self._last_adv_kick_at) > self._adv_kick_period_s:
                 self._last_adv_kick_at = now
@@ -589,6 +631,9 @@ class BleHid:
     # Conditional check
             if self._need_pairing_check:
                 ensure_paired()
+                burst += 1
+
+        self._telemetry_touch(burst)
 
 # endregion
     # Loop through items

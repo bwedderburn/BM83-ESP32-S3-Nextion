@@ -35,6 +35,8 @@ BM83_BAUD = const(115200)
 NX_TX, NX_RX = _get_pin("IO43"), _get_pin("IO44")
 BM83_TX, BM83_RX = _get_pin("IO17"), _get_pin("IO18")
 VOL_REPEAT_MAX = const(10)
+TELEMETRY_DEBUG = False
+TELEMETRY_PRINT_EVERY_S = 10.0
 
 # endregion
 BLE_ENABLED = True
@@ -49,7 +51,7 @@ def main():
 
 # endregion
     nx_uart = busio.UART(NX_TX, NX_RX, baudrate=NX_BAUD, timeout=0.0, receiver_buffer_size=1024)
-    bm_uart = busio.UART(BM83_TX, BM83_RX, baudrate=BM83_BAUD, timeout=0.0, receiver_buffer_size=8192)
+    bm_uart = busio.UART(BM83_TX, BM83_RX, baudrate=BM83_BAUD, timeout=0.0, receiver_buffer_size=4096)
 
 # endregion
     nx = Nextion(nx_uart)
@@ -58,6 +60,11 @@ def main():
 # endregion
     ble = BleHid(BLE_ENABLED, BLE_NAME)
     ble.setup()
+
+    if TELEMETRY_DEBUG:
+        nx.enable_telemetry(True)
+        bm.enable_telemetry(True)
+        ble.enable_telemetry(True)
 
 # endregion
     # Local bindings for speed/low allocation on mpy
@@ -181,6 +188,7 @@ def main():
 # endregion
     last_gc = monotonic()
     gc_interval_s = 4.0  # Empirically chosen: 4s strikes a balance between GC overhead and memory pressure
+    next_telemetry_at = monotonic() + TELEMETRY_PRINT_EVERY_S
     # On this workload (BM83 + Nextion event floods), 8s GC caused occasional alloc failures,
     # while <=2s GC increased pause time without reducing peak usage further. Tweak if patterns change.
 
@@ -425,6 +433,12 @@ def main():
                             ble_volume(False)
                         vol_last_repeat_at = now
                         vol_repeat_count += 1
+
+        if TELEMETRY_DEBUG and now >= next_telemetry_at:
+            next_telemetry_at = now + TELEMETRY_PRINT_EVERY_S
+            print("[TEL] BM", bm.telemetry_snapshot())
+            print("[TEL] NX", nx.telemetry_snapshot())
+            print("[TEL] BLE", ble.telemetry_snapshot())
 
         sleep(0.005)
 
