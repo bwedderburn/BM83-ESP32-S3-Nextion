@@ -359,10 +359,16 @@ def test_blehid_repeated_erase_requests_with_reconnect_churn():
     erased = {"count": 0}
 
     def fake_erase(self):
-        erased["count"] += 1
-        self._erase_adv_stopped = False
-        self._adv_inhibit_until = 0.0
-        self._start_adv(force=True)
+        self._heavy_op_inflight = "erase"
+        try:
+            # Re-entry should be blocked while an erase is inflight.
+            assert self.request_erase_bonds() is False
+            erased["count"] += 1
+            self._erase_adv_stopped = False
+            self._adv_inhibit_until = 0.0
+            self._start_adv(force=True)
+        finally:
+            self._heavy_op_inflight = None
 
     with mock.patch.object(BleHid, "erase_bonds", autospec=True, side_effect=fake_erase):
         now = 100.0
