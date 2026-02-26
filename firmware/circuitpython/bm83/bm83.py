@@ -1,6 +1,6 @@
 import time
 import gc
-from utils.common import dprint
+from utils.common import dprint, DEBUG
 from utils.compat import const
 
 # endregion
@@ -256,7 +256,7 @@ class Bm83:
                 break
     # Conditional check
             if sof > 0:
-                self._rx = self._rx[sof:]
+                del self._rx[:sof]
     # Conditional check
             if len(self._rx) < 4:
                 break
@@ -266,17 +266,23 @@ class Bm83:
     # Conditional check
             if len(self._rx) < total:
                 break
-            body = bytes(self._rx[3 : 3 + ln])
-            chk = self._rx[3 + ln]
+            frame = memoryview(self._rx)
+            body = frame[3 : 3 + ln]
+            chk = frame[3 + ln]
     # Conditional check
             if chk != self._checksum(hi, lo, body):
-                self._rx = self._rx[1:]
+                body = None
+                frame = None
+                del self._rx[:1]
                 continue
             op = body[0]
-            params = body[1:]
-            dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
+            params = bytes(body[1:])
+            if DEBUG:
+                dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
-            self._rx = self._rx[total:]
+            body = None
+            frame = None
+            del self._rx[:total]
         if self._telemetry_enabled:
             burst = len(out)
             self._poll_samples += 1
