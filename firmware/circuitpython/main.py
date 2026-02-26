@@ -220,7 +220,6 @@ def main():
         elif tok == b"BT_EBIND":
             ble_request_erase_bonds()
 
-
 # endregion
     # Loop through items
 # Function: enter_aux_mode - Defines the behavior for `enter_aux_mode`.

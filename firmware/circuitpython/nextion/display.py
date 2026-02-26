@@ -4,7 +4,7 @@ from utils.common import dprint, _sanitize_text
 
 # endregion
 TERM = b"\xFF\xFF\xFF"
-_TOKEN_BYTE_MIN = 48
+_TOKEN_BYTE_MIN_NUM = 48
 _TOKEN_BYTE_MAX_NUM = 57
 _TOKEN_BYTE_MIN_ALPHA = 65
 _TOKEN_BYTE_MAX_ALPHA = 90
@@ -284,13 +284,13 @@ class Nextion:
 
         # Remove leading and trailing non-token bytes (filter noise)
         while start < end and not (
-            _TOKEN_BYTE_MIN <= frame[start] <= _TOKEN_BYTE_MAX_NUM
+            _TOKEN_BYTE_MIN_NUM <= frame[start] <= _TOKEN_BYTE_MAX_NUM
             or _TOKEN_BYTE_MIN_ALPHA <= frame[start] <= _TOKEN_BYTE_MAX_ALPHA
             or frame[start] == _TOKEN_BYTE_USCORE
         ):
             start += 1
         while end > start and not (
-            _TOKEN_BYTE_MIN <= frame[end - 1] <= _TOKEN_BYTE_MAX_NUM
+            _TOKEN_BYTE_MIN_NUM <= frame[end - 1] <= _TOKEN_BYTE_MAX_NUM
             or _TOKEN_BYTE_MIN_ALPHA <= frame[end - 1] <= _TOKEN_BYTE_MAX_ALPHA
             or frame[end - 1] == _TOKEN_BYTE_USCORE
         ):
