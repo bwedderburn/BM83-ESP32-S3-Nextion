@@ -256,7 +256,7 @@ class Nextion:
     # Return the result
             return None
 # endregion
-        frame = bytes(memoryview(self._rx)[:i])
+        frame = bytes(self._rx[:i])
         del self._rx[: i + 3]
     # Return the result
         return frame
