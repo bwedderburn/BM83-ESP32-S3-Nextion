@@ -1,4 +1,5 @@
 import time
+import gc
 from utils.common import dprint
 from utils.compat import const
 
@@ -42,6 +43,11 @@ class Bm83:
         "_eq_throttle_s",
         "_last_track_changed_reg_at",
         "_track_changed_reg_throttle_s",
+        "_telemetry_enabled",
+        "_rx_hwm",
+        "_poll_burst_hwm",
+        "_poll_samples",
+        "_mem_free_low",
     )
     OP_MMI_ACTION = const(0x02)
     OP_EVENT_FILTER = const(0x03)
@@ -88,7 +94,7 @@ class Bm83:
     # __init__ handles   init   logic. #
         self.uart = uart
         self._rx = bytearray()
-        self._rx_max = 4096  # Max buffer size to prevent memory exhaustion
+        self._rx_max = 6144  # Tuned from stress telemetry: parser bursts reached ~4.3KB under synthetic floods
         self.power_on = False
         self.eq_index = 0
         self.connected = False
@@ -110,6 +116,34 @@ class Bm83:
         # TrackChanged re-registration throttle to prevent feedback loops
         self._last_track_changed_reg_at = 0.0
         self._track_changed_reg_throttle_s = 2.0  # Min time between re-registrations
+        self._telemetry_enabled = False
+        self._rx_hwm = 0
+        self._poll_burst_hwm = 0
+        self._poll_samples = 0
+        self._mem_free_low = None
+
+    def enable_telemetry(self, enabled=True):
+        self._telemetry_enabled = bool(enabled)
+
+    def telemetry_snapshot(self):
+        return {
+            "rx_hwm": self._rx_hwm,
+            "rx_max": self._rx_max,
+            "poll_burst_hwm": self._poll_burst_hwm,
+            "poll_samples": self._poll_samples,
+            "mem_free_low": self._mem_free_low,
+        }
+
+    def _telemetry_touch(self):
+        if not self._telemetry_enabled:
+            return
+        free = None
+        try:
+            free = gc.mem_free()
+        except Exception:
+            free = None
+        if free is not None and (self._mem_free_low is None or free < self._mem_free_low):
+            self._mem_free_low = free
 
 # endregion
     @staticmethod
@@ -203,6 +237,8 @@ class Bm83:
     # Conditional check
         if chunk:
             self._rx.extend(chunk)
+            if self._telemetry_enabled and len(self._rx) > self._rx_hwm:
+                self._rx_hwm = len(self._rx)
         # Limit buffer size to prevent memory exhaustion - clear buffer on overflow
         # since partial frames would be corrupted anyway
         if len(self._rx) > self._rx_max:
@@ -241,6 +277,12 @@ class Bm83:
             dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
             self._rx = self._rx[total:]
+        if self._telemetry_enabled:
+            burst = len(out)
+            self._poll_samples += 1
+            if burst > self._poll_burst_hwm:
+                self._poll_burst_hwm = burst
+            self._telemetry_touch()
     # Return the result
         return out
 # endregion
