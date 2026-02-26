@@ -3,8 +3,6 @@ import gc
 from utils.common import dprint, DEBUG
 from utils.compat import const
 
-_MV_HAS_RELEASE = hasattr(memoryview(b""), "release")
-
 # endregion
 # endregion
 _AVRCP_ATTR_IDS = (1, 2, 3, 6, 4, 5, 7)
@@ -271,8 +269,8 @@ class Bm83:
             mv = memoryview(self._rx)
             body = mv[3 : 3 + ln]
             chk = mv[3 + ln]
-            release = mv.release if _MV_HAS_RELEASE else None
-            body_release = body.release if _MV_HAS_RELEASE else None
+            release = getattr(mv, "release", None)
+            body_release = getattr(body, "release", None)
     # Conditional check
             if chk != self._checksum(hi, lo, body):
                 if body_release:
