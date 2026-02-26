@@ -16,11 +16,22 @@ def _mpy_cross_path():
     return os.environ.get("MPY_CROSS") or shutil.which("mpy-cross")
 
 
+def test_plain_python_module_path_smoke():
+    """Always-on CI lane: imports directly from source .py modules."""
+    import bm83
+    import nextion
+    import utils
+
+    assert hasattr(utils, "sanitize_text")
+    assert hasattr(nextion, "Nextion")
+    assert hasattr(bm83, "Bm83")
+
+
 @pytest.mark.mpy
 def test_build_mpy_outputs():
     """Build .mpy files and verify expected outputs when mpy-cross is available."""
     if os.environ.get("RUN_MPY_TESTS") != "1":
-        pytest.skip("Set RUN_MPY_TESTS=1 to enable .mpy build verification")
+        pytest.skip("Skipped by CI toggle: set RUN_MPY_TESTS=1 to enable .mpy build verification")
 
     mpy_cross = _mpy_cross_path()
     if not mpy_cross:
