@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 from blehid.ble import BleHid, _read_ble_counter, _write_ble_counter
 
 
@@ -169,8 +170,9 @@ def test_erase_bonds_with_failing_erase_bonding():
     with mock.patch("time.sleep"):  # Skip delays in test for speed
         blehid.erase_bonds()
 
-    # Should still attempt to restart advertising
-    assert blehid._ble.advertising is True
+    # On erase failure, re-advertise should be deferred via backoff
+    assert blehid._ble.advertising is False
+    assert blehid._adv_inhibit_until > time.monotonic()
 
     # BLE name should NOT be updated when erase_bonding fails
     assert blehid.name == "TestDevice"

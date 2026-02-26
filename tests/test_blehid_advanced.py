@@ -370,11 +370,11 @@ def test_blehid_repeated_erase_requests_with_reconnect_churn():
             now += 0.01
             ble._ble.connected = (i % 10) == 1
             ble._ble.advertising = not ble._ble.connected
-            if i % 3 == 0:
-                first = ble.request_erase_bonds()
-                if first:
-                    assert ble.request_erase_bonds() is False
             with mock.patch("time.monotonic", return_value=now):
+                if i % 3 == 0:
+                    erase_initiated = ble.request_erase_bonds()
+                    if erase_initiated:
+                        assert ble.request_erase_bonds() is False
                 ble.tick()
 
     assert ble._heavy_op_inflight is None
