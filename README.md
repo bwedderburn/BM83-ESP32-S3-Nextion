@@ -18,17 +18,24 @@ This project implements a CircuitPython-based remote control system for audio de
 ## 📁 Project Structure
 
 ```
-esp32_project/
-├── main.py                  # Main control loop
-├── utils/
-│   └── common.py            # Shared helpers (dprint, formatting)
-├── nextion/
-│   └── display.py           # Nextion screen interface
+firmware/circuitpython/
+├── main.py                  # Main control loop (entry point)
 ├── blehid/
 │   └── ble.py               # BLE HID (volume/mute) logic
-└── bm83/
-    └── bm83.py              # BM83 Bluetooth AVRCP/A2DP interface
+├── bm83/
+│   └── bm83.py              # BM83 Bluetooth AVRCP/A2DP interface
+├── nextion/
+│   └── display.py           # Nextion screen interface
+└── utils/
+    ├── common.py            # Shared helpers (dprint, formatting)
+    └── compat.py            # Compatibility helpers
+
+dist/circuitpython/
+├── main.py                  # Optimized deployment entry point (.py)
+└── lib/                     # Compiled project modules (.mpy)
 ```
+
+**Source of truth:** Pin assignments are defined in `firmware/circuitpython/main.py`.
 
 ## 🚀 Deployment Instructions
 
@@ -44,8 +51,8 @@ Use this mode while bringing up new hardware, debugging regressions, or reproduc
    - `adafruit_ble`
    - `adafruit_hid`
 4. Connect:
-   - **BM83** via UART (IO17/IO18)
-   - **Nextion** via UART (IO15/IO16)
+   - **BM83** via UART (`IO17` / `IO18`)
+   - **Nextion** via UART (`IO43` / `IO44`)
 5. **Configure Nextion HMI buttons** - See [NEXTION_SETUP.md](NEXTION_SETUP.md) for press/release event configuration.
 6. Reset the board. `main.py` will execute and start all services.
 
@@ -54,11 +61,12 @@ Use this mode while bringing up new hardware, debugging regressions, or reproduc
 Switch to this mode only after baseline `.py` deployment is validated on-device.
 
 1. Build optimized output with `./build_mpy.sh`.
-2. Copy the contents of `dist/circuitpython/` to `CIRCUITPY`.
-3. Ensure required Adafruit libraries are still present in `CIRCUITPY/lib/`:
+2. Copy `dist/circuitpython/main.py` to the root of `CIRCUITPY`.
+3. Copy project modules from `dist/circuitpython/lib/` into `CIRCUITPY/lib/`.
+4. Ensure required Adafruit libraries are still present in `CIRCUITPY/lib/`:
    - `adafruit_ble/`
    - `adafruit_hid/`
-4. Reset and validate runtime behavior.
+5. Reset and validate runtime behavior.
 
 **For deployment workflows, rollbacks, and troubleshooting, see [DEPLOYMENT.md](DEPLOYMENT.md).**
 
@@ -121,10 +129,11 @@ pip install mpy-cross
 #### Deployment After Build
 
 1. Copy the entire contents of `dist/circuitpython/` to your `CIRCUITPY` drive.
-2. Make sure the required Adafruit libraries are present in `CIRCUITPY/lib/`:
+2. If deploying manually, copy `dist/circuitpython/lib/` contents into `CIRCUITPY/lib/`.
+3. Make sure the required Adafruit libraries are present in `CIRCUITPY/lib/`:
    - `adafruit_ble/`
    - `adafruit_hid/`
-3. Reset the board.
+4. Reset the board.
 
 **Recommended flow**: Always validate first with plain `.py` files from `firmware/circuitpython/`, then switch to compiled `.mpy` artifacts from `dist/circuitpython/` for production.
 
