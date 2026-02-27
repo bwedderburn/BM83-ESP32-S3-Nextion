@@ -2,11 +2,52 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>ESP32 Audio Remote</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BM83 ESP32-S3 Nextion Docs</title>
 </head>
 <body>
-  <h1>ESP32-S3 Audio Remote</h1>
-  <p>This is a CircuitPython project integrating BM83, BLE HID, and Nextion display.</p>
-  <p>Source available on GitHub.</p>
+  <header>
+    <h1>BM83 ESP32-S3 Nextion</h1>
+    <p>
+      CircuitPython firmware for an ESP32-S3-based audio remote that integrates BM83 Bluetooth audio control,
+      BLE HID input, and a Nextion display interface.
+    </p>
+    <p>
+      <strong>Current status:</strong> Core software flows and host-side checks are in place, with final behavior
+      on physical hardware dependent on board wiring, display setup, and BM83 module integration.
+    </p>
+  </header>
+
+  <main>
+    <section>
+      <h2>Documentation links</h2>
+      <ul>
+        <li><a href="../README.md">README.md</a></li>
+        <li><a href="../DEPLOYMENT.md">DEPLOYMENT.md</a></li>
+        <li><a href="../NEXTION_SETUP.md">NEXTION_SETUP.md</a></li>
+        <li><a href="../CODE_REFERENCE.md">CODE_REFERENCE.md</a></li>
+        <li><a href="hardware-test-limitations.md">docs/hardware-test-limitations.md</a></li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Deployment modes</h2>
+      <p>
+        <strong>.py baseline:</strong> Use source <code>.py</code> files for readability and easier debugging during
+        development.
+      </p>
+      <p>
+        <strong>.mpy optimized:</strong> Use compiled <code>.mpy</code> modules to reduce storage and improve startup/runtime behavior on constrained devices.
+      </p>
+    </section>
+
+    <section>
+      <h2>Validation scope</h2>
+      <p>
+        Host-based tests validate software logic and integration boundaries, but they do not replace end-to-end
+        validation on real BM83, ESP32-S3, and Nextion hardware.
+      </p>
+    </section>
+  </main>
 </body>
 </html>
