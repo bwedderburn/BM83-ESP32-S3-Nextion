@@ -149,7 +149,7 @@ Run this after **every** deployment (baseline or optimized):
 - [ ] **UART token cleanliness:** in serial logs, confirm Nextion tokens are clean (e.g., `b'BT_POWER'`) with no garbage suffix bytes.
 - [ ] **BLE connect/pair flow:** confirm device advertises, connects, and reaches encrypted/paired state (`[BLE] Connected`, `[BLE] Paired/encrypted`).
 - [ ] **Metadata refresh path:** trigger track/source changes and verify metadata text is refreshed on the Nextion display.
-- [ ] **E-BIND behavior:** confirm expected E-BIND startup/initialization behavior is present and does not regress normal control flow.
+- [ ] **`BT_EBIND` / Erase Bonds:** trigger a bond-erase request (user-initiated `BT_EBIND` token) and confirm the request is handled cleanly and normal control flow resumes without crash or hang.
 - [ ] **No startup regressions:** board boots without traceback and button actions still map correctly.
 
 ## Full Deployment (Clean Install)
