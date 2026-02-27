@@ -20,7 +20,7 @@ Run these checks in order before any production update:
    RUN_MPY_TESTS=1 pytest -q tests/test_mpy_build.py
    ```
 2. **Deploy and validate the device using baseline `.py` files** (Mode A) so behavior is observable and debuggable on hardware.
-3. **Roll out optimized `.mpy` artifacts only after baseline validation succeeds** (Mode B).
+3. **Roll out optimized `.mpy` artifacts only after baseline validation succeeds** (Mode B). Before copying `dist/circuitpython/*` onto the device, either (a) delete any baseline package directories from the root of `CIRCUITPY/` (e.g., `bm83/`, `nextion/`, `blehid/`, `utils/`), or (b) start from a clean/erased `CIRCUITPY` volume. Otherwise, those source packages may shadow `CIRCUITPY/lib/...` and you may still be running `.py` instead of the optimized `.mpy` modules.
 
 > Host tests do **not** fully validate hardware behavior (UART timing, RF behavior, target-runtime constraints). See [docs/hardware-test-limitations.md](docs/hardware-test-limitations.md) for scope and limitations.
 
