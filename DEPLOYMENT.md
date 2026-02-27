@@ -133,14 +133,13 @@ If optimized deployment fails, quickly return to known-good source mode:
    rm -rf /path/to/CIRCUITPY/lib/nextion
    rm -rf /path/to/CIRCUITPY/lib/blehid
    rm -rf /path/to/CIRCUITPY/lib/utils
-   rm -f /path/to/CIRCUITPY/main.mpy
    ```
 2. Re-copy the baseline source tree from `firmware/circuitpython/`:
    ```bash
    cp -r firmware/circuitpython/* /path/to/CIRCUITPY/
    ```
 3. Reset the board (`Ctrl+D` or hardware RESET).
-4. Re-run baseline validation (token cleanup, BLE connect/pair, metadata refresh, and E-BIND behavior) before proceeding.
+4. Re-run baseline validation (token cleanup, BLE connect/pair, metadata refresh, and `BT_EBIND` behavior) before proceeding.
 
 ## Post-Deploy Smoke Checklist (Project-Specific)
 
