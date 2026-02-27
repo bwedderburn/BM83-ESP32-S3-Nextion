@@ -72,7 +72,7 @@ BM83-ESP32-S3-Nextion/
 
 **Key Components**:
 - **Hardware Configuration**:
-  - Nextion UART: TX=IO15, RX=IO16, Baud=9600
+  - Nextion UART: TX=IO43, RX=IO44, Baud=9600
   - BM83 UART: TX=IO17, RX=IO18, Baud=115200
   - BLE HID: Optional volume/mute control
 
@@ -162,10 +162,12 @@ Package-level exports for Nextion display components.
 
 **Key Methods**:
 - `boot_sync(delay_s)`: Waits for Nextion to boot and synchronizes
-- `read(max_tokens=6, debounce_s=0.10)`: Reads and parses button press tokens; returns `(tokens, page_changed)`
+- `read(max_tokens=6)`: Reads and parses button press tokens; returns `(tokens, page_changed)`
 - `enqueue(cmd)`: Queues a command string to be sent to the display
 - `set_text_active_page(obj_name, text)`: Updates text field on current page (queues sanitized command)
 - `tick()`: Non-blocking processing; sends queued commands to the display
+- `enable_telemetry(enabled=True)`: Enables/disables runtime telemetry collection
+- `telemetry_snapshot()`: Returns telemetry counters/high-water marks
 - `current_page` (attribute): Current page ID
 
 **UI Object IDs**:
@@ -217,7 +219,11 @@ Empty module marker (no exports).
 - `volume(up: bool)`: Sends volume up (`True`) or volume down (`False`) HID report
 - `mute()`: Sends mute toggle HID report
 - `erase_bonds()`: Clears paired devices
-- `start_advertising()`: Begins BLE advertisement
+- `request_erase_bonds()`: Schedules bond erase for the main loop
+- `tick()`: BLE maintenance loop (connectivity, retries, recovery)
+- `in_critical_section()`: Indicates whether BLE is in a critical operation window
+- `enable_telemetry(enabled=True)`: Enables/disables runtime telemetry collection
+- `telemetry_snapshot()`: Returns telemetry counters/high-water marks
 
 ---
 
@@ -243,8 +249,8 @@ Sanitizes text for Nextion display:
 - Truncates to `max_len` with ellipsis (…)
 - Returns "—" for None/empty strings
 
-**`sanitize_text(txt, max_len=48)`**  
-Public alias for `_sanitize_text()`.
+**`sanitize_text(txt, max_len=100)`**  
+Public wrapper around internal sanitization with test-compatible defaults.
 
 **`_fmt_ms(ms)`**  
 Formats milliseconds as time string:
@@ -253,10 +259,10 @@ Formats milliseconds as time string:
 - Returns "—" for None/invalid values
 
 **`fmt_ms(ms)`**  
-Public alias for `_fmt_ms()`.
+Public wrapper around `_fmt_ms()` that zero-pads one-digit minutes in `M:SS` output for compatibility.
 
-**`hexdump(data, prefix="")`**  
-Prints hexadecimal dump of byte data for debugging.
+**`hexdump(data, width=16)`**  
+Returns a hexadecimal dump string (single line or wrapped by `width`).
 
 ---
 
@@ -392,8 +398,30 @@ flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statist
    - `adafruit_hid`
 4. Connect hardware:
    - BM83 UART: IO17 (TX), IO18 (RX)
-   - Nextion UART: IO15 (TX), IO16 (RX)
+   - Nextion UART: IO43 (TX), IO44 (RX)
 5. Reset board; `main.py` executes automatically
+
+---
+
+## Documentation Audit Checklist
+
+Verified against:
+- `firmware/circuitpython/main.py`
+- `firmware/circuitpython/nextion/display.py`
+- `firmware/circuitpython/blehid/ble.py`
+- `firmware/circuitpython/utils/common.py`
+
+Checklist (completed):
+- [x] Hardware UART pin mappings match `main.py` (`NX_TX/NX_RX`, `BM83_TX/BM83_RX`).
+- [x] `Nextion.read` signature matches source: `read(max_tokens=6)`.
+- [x] Utility signatures/defaults match source:
+  - `hexdump(data, width=16)`
+  - `_sanitize_text(txt, max_len=48)`
+  - `sanitize_text(txt, max_len=100)`
+- [x] Removed/replaced non-public or non-existent API references (e.g., `start_advertising()`).
+- [x] Added telemetry API coverage where relevant:
+  - `Nextion.enable_telemetry(enabled=True)` / `Nextion.telemetry_snapshot()`
+  - `BleHid.enable_telemetry(enabled=True)` / `BleHid.telemetry_snapshot()`
 
 ---
 
