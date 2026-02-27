@@ -129,7 +129,7 @@ pip install mpy-cross
 #### Deployment After Build
 
 1. Copy the entire contents of `dist/circuitpython/` to your `CIRCUITPY` drive.
-2. If deploying manually, copy `dist/circuitpython/lib/` contents into `CIRCUITPY/lib/`.
+2. Alternatively, if you only want to update the libraries (and are not copying the whole `dist/circuitpython/` tree), copy `dist/circuitpython/lib/` contents into `CIRCUITPY/lib/`.
 3. Make sure the required Adafruit libraries are present in `CIRCUITPY/lib/`:
    - `adafruit_ble/`
    - `adafruit_hid/`
