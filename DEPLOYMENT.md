@@ -7,6 +7,23 @@ This guide explains how to deploy updated firmware to your ESP32-S3 device in tw
 
 Start with **baseline `.py` mode first** for debugging and reproducibility. After behavior is validated on-device, switch to **optimized `.mpy` mode** for production.
 
+## Pre-Deploy Checklist (Required Order)
+
+Run these checks in order before any production update:
+
+1. **Run host regression tests first** (logic-level protection):
+   ```bash
+   pytest -q
+   ```
+   Optional `.mpy` build-path verification:
+   ```bash
+   RUN_MPY_TESTS=1 pytest -q tests/test_mpy_build.py
+   ```
+2. **Deploy and validate the device using baseline `.py` files** (Mode A) so behavior is observable and debuggable on hardware.
+3. **Roll out optimized `.mpy` artifacts only after baseline validation succeeds** (Mode B). Before copying `dist/circuitpython/*` onto the device, either (a) delete any baseline package directories from the root of `CIRCUITPY/` (e.g., `bm83/`, `nextion/`, `blehid/`, `utils/`), or (b) start from a clean/erased `CIRCUITPY` volume. Otherwise, those source packages may shadow `CIRCUITPY/lib/...` and you may still be running `.py` instead of the optimized `.mpy` modules.
+
+> Host tests do **not** fully validate hardware behavior (UART timing, RF behavior, target-runtime constraints). See [docs/hardware-test-limitations.md](docs/hardware-test-limitations.md) for scope and limitations.
+
 ## When to Update Firmware
 
 You need to update the firmware on your ESP32-S3 when:
@@ -110,12 +127,29 @@ If that happens:
 
 If optimized deployment fails, quickly return to known-good source mode:
 
-1. Remove deployed project artifacts from `CIRCUITPY` (compiled project modules under `lib/` and project `main.py` if needed).
-2. Re-copy plain files from `firmware/circuitpython/`:
+1. Remove optimized project artifacts from `CIRCUITPY` so CircuitPython cannot import stale `.mpy` modules:
+   ```bash
+   rm -rf /path/to/CIRCUITPY/lib/bm83
+   rm -rf /path/to/CIRCUITPY/lib/nextion
+   rm -rf /path/to/CIRCUITPY/lib/blehid
+   rm -rf /path/to/CIRCUITPY/lib/utils
+   ```
+2. Re-copy the baseline source tree from `firmware/circuitpython/`:
    ```bash
    cp -r firmware/circuitpython/* /path/to/CIRCUITPY/
    ```
-3. Reset the board and validate in baseline mode.
+3. Reset the board (`Ctrl+D` or hardware RESET).
+4. Re-run baseline validation (token cleanup, BLE connect/pair, metadata refresh, and `BT_EBIND` behavior) before proceeding.
+
+## Post-Deploy Smoke Checklist (Project-Specific)
+
+Run this after **every** deployment (baseline or optimized):
+
+- [ ] **UART token cleanliness:** in serial logs, confirm Nextion tokens are clean (e.g., `b'BT_POWER'`) with no garbage suffix bytes.
+- [ ] **BLE connect/pair flow:** confirm device advertises, connects, and reaches encrypted/paired state (`[BLE] Connected`, `[BLE] Paired/encrypted`).
+- [ ] **Metadata refresh path:** trigger track/source changes and verify metadata text is refreshed on the Nextion display.
+- [ ] **`BT_EBIND` / Erase Bonds:** trigger a bond-erase request (user-initiated `BT_EBIND` token) and confirm the request is handled cleanly and normal control flow resumes without crash or hang.
+- [ ] **No startup regressions:** board boots without traceback and button actions still map correctly.
 
 ## Full Deployment (Clean Install)
 
