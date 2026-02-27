@@ -204,42 +204,40 @@ This is especially useful when your board still runs (`main.py` + `lib/*.mpy`) b
 
 ## 🐛 Known Issues & Current Investigations
 
+### Implemented safeguards
+
+The mitigations below are already in code and should be treated as current protections (not open work items):
+
+- **BLE operation gating + retry/backoff hardening** in `firmware/circuitpython/blehid/ble.py`.
+  - Critical-section windows gate overlapping heavy BLE operations.
+  - Pairing/advertising/erase paths use retry accounting and bounded backoff.
+  - E-BIND handling is deferred/throttled (`request_erase_bonds`) to avoid re-entrant erase flow.
+
+- **Metadata scheduling guard during BLE-critical windows** in `firmware/circuitpython/main.py`.
+  - `schedule_attrs_with_ble_guard(...)` delays AVRCP attribute requests when BLE is in a critical section.
+  - Main loop also reduces AVRCP polling aggressiveness while BLE critical activity is active.
+
+- **Parser/queue protection against burst/noise traffic** in:
+  - `firmware/circuitpython/nextion/display.py` (queue cap, token dedupe/throttle, burst limits), and
+  - `firmware/circuitpython/bm83/bm83.py` (RX buffer ceiling/overflow reset, poll burst limiting, request throttles).
+
 ### Active Issues
 
-- **#37 E-BIND button crash with BLE pairing** – Hard crash observed when pressing E-BIND button during active BLE pairing attempts combined with repeated AVRCP metadata requests. The crash appears to be related to memory exhaustion ("Nimble out of memory") when BLE operations overlap with intensive BM83 UART traffic.
-  
-  **Symptoms**:
-  - Device freezes when BM83 is powered on while BLE HID is connected
-  - Hard crash when E-BIND button is pressed during metadata polling
-  - CircuitPython connection lost (Thonny shows "PROBLEM IN THONNY'S BACK-END: Exception while handling 'Run' (ConnectionError: EOF)")
-  
-  **Possible Implementations to Fix**:
-  1. **Rate Limiting for AVRCP Requests**: Add throttling to reduce metadata request frequency during BLE operations
-     - Implement minimum time between AVRCP requests (e.g., 500ms)
-     - Skip metadata requests if BLE operations are in progress
-  
-  2. **Memory Management for BLE Operations**: Improve memory allocation handling
-     - Add explicit `gc.collect()` calls before BLE operations (advertising, pairing)
-     - Reduce buffer sizes for UART operations during BLE activity
-     - Implement backoff strategy for BLE reconnection attempts
-  
-  3. **Debouncing and Button Handling**: Prevent rapid-fire button events
-     - Increase debounce delay for E-BIND button to reduce event frequency
-     - Disable E-BIND during active BLE pairing attempts
-     - Add state machine to prevent overlapping BLE operations
-  
-  4. **Async Operation Coordination**: Better synchronization between BLE and UART
-     - Add semaphore/flag to indicate active BLE operation
-     - Queue BM83 commands when BLE is busy instead of sending immediately
-     - Implement timeout and recovery for stuck operations
-  
-  5. **Error Recovery**: Add fault tolerance for memory exhaustion
-     - Catch and handle BLE "out of memory" errors gracefully
-     - Implement soft reset mechanism instead of hard crash
-     - Add watchdog timer to detect and recover from freezes
+- **#37 Residual instability under worst-case BLE + AVRCP contention**
+  - Status: **Open** (risk reduced by current safeguards, but not fully eliminated under all hardware/load combinations).
+  - Scope: freeze/crash risk when BLE bond-management/pairing work overlaps sustained BM83 traffic and rapid UI events.
+
+  **How to reproduce/observe**:
+  - Start with BM83 connected and metadata actively updating.
+  - Generate high event load (rapid Nextion presses including repeated `BT_EBIND` while BLE pairing/reconnect is active).
+  - Observe serial logs for repeated BLE retry/backoff activity followed by stalled UI updates or watchdog-like freeze symptoms.
+  - Mark pass/fail by run length (e.g., no freeze over a defined soak window such as 15-30 minutes under repeated stress).
 
 ### Previously Resolved (Monitoring for Regression)
 
-- **#35 Hard crash after EQ/power interactions** – Crash observed while cycling EQ presets and power events. Issue was addressed but monitoring continues for regression. If the crash reappears during EQ cycling or power state transitions, it may be related to the same memory management issues as #37.
-  
-  **Status**: Closed, awaiting on-device validation of stability over extended use.
+- **#35 Hard crash after EQ/power interactions** – Mitigated in current firmware; retained here only for regression watch.
+
+  **How to reproduce/observe**:
+  - Repeatedly cycle EQ and power actions from Nextion while connected/disconnected transitions occur.
+  - Confirm no hard crash, no interpreter disconnect, and continued responsiveness of metadata + controls.
+  - Treat any recurrence as regression and reopen with captured logs.
