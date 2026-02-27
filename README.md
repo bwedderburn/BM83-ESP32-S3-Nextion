@@ -61,12 +61,11 @@ Use this mode while bringing up new hardware, debugging regressions, or reproduc
 Switch to this mode only after baseline `.py` deployment is validated on-device.
 
 1. Build optimized output with `./build_mpy.sh`.
-2. Copy `dist/circuitpython/main.py` to the root of `CIRCUITPY`.
-3. Copy project modules from `dist/circuitpython/lib/` into `CIRCUITPY/lib/`.
-4. Ensure required Adafruit libraries are still present in `CIRCUITPY/lib/`:
+2. Copy all contents of `dist/circuitpython/` to the root of `CIRCUITPY` (includes `main.py`, compiled `.mpy` modules in `lib/`, `settings.toml` if present, and any other non-`.py` assets).
+3. Ensure required Adafruit libraries are still present in `CIRCUITPY/lib/`:
    - `adafruit_ble/`
    - `adafruit_hid/`
-5. Reset and validate runtime behavior.
+4. Reset and validate runtime behavior.
 
 **For deployment workflows, rollbacks, and troubleshooting, see [DEPLOYMENT.md](DEPLOYMENT.md).**
 
