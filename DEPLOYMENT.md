@@ -47,7 +47,7 @@ If you are using Codex CLI to implement and verify changes, use this repeatable 
    git status
    ```
 5. Deploy baseline `.py` first (`./deploy.sh`), then run post-deploy smoke checklist.
-6. Only after baseline stability is confirmed, build/deploy `.mpy` (`./build_mpy.sh` + copy `dist/circuitpython/*`) and re-run the same smoke checklist.
+6. Only after baseline stability is confirmed, build/deploy `.mpy` **from a clean CIRCUITPY filesystem** or **after deleting the root `bm83/`, `nextion/`, `blehid/`, and `utils/` directories** (`./build_mpy.sh` + copy `dist/circuitpython/*`), then re-run the same smoke checklist.
 
 This sequence minimizes crash risk by proving deterministic host behavior first, then validating hardware behavior incrementally.
 
@@ -160,7 +160,7 @@ If optimized deployment fails, quickly return to known-good source mode:
    rm -rf /path/to/CIRCUITPY/lib/nextion
    rm -rf /path/to/CIRCUITPY/lib/blehid
    rm -rf /path/to/CIRCUITPY/lib/utils
-   rm -f /path/to/CIRCUITPY/main.mpy
+   rm -f /path/to/CIRCUITPY/main.py
    ```
 2. Re-copy the baseline source tree from `firmware/circuitpython/`:
    ```bash
