@@ -20,9 +20,36 @@ Run these checks in order before any production update:
    RUN_MPY_TESTS=1 pytest -q tests/test_mpy_build.py
    ```
 2. **Deploy and validate the device using baseline `.py` files** (Mode A) so behavior is observable and debuggable on hardware.
-3. **Roll out optimized `.mpy` artifacts only after baseline validation succeeds** (Mode B). Before copying `dist/circuitpython/*` onto the device, either (a) delete any baseline package directories from the root of `CIRCUITPY/` (e.g., `bm83/`, `nextion/`, `blehid/`, `utils/`), or (b) start from a clean/erased `CIRCUITPY` volume. Otherwise, those source packages may shadow `CIRCUITPY/lib/...` and you may still be running `.py` instead of the optimized `.mpy` modules.
+3. **Roll out optimized `.mpy` artifacts only after baseline validation succeeds** (Mode B).
 
 > Host tests do **not** fully validate hardware behavior (UART timing, RF behavior, target-runtime constraints). See [docs/hardware-test-limitations.md](docs/hardware-test-limitations.md) for scope and limitations.
+
+### Codex CLI Workflow (Recommended for Bug-Free Rollouts)
+
+If you are using Codex CLI to implement and verify changes, use this repeatable sequence before deploying:
+
+1. Sync and inspect working tree:
+   ```bash
+   git pull --rebase
+   git status --short
+   ```
+2. Run fast host regression suite:
+   ```bash
+   pytest -q
+   ```
+3. Run optional `.mpy` build-path check when touching build/deploy logic:
+   ```bash
+   RUN_MPY_TESTS=1 pytest -q tests/test_mpy_build.py
+   ```
+4. Verify no unresolved changes before deploy packaging:
+   ```bash
+   git diff --stat
+   git status
+   ```
+5. Deploy baseline `.py` first (`./deploy.sh`), then run post-deploy smoke checklist.
+6. Only after baseline stability is confirmed, build/deploy `.mpy` **from a clean CIRCUITPY filesystem** or **after deleting the root `bm83/`, `nextion/`, `blehid/`, and `utils/` directories** (`./build_mpy.sh` + copy `dist/circuitpython/*`), then re-run the same smoke checklist.
+
+This sequence minimizes crash risk by proving deterministic host behavior first, then validating hardware behavior incrementally.
 
 ## When to Update Firmware
 
@@ -133,13 +160,14 @@ If optimized deployment fails, quickly return to known-good source mode:
    rm -rf /path/to/CIRCUITPY/lib/nextion
    rm -rf /path/to/CIRCUITPY/lib/blehid
    rm -rf /path/to/CIRCUITPY/lib/utils
+   rm -f /path/to/CIRCUITPY/main.py
    ```
 2. Re-copy the baseline source tree from `firmware/circuitpython/`:
    ```bash
    cp -r firmware/circuitpython/* /path/to/CIRCUITPY/
    ```
 3. Reset the board (`Ctrl+D` or hardware RESET).
-4. Re-run baseline validation (token cleanup, BLE connect/pair, metadata refresh, and `BT_EBIND` behavior) before proceeding.
+4. Re-run baseline validation (token cleanup, BLE connect/pair, metadata refresh, and E-BIND behavior) before proceeding.
 
 ## Post-Deploy Smoke Checklist (Project-Specific)
 
@@ -148,7 +176,7 @@ Run this after **every** deployment (baseline or optimized):
 - [ ] **UART token cleanliness:** in serial logs, confirm Nextion tokens are clean (e.g., `b'BT_POWER'`) with no garbage suffix bytes.
 - [ ] **BLE connect/pair flow:** confirm device advertises, connects, and reaches encrypted/paired state (`[BLE] Connected`, `[BLE] Paired/encrypted`).
 - [ ] **Metadata refresh path:** trigger track/source changes and verify metadata text is refreshed on the Nextion display.
-- [ ] **`BT_EBIND` / Erase Bonds:** trigger a bond-erase request (user-initiated `BT_EBIND` token) and confirm the request is handled cleanly and normal control flow resumes without crash or hang.
+- [ ] **E-BIND behavior:** confirm expected E-BIND startup/initialization behavior is present and does not regress normal control flow.
 - [ ] **No startup regressions:** board boots without traceback and button actions still map correctly.
 
 ## Full Deployment (Clean Install)
