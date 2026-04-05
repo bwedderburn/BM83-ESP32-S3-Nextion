@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import utils
 import bm83
+import blehid
 import nextion
 
 
@@ -75,6 +76,11 @@ def test_bm83_eq_constants():
     assert bm83.EQ_USER == 11  # Aligned with Bm83.EQ_SEQ and EQ_L
     assert len(bm83.EQ_LABELS) == 11
     assert len(bm83.EQ_SEQ) == 11
+
+
+def test_blehid_package_exports():
+    """Test BLE HID package exports."""
+    assert blehid.BleHid is not None
 
 
 # =============================================================================
