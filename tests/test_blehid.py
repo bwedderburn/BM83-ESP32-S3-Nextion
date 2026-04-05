@@ -1,6 +1,7 @@
 import os
 import tempfile
 import time
+import blehid
 from blehid.ble import BleHid, _read_ble_counter, _write_ble_counter
 
 
@@ -17,6 +18,10 @@ class DummyBLE:
 
     def erase_bonding(self):
         pass
+
+
+def test_blehid_package_re_exports_blehid_class():
+    assert blehid.BleHid is BleHid
 
 
 def test_blehid_advertising_restart():
