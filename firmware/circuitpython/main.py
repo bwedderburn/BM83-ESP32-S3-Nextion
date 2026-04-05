@@ -1,42 +1,20 @@
 import gc
 import time
-try:
-    import board  # noqa: F401
-except ImportError:
-    # board is a CircuitPython built-in; not available in host environment
-    board = None
+import board
+import busio
 
 # endregion
-try:
-    import busio
-except ImportError:
-    # busio is a CircuitPython built-in; not available in host environment
-    pass
-
-# endregion
-from utils.common import dprint, _fmt_ms, _sanitize_text, DEBUG
-from utils.compat import const
+from utils.common import dprint, _fmt_ms, _sanitize_text
 from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE1
 from blehid.ble import BleHid
-import bm83.bm83
+from bm83.bm83 import Bm83
 
 # endregion
-
-
-def _get_pin(pin_name):
-    if board is None:
-        return None
-    return getattr(board, pin_name)
-
-
-# endregion
-NX_BAUD = const(9600)
-BM83_BAUD = const(115200)
-NX_TX, NX_RX = _get_pin("IO43"), _get_pin("IO44")
-BM83_TX, BM83_RX = _get_pin("IO17"), _get_pin("IO18")
-VOL_REPEAT_MAX = const(10)
-TELEMETRY_DEBUG = False
-TELEMETRY_PRINT_EVERY_S = 10.0
+NX_BAUD = 9600
+BM83_BAUD = 115200
+NX_TX, NX_RX = board.IO15, board.IO16
+BM83_TX, BM83_RX = board.IO17, board.IO18
+VOL_REPEAT_MAX = 10
 
 # endregion
 BLE_ENABLED = True
@@ -51,20 +29,15 @@ def main():
 
 # endregion
     nx_uart = busio.UART(NX_TX, NX_RX, baudrate=NX_BAUD, timeout=0.0, receiver_buffer_size=1024)
-    bm_uart = busio.UART(BM83_TX, BM83_RX, baudrate=BM83_BAUD, timeout=0.0, receiver_buffer_size=4096)
+    bm_uart = busio.UART(BM83_TX, BM83_RX, baudrate=BM83_BAUD, timeout=0.0, receiver_buffer_size=8192)
 
 # endregion
     nx = Nextion(nx_uart)
-    bm = bm83.bm83.Bm83(bm_uart)
+    bm = Bm83(bm_uart)
 
 # endregion
     ble = BleHid(BLE_ENABLED, BLE_NAME)
     ble.setup()
-
-    if TELEMETRY_DEBUG:
-        nx.enable_telemetry(True)
-        bm.enable_telemetry(True)
-        ble.enable_telemetry(True)
 
 # endregion
     # Local bindings for speed/low allocation on mpy
@@ -82,7 +55,6 @@ def main():
     ble_volume = ble.volume
     ble_mute = ble.mute
     ble_request_erase_bonds = ble.request_erase_bonds
-    ble_in_critical = ble.in_critical_section
     eq_labels = bm.EQ_L
 
 # endregion
@@ -108,8 +80,6 @@ def main():
     last_total_ms = None
     last_voldn_at = 0.0
     mute_window_s = 0.25
-    BLE_CRITICAL_PLAYSTATUS_PERIOD_S = 2.5
-    BLE_CRITICAL_META_DELAY_S = 1.2
 
     # Hold-and-repeat state for volume controls
     vol_hold_active = None        # None, "up", or "down"
@@ -163,63 +133,6 @@ def main():
         return changed
 # endregion
 
-    def schedule_attrs_with_ble_guard(delay_s=0.35, critical_delay_s=BLE_CRITICAL_META_DELAY_S):
-        if ble_in_critical():
-            bm.schedule_attrs(max(delay_s, critical_delay_s))
-        else:
-            bm.schedule_attrs(delay_s)
-
-    def _dispatch_token(tok, now):
-        nonlocal desired_eq, vol_hold_active, vol_hold_start_at, vol_last_repeat_at
-        nonlocal vol_repeat_count, last_voldn_at
-        if tok == b"BT_POWER":
-            bm.power_toggle()
-        elif tok == b"BT_PAIR":
-            bm.pair()
-        elif tok == b"BT_PLAY":
-            bm.play_pause()
-        elif tok == b"BT_PREV":
-            bm.prev()
-        elif tok == b"BT_NEXT":
-            bm.next()
-        elif tok == b"BT_EQ":
-            mode = bm.next_eq()
-            next_label = bm.EQ_L.get(mode, "OFF")
-            if next_label != desired_eq:
-                desired_eq = next_label
-                print("[EQ] set to", desired_eq)
-                if nx.current_page is not None:
-                    flush_page(nx.current_page)
-        elif tok == b"BT_VOLUP_P":
-            ble_volume(True)
-            vol_hold_active = "up"
-            vol_hold_start_at = now
-            vol_last_repeat_at = now
-            vol_repeat_count = 1
-        elif tok == b"BT_VOLUP_R":
-            if vol_hold_active == "up":
-                vol_hold_active = None
-                vol_repeat_count = 0
-        elif tok == b"BT_VOLDN_P":
-            if (now - last_voldn_at) <= mute_window_s:
-                ble_mute()
-                last_voldn_at = 0.0
-                vol_hold_active = None
-                vol_repeat_count = 0
-            else:
-                ble_volume(False)
-                last_voldn_at = now
-                vol_hold_active = "down"
-                vol_hold_start_at = now
-                vol_last_repeat_at = now
-                vol_repeat_count = 1
-        elif tok == b"BT_VOLDN_R":
-            if vol_hold_active == "down":
-                vol_hold_active = None
-                vol_repeat_count = 0
-        elif tok == b"BT_EBIND":
-            ble_request_erase_bonds()
-
 # endregion
     # Loop through items
 # Function: enter_aux_mode - Defines the behavior for `enter_aux_mode`.
@@ -243,12 +156,11 @@ def main():
         nonlocal desired_aux
         desired_aux = ""
         bm._next_playstatus_at = monotonic() + 0.05
-        schedule_attrs_with_ble_guard(0.3)
+        bm.schedule_attrs(0.3)
 
 # endregion
     last_gc = monotonic()
     gc_interval_s = 4.0  # Empirically chosen: 4s strikes a balance between GC overhead and memory pressure
-    next_telemetry_at = monotonic() + TELEMETRY_PRINT_EVERY_S
     # On this workload (BM83 + Nextion event floods), 8s GC caused occasional alloc failures,
     # while <=2s GC increased pause time without reducing peak usage further. Tweak if patterns change.
 
@@ -266,13 +178,11 @@ def main():
         tokens, page_changed = nx_read()
     # Conditional check
         if page_changed and nx.current_page is not None:
-            if DEBUG:
-                dprint("[NX] page=", nx.current_page)
+            dprint("[NX] page=", nx.current_page)
             flush_page(nx.current_page)
 
 # endregion
         ble_tick()
-        ble_critical = ble_in_critical()
 
 # endregion
         # Tick non-blocking power state machine
@@ -300,18 +210,12 @@ def main():
 # endregion
     # Conditional check
         if not aux_mode:
-            if ble_critical:
-                if now >= bm._next_playstatus_at:
-                    bm._next_playstatus_at = now + BLE_CRITICAL_PLAYSTATUS_PERIOD_S
-            else:
-                bm_tick_avrcp()
+            bm_tick_avrcp()
         else:
     # Conditional check
             if bm.connected and now >= next_avrcp_probe_at:
-                probe_period = AVRCP_PROBE_PERIOD_S * (2 if ble_critical else 1)
-                next_avrcp_probe_at = now + probe_period
-                if not ble_critical:
-                    bm_avrcp_get_play_status(0)
+                next_avrcp_probe_at = now + AVRCP_PROBE_PERIOD_S
+                bm_avrcp_get_play_status(0)
 
 # endregion
     # Loop through items
@@ -329,13 +233,12 @@ def main():
                     bm.avrcp_register_notification(0x02, interval_s=0)
                     bm.avrcp_register_notification(0x05, interval_s=1)
                     bm._next_playstatus_at = now + 0.05
-                    schedule_attrs_with_ble_guard(0.8)
+                    bm.schedule_attrs(0.8)
     # Conditional check
             elif op == bm.EVT_EQ_MODE_IND and params:
                 mode = params[0]
                 desired_eq = eq_labels.get(mode, "OFF")
-                if DEBUG:
-                    dprint("[EQ_IND] mode=%d label=%s" % (mode, desired_eq))
+                dprint("[EQ_IND] mode=%d label=%s" % (mode, desired_eq))
     # Conditional check
                 if nx.current_page is not None:
                     flush_page(nx.current_page)
@@ -360,9 +263,8 @@ def main():
                         desired_meta["time"] = _fmt_ms(total_ms)
     # Conditional check
                     if maybe_track_changed(pos_ms, total_ms):
-                        if DEBUG:
-                            dprint("[TRACK] inferred change -> request metadata")
-                        schedule_attrs_with_ble_guard(0.25)
+                        dprint("[TRACK] inferred change -> request metadata")
+                        bm.schedule_attrs(0.25)
     # Conditional check
                     if nx.current_page == 1 and not aux_mode:
                         flush_page(1)
@@ -371,9 +273,8 @@ def main():
                     event_id = avp[0]
     # Conditional check
                     if event_id == 0x02:
-                        if DEBUG:
-                            dprint("[AVRCP] TrackChanged -> request metadata")
-                        schedule_attrs_with_ble_guard(0.25)
+                        dprint("[AVRCP] TrackChanged -> request metadata")
+                        bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
     # Conditional check
                     elif event_id == 0x05 and len(avp) >= 5:
@@ -418,9 +319,70 @@ def main():
 # endregion
     # Loop through items
         for tok in tokens:
-            if DEBUG:
-                dprint("[NX] Token:", tok)
-            _dispatch_token(tok, now)
+            dprint("[NX] Token:", tok)
+    # Conditional check
+            if tok == b"BT_POWER":
+                bm.power_toggle()
+    # Conditional check
+            elif tok == b"BT_PAIR":
+                bm.pair()
+    # Conditional check
+            elif tok == b"BT_PLAY":
+                bm.play_pause()
+    # Conditional check
+            elif tok == b"BT_PREV":
+                bm.prev()
+    # Conditional check
+            elif tok == b"BT_NEXT":
+                bm.next()
+    # Conditional check
+            elif tok == b"BT_EQ":
+                mode = bm.next_eq()
+                next_label = bm.EQ_L.get(mode, "OFF")
+    # Conditional check
+                if next_label != desired_eq:
+                    desired_eq = next_label
+                    print("[EQ] set to", desired_eq)
+    # Conditional check
+                    if nx.current_page is not None:
+                        flush_page(nx.current_page)
+    # Conditional check
+            elif tok == b"BT_VOLUP_P":
+                # Volume up pressed - send immediate volume up and start hold tracking
+                ble_volume(True)
+                vol_hold_active = "up"
+                vol_hold_start_at = now
+                vol_last_repeat_at = now
+                vol_repeat_count = 1
+            elif tok == b"BT_VOLUP_R":
+                # Volume up released - stop hold-and-repeat
+                if vol_hold_active == "up":
+                    vol_hold_active = None
+                    vol_repeat_count = 0
+    # Conditional check
+            elif tok == b"BT_VOLDN_P":
+                # Volume down pressed - check for double-tap mute, then start hold tracking
+    # Conditional check
+                if (now - last_voldn_at) <= mute_window_s:
+                    ble_mute()
+                    last_voldn_at = 0.0
+                    vol_hold_active = None  # Don't repeat after mute
+                    vol_repeat_count = 0
+                else:
+                    ble_volume(False)
+                    last_voldn_at = now
+                    vol_hold_active = "down"
+                    vol_hold_start_at = now
+                    vol_last_repeat_at = now
+                    vol_repeat_count = 1
+            elif tok == b"BT_VOLDN_R":
+                # Volume down released - stop hold-and-repeat
+                if vol_hold_active == "down":
+                    vol_hold_active = None
+                    vol_repeat_count = 0
+    # Conditional check
+            elif tok == b"BT_EBIND":
+                ble_request_erase_bonds()
 
 # endregion
         # Handle volume hold-and-repeat
@@ -443,12 +405,6 @@ def main():
                             ble_volume(False)
                         vol_last_repeat_at = now
                         vol_repeat_count += 1
-
-        if TELEMETRY_DEBUG and now >= next_telemetry_at:
-            next_telemetry_at = now + TELEMETRY_PRINT_EVERY_S
-            print("[TEL] BM", bm.telemetry_snapshot())
-            print("[TEL] NX", nx.telemetry_snapshot())
-            print("[TEL] BLE", ble.telemetry_snapshot())
 
         sleep(0.005)
 
