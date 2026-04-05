@@ -58,3 +58,17 @@ def test_bm83_invalid_checksum_skips_packet():
     uart.in_waiting = len(bad_packet)
     events = bm.poll()
     assert events == []
+
+
+def test_bm83_poll_reassigns_rx_buffer_after_consuming_frame():
+    uart = MockUART()
+    bm = Bm83(uart)
+    first = frame_to_bytes(Bm83.EVT_EQ_MODE_IND, b"\x05")
+    second = frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x06")
+    uart.to_read += first + second[:3]
+    uart.in_waiting = len(uart.to_read)
+
+    events = bm.poll(max_events=1)
+
+    assert events == [(Bm83.EVT_EQ_MODE_IND, b"\x05")]
+    assert bm._rx == bytearray(second[:3])

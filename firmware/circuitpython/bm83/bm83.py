@@ -264,7 +264,7 @@ class Bm83:
                 break
     # Conditional check
             if sof > 0:
-                del self._rx[:sof]
+                self._rx = self._rx[sof:]
     # Conditional check
             if len(self._rx) < 4:
                 break
@@ -279,7 +279,7 @@ class Bm83:
             chk_byte = self._rx[chk_idx]
             expected_chk = self._checksum_range(hi, lo, self._rx, body_start, chk_idx)
             if chk_byte != expected_chk:
-                del self._rx[:1]
+                self._rx = self._rx[1:]
                 continue
     # Conditional check
             op = self._rx[body_start]
@@ -288,7 +288,7 @@ class Bm83:
             if DEBUG:
                 dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
-            del self._rx[:total]
+            self._rx = self._rx[total:]
         if self._telemetry_enabled:
             burst = len(out)
             self._poll_samples += 1

@@ -36,6 +36,18 @@ def test_nextion_read_token():
     assert tokens == [b"BT_EQ"]
 
 
+def test_nextion_read_leaves_partial_frame_buffered():
+    uart = DummyUART()
+    uart.to_read = b"BT_EQ\xFF\xFF\xFFBT_P"
+    uart.in_waiting = len(uart.to_read)
+    nx = Nextion(uart)
+
+    tokens, _ = nx.read()
+
+    assert tokens == [b"BT_EQ"]
+    assert nx.rx_buffer == bytearray(b"BT_P")
+
+
 def test_nextion_queue_overflow():
     """Test that queue refuses to grow beyond max_queue_size"""
     uart = DummyUART()
