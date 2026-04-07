@@ -3,7 +3,7 @@ import types
 
 
 def test_volume_repeat_cap_constant():
-    """Ensure volume hold repeat cap is present and set to 10."""
+    """Ensure volume hold repeat cap is present and set to 2."""
     # Stub hardware-specific modules so main can import
     board_mod = types.ModuleType("board")
     board_mod.IO15 = 15
@@ -23,4 +23,4 @@ def test_volume_repeat_cap_constant():
 
     import main  # noqa: WPS433
 
-    assert getattr(main, "VOL_REPEAT_MAX", None) == 10
+    assert getattr(main, "VOL_REPEAT_MAX", None) == 2
