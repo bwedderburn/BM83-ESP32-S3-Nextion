@@ -14,7 +14,7 @@ NX_BAUD = 9600
 BM83_BAUD = 115200
 NX_TX, NX_RX = board.IO15, board.IO16
 BM83_TX, BM83_RX = board.IO17, board.IO18
-VOL_REPEAT_MAX = 10
+VOL_REPEAT_MAX = 2
 
 # endregion
 BLE_ENABLED = True
@@ -86,8 +86,8 @@ def main():
     vol_hold_start_at = 0.0       # When the button was first pressed
     vol_last_repeat_at = 0.0      # When we last sent a repeat
     vol_repeat_count = 0          # How many steps have been sent in this hold
-    vol_initial_delay_s = 0.5     # 500ms before repeat starts
-    vol_repeat_interval_s = 0.08  # 80ms between repeats
+    vol_initial_delay_s = 0.85     # 850ms before repeat starts
+    vol_repeat_interval_s = 0.35  # 350ms between repeats
 
 # endregion
     # Loop through items
