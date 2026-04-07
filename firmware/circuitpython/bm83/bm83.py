@@ -123,6 +123,13 @@ class Bm83:
 # endregion
 
 # endregion
+    @staticmethod
+    def _checksum_range(hi, lo, buf, start, end):
+        """Compute checksum over buf[start:end] without copying caller buffers."""
+        view = buf[start:end]
+        return (-((hi + lo + sum(view)) & 0xFF)) & 0xFF
+
+# endregion
     # Loop through items
 # Function: _frame - Defines the behavior for `_frame`.
     def _frame(self, op, params=b""):
