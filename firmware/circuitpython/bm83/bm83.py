@@ -1,6 +1,5 @@
 import time
-import gc
-from utils.common import dprint, DEBUG
+from utils.common import dprint
 from utils.compat import const
 
 # endregion
@@ -43,11 +42,6 @@ class Bm83:
         "_eq_throttle_s",
         "_last_track_changed_reg_at",
         "_track_changed_reg_throttle_s",
-        "_telemetry_enabled",
-        "_rx_hwm",
-        "_poll_burst_hwm",
-        "_poll_samples",
-        "_mem_free_low",
     )
     OP_MMI_ACTION = const(0x02)
     OP_EVENT_FILTER = const(0x03)
@@ -94,7 +88,7 @@ class Bm83:
     # __init__ handles   init   logic. #
         self.uart = uart
         self._rx = bytearray()
-        self._rx_max = 6144  # Tuned from stress telemetry: parser bursts reached ~4.3KB under synthetic floods
+        self._rx_max = 4096  # Max buffer size to prevent memory exhaustion
         self.power_on = False
         self.eq_index = 0
         self.connected = False
@@ -116,34 +110,6 @@ class Bm83:
         # TrackChanged re-registration throttle to prevent feedback loops
         self._last_track_changed_reg_at = 0.0
         self._track_changed_reg_throttle_s = 2.0  # Min time between re-registrations
-        self._telemetry_enabled = False
-        self._rx_hwm = 0
-        self._poll_burst_hwm = 0
-        self._poll_samples = 0
-        self._mem_free_low = None
-
-    def enable_telemetry(self, enabled=True):
-        self._telemetry_enabled = bool(enabled)
-
-    def telemetry_snapshot(self):
-        return {
-            "rx_hwm": self._rx_hwm,
-            "rx_max": self._rx_max,
-            "poll_burst_hwm": self._poll_burst_hwm,
-            "poll_samples": self._poll_samples,
-            "mem_free_low": self._mem_free_low,
-        }
-
-    def _telemetry_touch(self):
-        if not self._telemetry_enabled:
-            return
-        free = None
-        try:
-            free = gc.mem_free()
-        except Exception:
-            free = None
-        if free is not None and (self._mem_free_low is None or free < self._mem_free_low):
-            self._mem_free_low = free
 
 # endregion
     @staticmethod
@@ -154,14 +120,6 @@ class Bm83:
     # _checksum handles  checksum logic. #
     # Return the result
         return (-((hi + lo + sum(body)) & 0xFF)) & 0xFF
-
-    @staticmethod
-    def _checksum_range(hi, lo, buf, start, end):
-        """Compute checksum over buf[start:end] without creating an intermediate view."""
-        body_sum = 0
-        for i in range(start, end):
-            body_sum += buf[i]
-        return (-((hi + lo + body_sum) & 0xFF)) & 0xFF
 # endregion
 
 # endregion
@@ -245,8 +203,6 @@ class Bm83:
     # Conditional check
         if chunk:
             self._rx.extend(chunk)
-            if self._telemetry_enabled and len(self._rx) > self._rx_hwm:
-                self._rx_hwm = len(self._rx)
         # Limit buffer size to prevent memory exhaustion - clear buffer on overflow
         # since partial frames would be corrupted anyway
         if len(self._rx) > self._rx_max:
@@ -264,7 +220,7 @@ class Bm83:
                 break
     # Conditional check
             if sof > 0:
-                del self._rx[:sof]
+                self._rx = self._rx[sof:]
     # Conditional check
             if len(self._rx) < 4:
                 break
@@ -274,27 +230,17 @@ class Bm83:
     # Conditional check
             if len(self._rx) < total:
                 break
-            body_start = 3
-            chk_idx = body_start + ln
-            chk_byte = self._rx[chk_idx]
-            expected_chk = self._checksum_range(hi, lo, self._rx, body_start, chk_idx)
-            if chk_byte != expected_chk:
-                del self._rx[:1]
-                continue
+            body = bytes(self._rx[3 : 3 + ln])
+            chk = self._rx[3 + ln]
     # Conditional check
-            op = self._rx[body_start]
-            # Copy params before trimming the RX buffer.
-            params = bytes(memoryview(self._rx)[body_start + 1 : chk_idx])
-            if DEBUG:
-                dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
+            if chk != self._checksum(hi, lo, body):
+                self._rx = self._rx[1:]
+                continue
+            op = body[0]
+            params = body[1:]
+            dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
-            del self._rx[:total]
-        if self._telemetry_enabled:
-            burst = len(out)
-            self._poll_samples += 1
-            if burst > self._poll_burst_hwm:
-                self._poll_burst_hwm = burst
-            self._telemetry_touch()
+            self._rx = self._rx[total:]
     # Return the result
         return out
 # endregion

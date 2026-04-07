@@ -50,7 +50,6 @@ class BleHid:
         "_cc_min_interval_s",
         "_need_pairing_check",
         "_last_pair_try_at",
-        "_next_pair_try_at",
         "_pair_retry_s",
         "_pair_attempts",
         "_pair_attempt_limit",
@@ -68,19 +67,6 @@ class BleHid:
         "_erase_adv_settle_s",
         "_memory_counter",
         "_counter_persisted",
-        "_telemetry_enabled",
-        "_mem_free_low",
-        "_tick_burst_hwm",
-        "_tick_samples",
-        "_ble_critical_erase_until",
-        "_ble_critical_pair_until",
-        "_ble_critical_readv_until",
-        "_heavy_op_inflight",
-        "_erase_failures",
-        "_erase_timeouts",
-        "_pair_failures",
-        "_adv_failures",
-        "_retry_counts",
     )
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
@@ -115,7 +101,6 @@ class BleHid:
 # endregion
         self._need_pairing_check = False
         self._last_pair_try_at = 0.0
-        self._next_pair_try_at = 0.0
         self._pair_retry_s = 2.0
         self._pair_attempts = 0
         self._pair_attempt_limit = 4
@@ -141,76 +126,6 @@ class BleHid:
         # When filesystem is read-only, _memory_counter continues to increment while _counter_persisted=False
         self._memory_counter = 0
         self._counter_persisted = False
-        self._telemetry_enabled = False
-        self._mem_free_low = None
-        self._tick_burst_hwm = 0
-        self._tick_samples = 0
-        self._ble_critical_erase_until = 0.0
-        self._ble_critical_pair_until = 0.0
-        self._ble_critical_readv_until = 0.0
-        self._heavy_op_inflight = None
-        self._erase_failures = 0
-        self._erase_timeouts = 0
-        self._pair_failures = 0
-        self._adv_failures = 0
-        self._retry_counts = {"erase": 0, "pair": 0, "readv": 0, "adv": 0}
-
-    def enable_telemetry(self, enabled=True):
-        self._telemetry_enabled = bool(enabled)
-
-    def telemetry_snapshot(self):
-        return {
-            "mem_free_low": self._mem_free_low,
-            "tick_burst_hwm": self._tick_burst_hwm,
-            "tick_samples": self._tick_samples,
-            "adv_oom_count": self._adv_oom_count,
-            "erase_failures": self._erase_failures,
-            "erase_timeouts": self._erase_timeouts,
-            "pair_failures": self._pair_failures,
-            "adv_failures": self._adv_failures,
-            "retry_counts": dict(self._retry_counts),
-            "ble_critical_active": self.in_critical_section(),
-        }
-
-    def _set_critical_window(self, window_name, duration_s):
-        until = time.monotonic() + max(0.0, duration_s)
-        if window_name == "erase":
-            self._ble_critical_erase_until = max(self._ble_critical_erase_until, until)
-        elif window_name == "pair":
-            self._ble_critical_pair_until = max(self._ble_critical_pair_until, until)
-        elif window_name == "readv":
-            self._ble_critical_readv_until = max(self._ble_critical_readv_until, until)
-
-    def in_critical_section(self):
-        now = time.monotonic()
-        return (
-            now < self._ble_critical_erase_until
-            or now < self._ble_critical_pair_until
-            or now < self._ble_critical_readv_until
-            or bool(self._heavy_op_inflight)
-        )
-
-    def _record_retry(self, bucket, delay_s):
-        self._retry_counts[bucket] = self._retry_counts.get(bucket, 0) + 1
-        return time.monotonic() + max(0.0, delay_s)
-
-    def _backoff_delay(self, attempt, base_s=1.0, step_s=1.0, cap_s=20.0):
-        return min(cap_s, base_s + (max(0, attempt) * step_s))
-
-    def _telemetry_touch(self, burst=0):
-        if not self._telemetry_enabled:
-            return
-        self._tick_samples += 1
-        if burst > self._tick_burst_hwm:
-            self._tick_burst_hwm = burst
-        free = None
-        try:
-            free = gc.mem_free()
-        except Exception:
-            free = None
-        if free is not None and (self._mem_free_low is None or free < self._mem_free_low):
-            self._mem_free_low = free
-
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
@@ -274,7 +189,7 @@ class BleHid:
 # endregion
     # Loop through items
 # Function: _start_adv - Defines the behavior for `_start_adv`.
-    def _start_adv(self, force=False, bypass_inhibit=False):
+    def _start_adv(self, force=False):
 # region _start_adv
     # _start_adv handles  start adv logic. #
     # Conditional check
@@ -284,7 +199,7 @@ class BleHid:
 
 # endregion
     # Conditional check
-        if (now < self._adv_inhibit_until) and (not bypass_inhibit):
+        if now < self._adv_inhibit_until:
             return
     # Conditional check
         if getattr(self._ble, "connected", False):
@@ -295,7 +210,6 @@ class BleHid:
             return
     # Conditional check
         if force:
-            self._set_critical_window("readv", BLE_STACK_STABILIZATION_DELAY)
             self._stop_adv()
         gc.collect()
     # Try block to catch exceptions
@@ -304,20 +218,17 @@ class BleHid:
             self._adv_oom_count = 0
             self._adv_inhibit_until = 0.0
             self._last_adv_kick_at = now
-            self._set_critical_window("readv", 0.2)
     # Handle exceptions
         except Exception as e:
             msg = str(e).lower()
     # Conditional check
             if "nimble" in msg and "memory" in msg:
                 self._adv_oom_count += 1
-                backoff = self._backoff_delay(self._adv_oom_count, base_s=4.0, step_s=4.0, cap_s=20.0)
+                backoff = min(20.0, 4.0 + 4.0 * self._adv_oom_count)
             else:
                 backoff = 4.0
-            self._adv_failures += 1
-            retry_at = self._record_retry("adv", backoff)
-            self._adv_inhibit_until = retry_at
-            self._last_adv_kick_at = retry_at
+            self._adv_inhibit_until = now + backoff
+            self._last_adv_kick_at = now + backoff
             dprint("[BLE] adv err (backoff %.1fs):" % backoff, e)
 
 # endregion
@@ -338,7 +249,6 @@ class BleHid:
         self._need_pairing_check = True
         self._pair_attempts = 0
         self._last_pair_try_at = 0.0
-        self._next_pair_try_at = 0.0
 
 # endregion
     # Loop through items
@@ -366,11 +276,9 @@ class BleHid:
             self._need_pairing_check = False
             return
         now = time.monotonic()
-        # _next_pair_try_at: backoff after failures (cleared on success); _last_pair_try_at: steady-state spacing.
-        if now < self._next_pair_try_at:
-            return  # respect backoff after previous failure
+    # Conditional check
         if (now - self._last_pair_try_at) < self._pair_retry_s:
-            return  # steady-state spacing between pairing attempts
+            return
         self._last_pair_try_at = now
 
 # endregion
@@ -392,7 +300,6 @@ class BleHid:
                     print("[BLE] Pairing...")
                     c.pair()
                     self._pair_attempts += 1
-                    self._set_critical_window("pair", 1.5)
                     paired = getattr(c, "paired", None)
 
 # endregion
@@ -400,16 +307,10 @@ class BleHid:
                 if paired:
                     self._need_pairing_check = False
                     self._pair_attempts = 0
-                    self._next_pair_try_at = 0.0
                     print("[BLE] Paired/encrypted")
     # Handle exceptions
             except Exception as e:
                 self._pair_attempts += 1
-                self._pair_failures += 1
-                self._next_pair_try_at = self._record_retry(
-                    "pair",
-                    self._backoff_delay(self._pair_attempts, base_s=1.0, step_s=0.5, cap_s=6.0)
-                )
                 dprint("[BLE] pair err (attempt %d):" % self._pair_attempts, e)
 
 # endregion
@@ -461,99 +362,135 @@ class BleHid:
 # region erase_bonds
     # erase_bonds handles erase bonds logic. #
         print("[BLE] Erase bonding requested")
+    # Conditional check
         if not self._ready or not self._ble:
             print("[BLE] erase_bonding: Not ready or BLE not initialized")
             return
-        if self._heavy_op_inflight == "erase":
-            dprint("[BLE] erase_bonding: already in progress")
-            return
+        # Stop advertising first to reduce memory pressure when needed.
+        # Wrap in try/except as a defensive measure against hard crashes in the BLE stack.
+        # Even though _stop_adv() has internal exception handling, the BLE stack can crash
+        # at a lower level when under memory pressure (e.g., "Nimble out of memory").
+        if not self._erase_adv_stopped:
+            try:
+                self._stop_adv()
+            except Exception as e:
+                dprint("[BLE] stop_adv crash in erase_bonds:", e)
 
-        self._heavy_op_inflight = "erase"
-        self._set_critical_window("erase", 4.0)
-        self._set_critical_window("readv", 2.0)
+            # Brief delay to allow BLE stack to stabilize after stopping advertising.
+            time.sleep(BLE_STACK_STABILIZATION_DELAY)
+        else:
+            since_stop = time.monotonic() - self._last_adv_stop_at
+            if since_stop < BLE_STACK_STABILIZATION_DELAY:
+                time.sleep(BLE_STACK_STABILIZATION_DELAY - since_stop)
 
+        # Aggressive GC before heavy operations
+        # Two consecutive gc.collect() calls ensure thorough cleanup: the first pass may leave
+        # objects in a "finalizing" state, and the second pass ensures those finalizers have
+        # run and freed their memory. This is critical before memory-intensive BLE operations.
+        gc.collect()
+        gc.collect()
+
+        # Disconnect all connections with individual error handling
+    # Try block to catch exceptions
         try:
-            if not self._erase_adv_stopped:
+            conns = list(getattr(self._ble, "connections", []))
+    # Loop through items
+            for c in conns:
+    # Try block to catch exceptions
                 try:
-                    self._stop_adv()
+                    c.disconnect()
+    # Handle exceptions
                 except Exception as e:
-                    dprint("[BLE] stop_adv crash in erase_bonds:", e)
-                time.sleep(BLE_STACK_STABILIZATION_DELAY)
-            else:
-                since_stop = time.monotonic() - self._last_adv_stop_at
-                if since_stop < BLE_STACK_STABILIZATION_DELAY:
-                    time.sleep(BLE_STACK_STABILIZATION_DELAY - since_stop)
+                    dprint("[BLE] disconnect err:", e)
+    # Handle exceptions
+        except Exception as e:
+            dprint("[BLE] connections list err:", e)
 
-            gc.collect()
-            gc.collect()
-            self._telemetry_touch(1)
+# endregion
+        # Brief delay after disconnections to allow BLE stack to settle
+        time.sleep(BLE_STACK_STABILIZATION_DELAY)
 
+        # Another GC pass after disconnections
+        gc.collect()
+
+        ok = False
+    # Try block to catch exceptions
+        try:
+    # Conditional check
+            if hasattr(self._ble, "erase_bonding"):
+                self._ble.erase_bonding()
+                ok = True
+    # Handle exceptions
+        except Exception as e:
+            dprint("[BLE] erase_bonding err:", e)
+            ok = False
+
+# endregion
+    # Conditional check
+        if not ok:
+    # Try block to catch exceptions
             try:
-                conns = list(getattr(self._ble, "connections", []))
-                for c in conns:
-                    try:
-                        c.disconnect()
-                    except Exception as e:
-                        dprint("[BLE] disconnect err:", e)
+                import _bleio
+    # Conditional check
+                if hasattr(_bleio.adapter, "erase_bonding"):
+                    _bleio.adapter.erase_bonding()
+                    ok = True
+    # Handle exceptions
             except Exception as e:
-                dprint("[BLE] connections list err:", e)
+                dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
+                ok = False
 
-            time.sleep(BLE_STACK_STABILIZATION_DELAY)
-            gc.collect()
-            self._telemetry_touch(1)
+# endregion
+    # Conditional check
+        print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
 
-            erase_succeeded = False
-            try:
-                if hasattr(self._ble, "erase_bonding"):
-                    self._ble.erase_bonding()
-                    erase_succeeded = True
-            except Exception as e:
-                dprint("[BLE] erase_bonding err:", e)
+        # Brief delay after erase_bonding to allow BLE stack to stabilize
+        # before updating name and restarting advertising
+        time.sleep(BLE_STACK_STABILIZATION_DELAY)
 
-            if not erase_succeeded:
-                try:
-                    import _bleio
-                    if hasattr(_bleio.adapter, "erase_bonding"):
-                        _bleio.adapter.erase_bonding()
-                        erase_succeeded = True
-                except Exception as e:
-                    dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
-
-            print("[BLE] erase_bonding:", "OK" if erase_succeeded else "Unavailable on this build")
-            time.sleep(BLE_STACK_STABILIZATION_DELAY)
-
-            if erase_succeeded:
-                if self._counter_persisted:
-                    persisted_counter = _read_ble_counter()
-                    counter = max(persisted_counter, self._memory_counter) + 1
-                else:
-                    counter = self._memory_counter + 1
-                self._memory_counter = counter
-                self._counter_persisted = _write_ble_counter(counter)
-                if not self._counter_persisted:
-                    print("[BLE] Using in-memory counter (filesystem read-only)")
-                self._update_ble_name(counter)
+        # Increment counter and update BLE name only if erase succeeded
+        if ok:
+            # Read counter from appropriate source and increment
+            # Use max() to prevent counter regression if persistent value is stale/corrupt
+            if self._counter_persisted:
+                persisted_counter = _read_ble_counter()
+                counter = max(persisted_counter, self._memory_counter) + 1
             else:
-                self._erase_failures += 1
-                backoff = self._backoff_delay(self._erase_failures, base_s=2.0, step_s=1.0, cap_s=8.0)
-                self._adv_inhibit_until = self._record_retry("erase", backoff)
+                counter = self._memory_counter + 1
 
-            gc.collect()
-            self._telemetry_touch(1)
+            # Always update memory counter to keep it in sync
+            self._memory_counter = counter
 
-            if erase_succeeded:
-                self._adv_inhibit_until = 0.0
-                self._adv_oom_count = 0
-            self._need_pairing_check = False
-            self._pair_attempts = 0
-            self._erase_adv_stopped = False
+            # Attempt to persist counter and track success
+            self._counter_persisted = _write_ble_counter(counter)
+            if not self._counter_persisted:
+                print("[BLE] Using in-memory counter (filesystem read-only)")
 
-            time.sleep(BLE_STACK_STABILIZATION_DELAY)
-            self._start_adv(force=erase_succeeded, bypass_inhibit=erase_succeeded)
-        finally:
-            self._heavy_op_inflight = None
-            self._set_critical_window("erase", 0.6)
-            self._set_critical_window("readv", 0.6)
+            # Update BLE name with new counter value
+            self._update_ble_name(counter)
+
+        # Final GC pass before restarting advertising
+        gc.collect()
+
+        # Reset state
+        self._adv_inhibit_until = 0.0
+        self._adv_oom_count = 0
+        self._need_pairing_check = False
+        self._pair_attempts = 0
+        self._erase_adv_stopped = False
+
+        # Brief delay before restarting advertising to ensure BLE stack is fully settled
+        time.sleep(BLE_STACK_STABILIZATION_DELAY)
+
+        # Restart advertising with crash protection.
+        # The BLE stack can be unstable after erase_bonding, especially with Nimble memory
+        # issues. Wrap in try/except to prevent hard crashes and defer advertising to tick().
+        try:
+            self._start_adv(force=True)
+        except Exception as e:
+            dprint("[BLE] adv restart after erase failed:", e)
+            # Set inhibit to allow stack to recover; tick() will retry later
+            self._adv_inhibit_until = time.monotonic() + 4.0
 
 # endregion
     # Loop through items
@@ -569,8 +506,6 @@ class BleHid:
         # Prevent re-entry while an erase is already pending
         if self._erase_pending:
             return False
-        if self._heavy_op_inflight == "erase":
-            return False
         self._erase_pending = True
         self._erase_requested_at = now
         self._erase_pending_since = now
@@ -585,7 +520,6 @@ class BleHid:
     # Conditional check
         if not self._ready or not self._ble:
             return
-        burst = 0
         now = time.monotonic()
         ble = self._ble
         is_advertising = self._is_advertising
@@ -601,7 +535,6 @@ class BleHid:
             if self._erase_adv_stopped and (now - self._last_adv_stop_at) < self._erase_adv_settle_s:
                 return
             stop_adv()
-            burst += 1
             self._erase_adv_stopped = True
             self._last_adv_stop_at = now
             self._erase_requested_at = now
@@ -614,7 +547,6 @@ class BleHid:
                 # Run erase inside try to avoid propagating BLE stack crashes
                 try:
                     self.erase_bonds()
-                    burst += 1
                 except Exception as e:
                     dprint("[BLE] erase_bonds crash:", e)
             else:
@@ -630,7 +562,6 @@ class BleHid:
                         "[BLE] erase_bonds deferred too long, cancelling:",
                         ",".join(reasons)
                     )
-                    self._erase_timeouts += 1
                     self._last_erase_at = now
                     self._erase_pending = False
                     self._erase_adv_stopped = False
@@ -641,10 +572,8 @@ class BleHid:
     # Conditional check
             if connected:
                 on_connect()
-                burst += 1
             else:
                 on_disconnect()
-                burst += 1
     # Conditional check
         if not connected:
             if self._erase_pending:
@@ -653,7 +582,6 @@ class BleHid:
     # Conditional check
             if not advertising:
                 start_adv(force=False)
-                burst += 1
     # Conditional check
             elif (now - self._last_adv_kick_at) > self._adv_kick_period_s:
                 self._last_adv_kick_at = now
@@ -661,9 +589,6 @@ class BleHid:
     # Conditional check
             if self._need_pairing_check:
                 ensure_paired()
-                burst += 1
-
-        self._telemetry_touch(burst)
 
 # endregion
     # Loop through items
