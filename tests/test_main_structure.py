@@ -22,8 +22,6 @@ def test_main_has_single_entrypoint_definition():
 
 def test_main_has_single_main_guard():
     """Ensure we did not accidentally append a second __main__ block."""
-    source = MAIN_PATH.read_text(encoding="utf-8")
-    assert source.count('if __name__ == "__main__":') == 1
     tree = ast.parse(MAIN_PATH.read_text(encoding="utf-8"))
 
     def is_main_guard(node: ast.AST) -> bool:
