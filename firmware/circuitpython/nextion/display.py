@@ -1,15 +1,8 @@
 import time
-import gc
 from utils.common import dprint, _sanitize_text
 
 # endregion
 TERM = b"\xFF\xFF\xFF"
-_TOKEN_BYTE_MIN_NUM = 48
-_TOKEN_BYTE_MAX_NUM = 57
-_TOKEN_BYTE_MIN_ALPHA = 65
-_TOKEN_BYTE_MAX_ALPHA = 90
-_TOKEN_BYTE_USCORE = 95
-_TRIM_BYTES = b" \t\n\r\x0b\x0c"
 
 # EQ mapping for test compatibility
 EQ_MAP = {
@@ -80,12 +73,6 @@ class Nextion:
         "_last_token_at",
         "_token_throttle_s",
         "_last_token",
-        "_telemetry_enabled",
-        "_rx_hwm",
-        "_txq_hwm",
-        "_token_burst_hwm",
-        "_read_samples",
-        "_mem_free_low",
     )
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
@@ -104,43 +91,13 @@ class Nextion:
         self._txq = []
         self._tx_head = 0
         self._last_tx_at = 0.0
-        self._tx_interval_s = 0.04
-        self._max_queue_size = 36  # Tuned from stress telemetry: queue peak stayed <=22
+        self._tx_interval_s = 0.035
+        self._max_queue_size = 50  # Prevent unbounded growth
 
 # endregion
         self._last_token_at = -1.0  # Initialize to past to allow first token
-        self._token_throttle_s = 0.12  # Tuned from stress telemetry: filters bounce, preserves fast taps
+        self._token_throttle_s = 0.15  # Duplicate tokens within this window are dropped
         self._last_token = None  # Track last token value for smarter throttling
-        self._telemetry_enabled = False
-        self._rx_hwm = 0
-        self._txq_hwm = 0
-        self._token_burst_hwm = 0
-        self._read_samples = 0
-        self._mem_free_low = None
-
-    def enable_telemetry(self, enabled=True):
-        self._telemetry_enabled = bool(enabled)
-
-    def telemetry_snapshot(self):
-        return {
-            "rx_hwm": self._rx_hwm,
-            "txq_hwm": self._txq_hwm,
-            "queue_cap": self._max_queue_size,
-            "token_burst_hwm": self._token_burst_hwm,
-            "read_samples": self._read_samples,
-            "mem_free_low": self._mem_free_low,
-        }
-
-    def _telemetry_touch(self):
-        if not self._telemetry_enabled:
-            return
-        free = None
-        try:
-            free = gc.mem_free()
-        except Exception:
-            free = None
-        if free is not None and (self._mem_free_low is None or free < self._mem_free_low):
-            self._mem_free_low = free
 
 # endregion
 
@@ -184,8 +141,6 @@ class Nextion:
             dprint("[NX] queue full, dropping:", cmd[:30])
             return
         self._txq.append(cmd)
-        if self._telemetry_enabled and active_len + 1 > self._txq_hwm:
-            self._txq_hwm = active_len + 1
 
 # endregion
     # Loop through items
@@ -241,8 +196,6 @@ class Nextion:
     # Conditional check
         if chunk:
             self._rx.extend(chunk)
-            if self._telemetry_enabled and len(self._rx) > self._rx_hwm:
-                self._rx_hwm = len(self._rx)
 
 # endregion
     # Loop through items
@@ -257,7 +210,7 @@ class Nextion:
             return None
 # endregion
         frame = bytes(self._rx[:i])
-        del self._rx[: i + 3]
+        self._rx = self._rx[i + 3:]
     # Return the result
         return frame
 # endregion
@@ -269,34 +222,21 @@ class Nextion:
     def _extract_token(frame):
 # region _extract_token
     # _extract_token handles token extraction logic. #
-        if not frame:
-            return None
-
-        # strip() without intermediate bytes allocation
-        start = 0
-        end = len(frame)
-        while start < end and frame[start] in _TRIM_BYTES:
-            start += 1
-        while end > start and frame[end - 1] in _TRIM_BYTES:
-            end -= 1
-        if start >= end:
+        f = frame.strip()
+        if not f:
             return None
 
         # Remove leading and trailing non-token bytes (filter noise)
-        while start < end and not (
-            _TOKEN_BYTE_MIN_NUM <= frame[start] <= _TOKEN_BYTE_MAX_NUM
-            or _TOKEN_BYTE_MIN_ALPHA <= frame[start] <= _TOKEN_BYTE_MAX_ALPHA
-            or frame[start] == _TOKEN_BYTE_USCORE
-        ):
+        # Valid token bytes: A-Z (65-90), 0-9 (48-57), _ (95)
+        start = 0
+        while start < len(f) and not (48 <= f[start] <= 57 or 65 <= f[start] <= 90 or f[start] == 95):
             start += 1
-        while end > start and not (
-            _TOKEN_BYTE_MIN_NUM <= frame[end - 1] <= _TOKEN_BYTE_MAX_NUM
-            or _TOKEN_BYTE_MIN_ALPHA <= frame[end - 1] <= _TOKEN_BYTE_MAX_ALPHA
-            or frame[end - 1] == _TOKEN_BYTE_USCORE
-        ):
+
+        end = len(f)
+        while end > start and not (48 <= f[end - 1] <= 57 or 65 <= f[end - 1] <= 90 or f[end - 1] == 95):
             end -= 1
 
-        return frame[start:end] if start < end else None
+        return f[start:end] if start < end else None
 # endregion
 
 # endregion
@@ -360,12 +300,6 @@ class Nextion:
     # Conditional check
                 if len(tokens) >= max_tokens:
                     break
-        if self._telemetry_enabled:
-            burst = len(tokens)
-            self._read_samples += 1
-            if burst > self._token_burst_hwm:
-                self._token_burst_hwm = burst
-            self._telemetry_touch()
     # Return the result
         return tokens, page_changed
 # endregion
