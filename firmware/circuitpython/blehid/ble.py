@@ -50,6 +50,7 @@ class BleHid:
         "_cc_min_interval_s",
         "_need_pairing_check",
         "_last_pair_try_at",
+        "_next_pair_try_at",
         "_pair_retry_s",
         "_pair_attempts",
         "_pair_attempt_limit",
@@ -69,6 +70,8 @@ class BleHid:
         "_counter_persisted",
         "_erase_failures",
         "_adv_failures",
+        "_heavy_op_inflight",
+        "_erase_timeouts",
     )
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
@@ -103,6 +106,7 @@ class BleHid:
 # endregion
         self._need_pairing_check = False
         self._last_pair_try_at = 0.0
+        self._next_pair_try_at = 0.0
         self._pair_retry_s = 2.0
         self._pair_attempts = 0
         self._pair_attempt_limit = 4
@@ -130,6 +134,8 @@ class BleHid:
         self._counter_persisted = False
         self._erase_failures = 0
         self._adv_failures = 0
+        self._heavy_op_inflight = None
+        self._erase_timeouts = 0
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
@@ -254,6 +260,7 @@ class BleHid:
         self._need_pairing_check = True
         self._pair_attempts = 0
         self._last_pair_try_at = 0.0
+        self._next_pair_try_at = 0.0
 
 # endregion
     # Loop through items
@@ -281,6 +288,9 @@ class BleHid:
             self._need_pairing_check = False
             return
         now = time.monotonic()
+    # Conditional check
+        if now < self._next_pair_try_at:
+            return
     # Conditional check
         if (now - self._last_pair_try_at) < self._pair_retry_s:
             return
@@ -312,6 +322,7 @@ class BleHid:
                 if paired:
                     self._need_pairing_check = False
                     self._pair_attempts = 0
+                    self._next_pair_try_at = 0.0
                     print("[BLE] Paired/encrypted")
     # Handle exceptions
             except Exception as e:
@@ -371,138 +382,137 @@ class BleHid:
         if not self._ready or not self._ble:
             print("[BLE] erase_bonding: Not ready or BLE not initialized")
             return
-        # Stop advertising first to reduce memory pressure when needed.
-        # Wrap in try/except as a defensive measure against hard crashes in the BLE stack.
-        # Even though _stop_adv() has internal exception handling, the BLE stack can crash
-        # at a lower level when under memory pressure (e.g., "Nimble out of memory").
-        if not self._erase_adv_stopped:
-            try:
-                self._stop_adv()
-            except Exception as e:
-                dprint("[BLE] stop_adv crash in erase_bonds:", e)
-
-            # Brief delay to allow BLE stack to stabilize after stopping advertising.
-            time.sleep(BLE_STACK_STABILIZATION_DELAY)
-        else:
-            since_stop = time.monotonic() - self._last_adv_stop_at
-            if since_stop < BLE_STACK_STABILIZATION_DELAY:
-                time.sleep(BLE_STACK_STABILIZATION_DELAY - since_stop)
-
-        # Aggressive GC before heavy operations
-        # Two consecutive gc.collect() calls ensure thorough cleanup: the first pass may leave
-        # objects in a "finalizing" state, and the second pass ensures those finalizers have
-        # run and freed their memory. This is critical before memory-intensive BLE operations.
-        gc.collect()
-        gc.collect()
-
-        # Disconnect all connections with individual error handling
-    # Try block to catch exceptions
+    # Conditional check
+        if self._heavy_op_inflight:
+            dprint("[BLE] heavy op inflight:", self._heavy_op_inflight)
+            return
+        self._heavy_op_inflight = "erase"
         try:
-            conns = list(getattr(self._ble, "connections", []))
-    # Loop through items
-            for c in conns:
-    # Try block to catch exceptions
+            # Stop advertising first to reduce memory pressure when needed.
+            # Wrap in try/except as a defensive measure against hard crashes in the BLE stack.
+            # Even though _stop_adv() has internal exception handling, the BLE stack can crash
+            # at a lower level when under memory pressure (e.g., "Nimble out of memory").
+            if not self._erase_adv_stopped:
                 try:
-                    c.disconnect()
-    # Handle exceptions
+                    self._stop_adv()
                 except Exception as e:
-                    dprint("[BLE] disconnect err:", e)
-    # Handle exceptions
-        except Exception as e:
-            dprint("[BLE] connections list err:", e)
+                    dprint("[BLE] stop_adv crash in erase_bonds:", e)
 
-# endregion
-        # Brief delay after disconnections to allow BLE stack to settle
-        time.sleep(BLE_STACK_STABILIZATION_DELAY)
+                # Brief delay to allow BLE stack to stabilize after stopping advertising.
+                time.sleep(BLE_STACK_STABILIZATION_DELAY)
+            else:
+                since_stop = time.monotonic() - self._last_adv_stop_at
+                if since_stop < BLE_STACK_STABILIZATION_DELAY:
+                    time.sleep(BLE_STACK_STABILIZATION_DELAY - since_stop)
 
-        # Another GC pass after disconnections
-        gc.collect()
+            # Aggressive GC before heavy operations
+            # Two consecutive gc.collect() calls ensure thorough cleanup: the first pass may leave
+            # objects in a "finalizing" state, and the second pass ensures those finalizers have
+            # run and freed their memory. This is critical before memory-intensive BLE operations.
+            gc.collect()
+            gc.collect()
 
-        ok = False
-    # Try block to catch exceptions
-        try:
-    # Conditional check
-            if hasattr(self._ble, "erase_bonding"):
-                self._ble.erase_bonding()
-                ok = True
-    # Handle exceptions
-        except Exception as e:
-            dprint("[BLE] erase_bonding err:", e)
-            ok = False
-
-# endregion
-    # Conditional check
-        if not ok:
+            # Disconnect all connections with individual error handling
     # Try block to catch exceptions
             try:
-                import _bleio
-    # Conditional check
-                if hasattr(_bleio.adapter, "erase_bonding"):
-                    _bleio.adapter.erase_bonding()
-                    ok = True
+                conns = list(getattr(self._ble, "connections", []))
+    # Loop through items
+                for c in conns:
+    # Try block to catch exceptions
+                    try:
+                        c.disconnect()
+    # Handle exceptions
+                    except Exception as e:
+                        dprint("[BLE] disconnect err:", e)
     # Handle exceptions
             except Exception as e:
-                dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
+                dprint("[BLE] connections list err:", e)
+
+# endregion
+            # Brief delay after disconnections to allow BLE stack to settle
+            time.sleep(BLE_STACK_STABILIZATION_DELAY)
+
+            # Another GC pass after disconnections
+            gc.collect()
+
+            ok = False
+            try:
+                if hasattr(self._ble, "erase_bonding"):
+                    self._ble.erase_bonding()
+                    ok = True
+            except Exception as e:
+                dprint("[BLE] erase_bonding err:", e)
                 ok = False
 
-# endregion
-    # Conditional check
-        print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
+            if not ok:
+                try:
+                    import _bleio
+                    if hasattr(_bleio.adapter, "erase_bonding"):
+                        _bleio.adapter.erase_bonding()
+                        ok = True
+                except Exception as e:
+                    dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
+                    ok = False
 
-        # Brief delay after erase_bonding to allow BLE stack to stabilize
-        # before updating name and restarting advertising
-        time.sleep(BLE_STACK_STABILIZATION_DELAY)
+            print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
 
-        # Increment counter and update BLE name only if erase succeeded
-        if ok:
-            # Read counter from appropriate source and increment
-            # Use max() to prevent counter regression if persistent value is stale/corrupt
-            if self._counter_persisted:
-                persisted_counter = _read_ble_counter()
-                counter = max(persisted_counter, self._memory_counter) + 1
-            else:
-                counter = self._memory_counter + 1
+            # Brief delay after erase_bonding to allow BLE stack to stabilize
+            # before updating name and restarting advertising
+            time.sleep(BLE_STACK_STABILIZATION_DELAY)
 
-            # Always update memory counter to keep it in sync
-            self._memory_counter = counter
+            # Increment counter and update BLE name only if erase succeeded
+            if ok:
+                # Read counter from appropriate source and increment
+                # Use max() to prevent counter regression if persistent value is stale/corrupt
+                if self._counter_persisted:
+                    persisted_counter = _read_ble_counter()
+                    counter = max(persisted_counter, self._memory_counter) + 1
+                else:
+                    counter = self._memory_counter + 1
 
-            # Attempt to persist counter and track success
-            self._counter_persisted = _write_ble_counter(counter)
-            if not self._counter_persisted:
-                print("[BLE] Using in-memory counter (filesystem read-only)")
+                # Always update memory counter to keep it in sync
+                self._memory_counter = counter
 
-            # Update BLE name with new counter value
-            self._update_ble_name(counter)
+                # Attempt to persist counter and track success
+                self._counter_persisted = _write_ble_counter(counter)
+                if not self._counter_persisted:
+                    print("[BLE] Using in-memory counter (filesystem read-only)")
 
-        # Final GC pass before restarting advertising
-        gc.collect()
+                # Update BLE name with new counter value
+                self._update_ble_name(counter)
 
-        # Reset common state
-        self._adv_oom_count = 0
-        self._need_pairing_check = False
-        self._pair_attempts = 0
-        self._erase_adv_stopped = False
+            # Final GC pass before restarting advertising
+            gc.collect()
 
-        if not ok:
-            # Erase failed — apply backoff and defer advertising restart
-            self._erase_failures += 1
-            backoff = min(8.0, 2.0 + self._erase_failures * 1.0)
-            self._adv_inhibit_until = time.monotonic() + backoff
-            return
+            # Reset common state
+            self._adv_oom_count = 0
+            self._need_pairing_check = False
+            self._pair_attempts = 0
+            self._erase_adv_stopped = False
 
-        # Erase succeeded — reset failure counter
-        self._erase_failures = 0
-        self._adv_inhibit_until = 0.0
+            if not ok:
+                # Erase failed — apply backoff and defer advertising restart
+                self._erase_failures += 1
+                backoff = min(8.0, 2.0 + self._erase_failures * 1.0)
+                self._adv_inhibit_until = time.monotonic() + backoff
+                return
 
-        # Brief delay before restarting advertising to ensure BLE stack is fully settled
-        time.sleep(BLE_STACK_STABILIZATION_DELAY)
+            # Erase succeeded — reset failure counter
+            self._erase_failures = 0
+            self._adv_inhibit_until = 0.0
 
-        # Restart advertising with crash protection.
-        try:
-            self._start_adv(force=True)
-        except Exception as e:
-            dprint("[BLE] adv restart after erase failed:", e)
-            self._adv_inhibit_until = time.monotonic() + 4.0
+            # Brief delay before restarting advertising to ensure BLE stack is fully settled
+            time.sleep(BLE_STACK_STABILIZATION_DELAY)
+
+            # Restart advertising with crash protection.
+            try:
+                self._start_adv(force=True)
+            except Exception as e:
+                dprint("[BLE] adv restart after erase failed:", e)
+                self._adv_inhibit_until = time.monotonic() + 4.0
+
+        finally:
+            self._heavy_op_inflight = None
 
 # endregion
     # Loop through items
@@ -511,6 +521,9 @@ class BleHid:
     # region request_erase_bonds
     # request_erase_bonds defers erase_bonds to the tick loop with cooldown. #
         now = time.monotonic()
+    # Conditional check
+        if self._heavy_op_inflight:
+            return False
     # Conditional check
         if (now - self._last_erase_at) < self._erase_cooldown_s:
             dprint("[BLE] erase_bonds throttled")
@@ -577,6 +590,7 @@ class BleHid:
                     self._last_erase_at = now
                     self._erase_pending = False
                     self._erase_adv_stopped = False
+                    self._erase_timeouts += 1
         connected = bool(getattr(ble, "connected", False))
     # Conditional check
         if connected != self._was_connected:
