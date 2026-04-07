@@ -67,6 +67,8 @@ class BleHid:
         "_erase_adv_settle_s",
         "_memory_counter",
         "_counter_persisted",
+        "_erase_failures",
+        "_adv_failures",
     )
     # Loop through items
 # Function: __init__ - Defines the behavior for `__init__`.
@@ -126,6 +128,8 @@ class BleHid:
         # When filesystem is read-only, _memory_counter continues to increment while _counter_persisted=False
         self._memory_counter = 0
         self._counter_persisted = False
+        self._erase_failures = 0
+        self._adv_failures = 0
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):
@@ -220,6 +224,7 @@ class BleHid:
             self._last_adv_kick_at = now
     # Handle exceptions
         except Exception as e:
+            self._adv_failures += 1
             msg = str(e).lower()
     # Conditional check
             if "nimble" in msg and "memory" in msg:
@@ -472,24 +477,31 @@ class BleHid:
         # Final GC pass before restarting advertising
         gc.collect()
 
-        # Reset state
-        self._adv_inhibit_until = 0.0
+        # Reset common state
         self._adv_oom_count = 0
         self._need_pairing_check = False
         self._pair_attempts = 0
         self._erase_adv_stopped = False
 
+        if not ok:
+            # Erase failed — apply backoff and defer advertising restart
+            self._erase_failures += 1
+            backoff = min(8.0, 2.0 + self._erase_failures * 1.0)
+            self._adv_inhibit_until = time.monotonic() + backoff
+            return
+
+        # Erase succeeded — reset failure counter
+        self._erase_failures = 0
+        self._adv_inhibit_until = 0.0
+
         # Brief delay before restarting advertising to ensure BLE stack is fully settled
         time.sleep(BLE_STACK_STABILIZATION_DELAY)
 
         # Restart advertising with crash protection.
-        # The BLE stack can be unstable after erase_bonding, especially with Nimble memory
-        # issues. Wrap in try/except to prevent hard crashes and defer advertising to tick().
         try:
             self._start_adv(force=True)
         except Exception as e:
             dprint("[BLE] adv restart after erase failed:", e)
-            # Set inhibit to allow stack to recover; tick() will retry later
             self._adv_inhibit_until = time.monotonic() + 4.0
 
 # endregion
