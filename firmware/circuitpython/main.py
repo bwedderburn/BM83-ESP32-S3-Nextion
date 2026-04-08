@@ -207,9 +207,8 @@ def main():
             else:
                 print("[AUX] cleared -> enabling AVRCP polling, hiding tAUX1")
                 exit_aux_mode()
-    # Conditional check
-            if nx.current_page == 1:
-                flush_page(1)
+    # Refresh current page to update AUX indicator
+            flush_page(nx.current_page)
 
 # endregion
     # Conditional check
