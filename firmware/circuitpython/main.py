@@ -202,10 +202,10 @@ def main():
             aux_mode_prev = aux_mode
     # Conditional check
             if aux_mode:
-                print("[AUX] inferred -> gating AVRCP polling, showing tAUX1")
+                print("[AUX] inferred -> gating AVRCP polling, showing AUX indicators")
                 enter_aux_mode()
             else:
-                print("[AUX] cleared -> enabling AVRCP polling, hiding tAUX1")
+                print("[AUX] cleared -> enabling AVRCP polling, hiding AUX indicators")
                 exit_aux_mode()
     # Refresh current page to update AUX indicator
             flush_page(nx.current_page)
