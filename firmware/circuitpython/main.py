@@ -202,10 +202,10 @@ def main():
             aux_mode_prev = aux_mode
     # Conditional check
             if aux_mode:
-                print("[AUX] inferred -> gating AVRCP polling, showing tAUX1")
+                print("[AUX] inferred -> gating AVRCP polling, showing AUX indicators")
                 enter_aux_mode()
             else:
-                print("[AUX] cleared -> enabling AVRCP polling, hiding tAUX1")
+                print("[AUX] cleared -> enabling AVRCP polling, hiding AUX indicators")
                 exit_aux_mode()
     # Refresh current page to update AUX indicator
             flush_page(nx.current_page)
@@ -232,7 +232,7 @@ def main():
     # Conditional check
                 if change == "CONNECTED":
                     print("[BTM] Connected -> register notifications + request metadata")
-                    bm.avrcp_register_notification(0x01, interval_s=1)
+                    bm.avrcp_register_notification(0x01, interval_s=0)
                     bm.avrcp_register_notification(0x02, interval_s=0)
                     bm.avrcp_register_notification(0x05, interval_s=1)
                     bm._next_playstatus_at = now + 0.05
@@ -286,7 +286,9 @@ def main():
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
-    # Conditional check
+                    elif event_id == 0x01 and len(avp) >= 2:
+                        last_play_status = avp[1]
+                    # Conditional check
                     elif event_id == 0x05 and len(avp) >= 5:
                         pos = int.from_bytes(avp[1:5], "big")
                         # Playback Position Changed notifications may still be emitted

@@ -1,4 +1,4 @@
-from nextion.display import Nextion
+from nextion.display import AUX_OBJ_PAGE0, AUX_OBJ_PAGE1, Nextion
 from unittest import mock
 
 
@@ -24,6 +24,11 @@ def test_nextion_enqueue_and_tick():
     nx.enqueue("tEQ0.txt=\"TEST\"")
     nx.tick()
     assert any(b"tEQ0.txt=" in cmd for cmd in uart.written)
+
+
+def test_aux_objects_use_distinct_page_targets():
+    assert AUX_OBJ_PAGE0 == "tAUX0"
+    assert AUX_OBJ_PAGE1 == "tAUX1"
 
 
 def test_nextion_read_token():

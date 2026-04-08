@@ -436,35 +436,33 @@ class BleHid:
             gc.collect()
 
             ok = False
-            has_radio_erase = hasattr(self._ble, "erase_bonding")
+            adapter_erase = None
             try:
-                if has_radio_erase:
-                    self._ble.erase_bonding()
-                    ok = True
-            except Exception as e:
-                dprint("[BLE] erase_bonding err:", e)
-                ok = False
+                import _bleio
+                adapter_erase = getattr(getattr(_bleio, "adapter", None), "erase_bonding", None)
+            except Exception:
+                adapter_erase = None
 
-            # Fallback to _bleio.adapter only when BLERadio does not expose erase_bonding.
-            # If BLERadio.erase_bonding() exists but fails, do not chain another low-level
-            # erase call in the same cycle; this reduces BLE stack stress on ESP32-S3.
-            if not ok and not has_radio_erase:
+            # Prefer the adapter erase when available on this build.
+            # Using one erase path per attempt avoids mixed high/low-level
+            # calls in a single cycle, which can destabilize NimBLE.
+            if callable(adapter_erase):
                 try:
-                    import _bleio
-                    if hasattr(_bleio.adapter, "erase_bonding"):
-                        _bleio.adapter.erase_bonding()
-                        ok = True
+                    adapter_erase()
+                    ok = True
                 except Exception as e:
                     dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
                     ok = False
-
-            if ok:
-                erase_status = "OK"
-            elif has_radio_erase and not ok:
-                erase_status = "FAILED"
             else:
-                erase_status = "Unavailable on this build"
-            print("[BLE] erase_bonding:", erase_status)
+                try:
+                    if hasattr(self._ble, "erase_bonding"):
+                        self._ble.erase_bonding()
+                        ok = True
+                except Exception as e:
+                    dprint("[BLE] erase_bonding err:", e)
+                    ok = False
+
+            print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
 
             # Brief delay after erase_bonding to allow BLE stack to stabilize
             # before updating name and restarting advertising
