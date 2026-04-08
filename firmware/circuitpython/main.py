@@ -406,6 +406,8 @@ def main():
                         print("[BLE] erase-bonds requested")
                     else:
                         print("[BLE] erase-bonds request ignored (busy/cooldown)")
+                else:
+                    print("[BLE] erase-bonds request ignored (ui cooldown)")
 
 # endregion
         # Handle volume hold-and-repeat
