@@ -436,15 +436,19 @@ class BleHid:
             gc.collect()
 
             ok = False
+            has_radio_erase = hasattr(self._ble, "erase_bonding")
             try:
-                if hasattr(self._ble, "erase_bonding"):
+                if has_radio_erase:
                     self._ble.erase_bonding()
                     ok = True
             except Exception as e:
                 dprint("[BLE] erase_bonding err:", e)
                 ok = False
 
-            if not ok:
+            # Fallback to _bleio.adapter only when BLERadio does not expose erase_bonding.
+            # If BLERadio.erase_bonding() exists but fails, do not chain another low-level
+            # erase call in the same cycle; this reduces BLE stack stress on ESP32-S3.
+            if not ok and not has_radio_erase:
                 try:
                     import _bleio
                     if hasattr(_bleio.adapter, "erase_bonding"):
@@ -454,7 +458,13 @@ class BleHid:
                     dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
                     ok = False
 
-            print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")
+            if ok:
+                erase_status = "OK"
+            elif has_radio_erase and not ok:
+                erase_status = "FAILED"
+            else:
+                erase_status = "Unavailable on this build"
+            print("[BLE] erase_bonding:", erase_status)
 
             # Brief delay after erase_bonding to allow BLE stack to stabilize
             # before updating name and restarting advertising
