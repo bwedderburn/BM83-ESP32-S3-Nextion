@@ -276,7 +276,13 @@ def main():
                 elif pdu == 0x31 and len(avp) >= 1:
                     event_id = avp[0]
     # Conditional check
-                    if event_id == 0x02:
+                    if event_id == 0x01 and len(avp) >= 2:
+                        # PlaybackStatusChanged: keep local status cache fresh
+                        # between GetPlayStatus polling intervals.
+                        last_play_status = avp[1]
+                        bm.avrcp_register_notification(0x01, interval_s=1)
+    # Conditional check
+                    elif event_id == 0x02:
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
