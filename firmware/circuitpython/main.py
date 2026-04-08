@@ -5,7 +5,7 @@ import busio
 
 # endregion
 from utils.common import dprint, _fmt_ms, _sanitize_text
-from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE1
+from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from blehid.ble import BleHid
 from bm83.bm83 import Bm83
 
@@ -78,8 +78,11 @@ def main():
     last_avrcp_rx_at = 0.0
     last_pos_ms = None
     last_total_ms = None
+    last_play_status = None
     last_voldn_at = 0.0
     mute_window_s = 0.25
+    ebind_min_interval_s = 2.0
+    last_ebind_at = 0.0
 
     # Hold-and-repeat state for volume controls
     vol_hold_active = None        # None, "up", or "down"
@@ -98,6 +101,7 @@ def main():
     # Conditional check
         if pageid == 0:
             nx_set_text(EQ_OBJ_PAGE0, desired_eq)
+            nx_set_text(AUX_OBJ_PAGE0, desired_aux)
     # Conditional check
         elif pageid == 1:
             nx_set_text(EQ_OBJ_PAGE1, desired_eq)
@@ -257,6 +261,7 @@ def main():
                 if pdu == 0x30 and len(avp) >= 9:
                     total_ms = int.from_bytes(avp[0:4], "big")
                     pos_ms = int.from_bytes(avp[4:8], "big")
+                    last_play_status = avp[8]
                     desired_meta["time_cur"] = _fmt_ms(pos_ms)
     # Conditional check
                     if total_ms > 0:
@@ -279,7 +284,11 @@ def main():
     # Conditional check
                     elif event_id == 0x05 and len(avp) >= 5:
                         pos = int.from_bytes(avp[1:5], "big")
-                        desired_meta["time_cur"] = _fmt_ms(pos)
+                        # Playback Position Changed notifications may still be emitted
+                        # around state transitions. Avoid advancing the UI clock while
+                        # paused/stopped to prevent "counting while paused" behavior.
+                        if last_play_status in (0x01, 0x03, 0x04):
+                            desired_meta["time_cur"] = _fmt_ms(pos)
     # Conditional check
                         if nx.current_page == 1 and not aux_mode:
                             flush_page(1)
@@ -328,13 +337,22 @@ def main():
                 bm.pair()
     # Conditional check
             elif tok == b"BT_PLAY":
-                bm.play_pause()
+                if aux_mode:
+                    print("[AUX] Ignoring BT_PLAY while AUX IN is active")
+                else:
+                    bm.play_pause()
     # Conditional check
             elif tok == b"BT_PREV":
-                bm.prev()
+                if aux_mode:
+                    print("[AUX] Ignoring BT_PREV while AUX IN is active")
+                else:
+                    bm.prev()
     # Conditional check
             elif tok == b"BT_NEXT":
-                bm.next()
+                if aux_mode:
+                    print("[AUX] Ignoring BT_NEXT while AUX IN is active")
+                else:
+                    bm.next()
     # Conditional check
             elif tok == b"BT_EQ":
                 mode = bm.next_eq()
@@ -382,7 +400,12 @@ def main():
                     vol_repeat_count = 0
     # Conditional check
             elif tok == b"BT_EBIND":
-                ble_request_erase_bonds()
+                if (now - last_ebind_at) >= ebind_min_interval_s:
+                    if ble_request_erase_bonds():
+                        last_ebind_at = now
+                        print("[BLE] erase-bonds requested")
+                    else:
+                        print("[BLE] erase-bonds request ignored (busy/cooldown)")
 
 # endregion
         # Handle volume hold-and-repeat
