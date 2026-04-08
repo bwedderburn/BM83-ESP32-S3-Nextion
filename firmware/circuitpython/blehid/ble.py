@@ -436,22 +436,30 @@ class BleHid:
             gc.collect()
 
             ok = False
+            adapter_erase = None
             try:
-                if hasattr(self._ble, "erase_bonding"):
-                    self._ble.erase_bonding()
-                    ok = True
-            except Exception as e:
-                dprint("[BLE] erase_bonding err:", e)
-                ok = False
+                import _bleio
+                adapter_erase = getattr(getattr(_bleio, "adapter", None), "erase_bonding", None)
+            except Exception:
+                adapter_erase = None
 
-            if not ok:
+            # Prefer the adapter erase when available on this build.
+            # Using one erase path per attempt avoids mixed high/low-level
+            # calls in a single cycle, which can destabilize NimBLE.
+            if callable(adapter_erase):
                 try:
-                    import _bleio
-                    if hasattr(_bleio.adapter, "erase_bonding"):
-                        _bleio.adapter.erase_bonding()
-                        ok = True
+                    adapter_erase()
+                    ok = True
                 except Exception as e:
                     dprint("[BLE] _bleio.adapter.erase_bonding err:", e)
+                    ok = False
+            else:
+                try:
+                    if hasattr(self._ble, "erase_bonding"):
+                        self._ble.erase_bonding()
+                        ok = True
+                except Exception as e:
+                    dprint("[BLE] erase_bonding err:", e)
                     ok = False
 
             print("[BLE] erase_bonding:", "OK" if ok else "Unavailable on this build")

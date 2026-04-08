@@ -95,7 +95,7 @@ class Bm83:
         self._last_connected_seen = 0.0
         self._disconnect_hold_s = 2.0
         self._next_playstatus_at = 0.0
-        self._playstatus_period_s = 1.0
+        self._playstatus_period_s = 2.0
         self._next_attrs_at = 0.0
         self._attrs_throttle_s = 1.5
         self._last_attrs_req_at = 0.0
