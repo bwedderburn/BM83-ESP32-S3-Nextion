@@ -207,9 +207,8 @@ def main():
             else:
                 print("[AUX] cleared -> enabling AVRCP polling, hiding tAUX1")
                 exit_aux_mode()
-    # Conditional check
-            if nx.current_page == 1:
-                flush_page(1)
+    # Refresh current page to update AUX indicator
+            flush_page(nx.current_page)
 
 # endregion
     # Conditional check
@@ -277,7 +276,13 @@ def main():
                 elif pdu == 0x31 and len(avp) >= 1:
                     event_id = avp[0]
     # Conditional check
-                    if event_id == 0x02:
+                    if event_id == 0x01 and len(avp) >= 2:
+                        # PlaybackStatusChanged: keep local status cache fresh
+                        # between GetPlayStatus polling intervals.
+                        last_play_status = avp[1]
+                        bm.avrcp_register_notification(0x01, interval_s=1)
+    # Conditional check
+                    elif event_id == 0x02:
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
@@ -408,6 +413,8 @@ def main():
                         print("[BLE] erase-bonds requested")
                     else:
                         print("[BLE] erase-bonds request ignored (busy/cooldown)")
+                else:
+                    print("[BLE] erase-bonds request ignored (ui cooldown)")
 
 # endregion
         # Handle volume hold-and-repeat

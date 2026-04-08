@@ -47,6 +47,8 @@ EQ_OBJ_PAGE0 = "tEQ0"
 EQ_OBJ_PAGE1 = "tEQ1"
 AUX_OBJ_PAGE0 = "tAUX1"
 AUX_OBJ_PAGE1 = "tAUX1"
+# Page 0 intentionally reuses the same Nextion AUX text object name as page 1.
+AUX_OBJ_PAGE0 = AUX_OBJ_PAGE1
 
 # endregion
 NX_RUNTIME = {
