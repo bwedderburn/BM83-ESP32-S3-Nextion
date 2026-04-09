@@ -136,6 +136,15 @@ class BleHid:
         self._adv_failures = 0
         self._heavy_op_inflight = None
         self._erase_timeouts = 0
+
+    @property
+    def connected(self):
+        """Return True when the BLE radio reports an active connection."""
+        return bool(self._ready and self._ble and getattr(self._ble, "connected", False))
+
+    def is_connected(self):
+        """Helper alias for connected status."""
+        return self.connected
     # Loop through items
 # Function: setup - Defines the behavior for `setup`.
     def setup(self):

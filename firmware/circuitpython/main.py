@@ -55,7 +55,7 @@ def main():
     ble_volume = ble.volume
     ble_mute = ble.mute
     ble_request_erase_bonds = ble.request_erase_bonds
-    ble_radio = ble._ble
+    ble_is_connected = ble.is_connected
     eq_labels = bm.EQ_L
 
 # endregion
@@ -404,10 +404,10 @@ def main():
     # Conditional check
             elif tok == b"BT_EBIND":
                 if (now - last_ebind_at) >= ebind_min_interval_s:
-                    if ble_radio and getattr(ble_radio, "connected", False):
+                    last_ebind_at = now
+                    if ble_is_connected():
                         print("[BLE] erase-bonds denied while BLE connection is active")
                     elif ble_request_erase_bonds():
-                        last_ebind_at = now
                         print("[BLE] erase-bonds requested")
                     else:
                         print("[BLE] erase-bonds request ignored (busy/cooldown)")
