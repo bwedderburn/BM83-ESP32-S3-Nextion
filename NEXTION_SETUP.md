@@ -205,7 +205,7 @@ For these buttons, configure only the **Touch Press Event** with `print "TOKEN"`
 
 For a token to be recognized by the firmware:
 1. Must use **UPPERCASE letters, digits, and underscores only**
-2. Must be in the allowlist (see `TOK_BT` and `TOK_EQ` in `firmware/circuitpython/nextion/display.py`)
+2. Must be in the allowlist (see `TOK_BT` and `TOK_EQ` in `firmware/circuitpython/lib/nextion/display.py`)
 3. Must be sent using Nextion's `print "TOKEN"` command (which automatically adds `FF FF FF` terminator)
 
 ---
@@ -255,7 +255,7 @@ If you see examples elsewhere showing both commands together, they are incorrect
 
 **Solution:** Update your ESP32-S3 firmware:
 1. Pull the latest code from GitHub
-2. Copy `firmware/circuitpython/nextion/display.py` to your `CIRCUITPY` drive
+2. Copy `firmware/circuitpython/lib/nextion/display.py` to your `CIRCUITPY/lib/nextion/` folder
 3. Press **Ctrl+D** in serial terminal or press RESET button to reload
 4. Verify you now see clean tokens: `b'BT_POWER'` instead of `b'BT_POWERf\x00'`
 
@@ -306,7 +306,7 @@ But again, **this is unnecessary for standard tokens** - just use `print "BT_VOL
 
 ## Related Files
 
-- `firmware/circuitpython/nextion/display.py` - Token allowlist and parsing logic
+- `firmware/circuitpython/lib/nextion/display.py` - Token allowlist and parsing logic
 - `firmware/circuitpython/main.py` - Press/release event handlers and hold-and-repeat logic
 - `CODE_REFERENCE.md` - Complete code reference documentation
 

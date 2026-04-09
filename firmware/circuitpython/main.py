@@ -5,7 +5,7 @@ import busio
 
 # endregion
 from utils.common import dprint, _fmt_ms, _sanitize_text
-from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE1
+from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from blehid.ble import BleHid
 from bm83.bm83 import Bm83
 
@@ -55,6 +55,7 @@ def main():
     ble_volume = ble.volume
     ble_mute = ble.mute
     ble_request_erase_bonds = ble.request_erase_bonds
+    ble_radio = ble._ble
     eq_labels = bm.EQ_L
 
 # endregion
@@ -70,6 +71,7 @@ def main():
     desired_aux = ""
     aux_mode = False
     aux_mode_prev = False
+    avrcp_notifs_registered = False
 
 # endregion
     AVRCP_SILENCE_TO_AUX_S = 4.0
@@ -78,8 +80,11 @@ def main():
     last_avrcp_rx_at = 0.0
     last_pos_ms = None
     last_total_ms = None
+    last_play_status = None
     last_voldn_at = 0.0
     mute_window_s = 0.25
+    ebind_min_interval_s = 2.0
+    last_ebind_at = 0.0
 
     # Hold-and-repeat state for volume controls
     vol_hold_active = None        # None, "up", or "down"
@@ -98,6 +103,7 @@ def main():
     # Conditional check
         if pageid == 0:
             nx_set_text(EQ_OBJ_PAGE0, desired_eq)
+            nx_set_text(AUX_OBJ_PAGE0, desired_aux)
     # Conditional check
         elif pageid == 1:
             nx_set_text(EQ_OBJ_PAGE1, desired_eq)
@@ -227,13 +233,16 @@ def main():
                 print("[BTM_Status] state=0x%02X" % state)
                 change = bm.note_btm_state(state)
     # Conditional check
-                if change == "CONNECTED":
+                if change == "CONNECTED" and not avrcp_notifs_registered:
                     print("[BTM] Connected -> register notifications + request metadata")
-                    bm.avrcp_register_notification(0x01, interval_s=1)
+                    bm.avrcp_register_notification(0x01, interval_s=0)
                     bm.avrcp_register_notification(0x02, interval_s=0)
-                    bm.avrcp_register_notification(0x05, interval_s=1)
                     bm._next_playstatus_at = now + 0.05
                     bm.schedule_attrs(0.8)
+                    avrcp_notifs_registered = True
+                elif change == "DISCONNECTED":
+                    avrcp_notifs_registered = False
+                    last_play_status = None
     # Conditional check
             elif op == bm.EVT_EQ_MODE_IND and params:
                 mode = params[0]
@@ -257,6 +266,7 @@ def main():
                 if pdu == 0x30 and len(avp) >= 9:
                     total_ms = int.from_bytes(avp[0:4], "big")
                     pos_ms = int.from_bytes(avp[4:8], "big")
+                    last_play_status = avp[8]
                     desired_meta["time_cur"] = _fmt_ms(pos_ms)
     # Conditional check
                     if total_ms > 0:
@@ -276,11 +286,13 @@ def main():
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
-    # Conditional check
-                    elif event_id == 0x05 and len(avp) >= 5:
-                        pos = int.from_bytes(avp[1:5], "big")
-                        desired_meta["time_cur"] = _fmt_ms(pos)
-    # Conditional check
+                    elif event_id == 0x01 and len(avp) >= 2:
+                        last_play_status = avp[1]
+                    # Conditional check
+                    elif event_id == 0x05 and len(avp) >= 5 and last_play_status in (0x01, 0x03, 0x04):
+                        # Some sources still emit this even when not registered.
+                        # Accept it only in playing/seek states to avoid pause drift.
+                        desired_meta["time_cur"] = _fmt_ms(int.from_bytes(avp[1:5], "big"))
                         if nx.current_page == 1 and not aux_mode:
                             flush_page(1)
     # Conditional check
@@ -328,13 +340,22 @@ def main():
                 bm.pair()
     # Conditional check
             elif tok == b"BT_PLAY":
-                bm.play_pause()
+                if aux_mode:
+                    print("[AUX] Ignoring BT_PLAY while AUX IN is active")
+                else:
+                    bm.play_pause()
     # Conditional check
             elif tok == b"BT_PREV":
-                bm.prev()
+                if aux_mode:
+                    print("[AUX] Ignoring BT_PREV while AUX IN is active")
+                else:
+                    bm.prev()
     # Conditional check
             elif tok == b"BT_NEXT":
-                bm.next()
+                if aux_mode:
+                    print("[AUX] Ignoring BT_NEXT while AUX IN is active")
+                else:
+                    bm.next()
     # Conditional check
             elif tok == b"BT_EQ":
                 mode = bm.next_eq()
@@ -382,7 +403,14 @@ def main():
                     vol_repeat_count = 0
     # Conditional check
             elif tok == b"BT_EBIND":
-                ble_request_erase_bonds()
+                if (now - last_ebind_at) >= ebind_min_interval_s:
+                    if ble_radio and getattr(ble_radio, "connected", False):
+                        print("[BLE] erase-bonds denied while BLE connection is active")
+                    elif ble_request_erase_bonds():
+                        last_ebind_at = now
+                        print("[BLE] erase-bonds requested")
+                    else:
+                        print("[BLE] erase-bonds request ignored (busy/cooldown)")
 
 # endregion
         # Handle volume hold-and-repeat

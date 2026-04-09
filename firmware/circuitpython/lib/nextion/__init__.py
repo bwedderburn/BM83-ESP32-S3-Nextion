@@ -1,4 +1,5 @@
 from .display import (
+    AUX_OBJ_PAGE0,
     AUX_OBJ_PAGE1,
     EQ_MAP,
     EQ_OBJ_PAGE0,
@@ -23,5 +24,6 @@ __all__ = (
     "NX_RUNTIME",
     "EQ_OBJ_PAGE0",
     "EQ_OBJ_PAGE1",
+    "AUX_OBJ_PAGE0",
     "AUX_OBJ_PAGE1",
 )

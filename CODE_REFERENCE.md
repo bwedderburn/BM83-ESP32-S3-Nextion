@@ -103,7 +103,7 @@ from bm83.bm83 import Bm83
 
 ## Core Modules
 
-### BM83 Module (`firmware/circuitpython/bm83/`)
+### BM83 Module (`firmware/circuitpython/lib/bm83/`)
 
 #### `bm83/__init__.py`
 **Exports**: `Bm83`, `EQ_OFF`, `EQ_USER`, `EQ_LABELS`, `EQ_SEQ`
@@ -140,7 +140,7 @@ EQ_SEQ = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11)  # Cycle order
 
 ---
 
-### Nextion Module (`firmware/circuitpython/nextion/`)
+### Nextion Module (`firmware/circuitpython/lib/nextion/`)
 
 #### `nextion/__init__.py`
 **Exports**: `Nextion`, `TERM`, `TOKENS`, `TOK_BT`, `TOK_EQ`, `EQ_MAP`, `ascii_upper_uscore`, `NX_RUNTIME`, `EQ_OBJ_PAGE0`, `EQ_OBJ_PAGE1`, `AUX_OBJ_PAGE1`
@@ -197,7 +197,7 @@ TOKENS = {
 
 ---
 
-### BLE HID Module (`firmware/circuitpython/blehid/`)
+### BLE HID Module (`firmware/circuitpython/lib/blehid/`)
 
 #### `blehid/__init__.py`
 Empty module marker (no exports).
@@ -227,7 +227,7 @@ Empty module marker (no exports).
 
 ---
 
-### Utils Module (`firmware/circuitpython/utils/`)
+### Utils Module (`firmware/circuitpython/lib/utils/`)
 
 #### `utils/__init__.py`
 **Exports**: `hexdump`, `sanitize_text`, `fmt_ms`, `_sanitize_text`, `_fmt_ms`, `dprint`
@@ -407,9 +407,9 @@ flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statist
 
 Verified against:
 - `firmware/circuitpython/main.py`
-- `firmware/circuitpython/nextion/display.py`
-- `firmware/circuitpython/blehid/ble.py`
-- `firmware/circuitpython/utils/common.py`
+- `firmware/circuitpython/lib/nextion/display.py`
+- `firmware/circuitpython/lib/blehid/ble.py`
+- `firmware/circuitpython/lib/utils/common.py`
 
 Checklist (completed):
 - [x] Hardware UART pin mappings match `main.py` (`NX_TX/NX_RX`, `BM83_TX/BM83_RX`).

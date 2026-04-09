@@ -12,12 +12,8 @@ fi
 
 echo "Deploying to $CIRCUITPY_PATH..."
 
-rsync -av --exclude="__pycache__" \
-  "$REPO_DIR/firmware/circuitpython/main.py" \
-  "$REPO_DIR/firmware/circuitpython/utils/" \
-  "$REPO_DIR/firmware/circuitpython/nextion/" \
-  "$REPO_DIR/firmware/circuitpython/blehid/" \
-  "$REPO_DIR/firmware/circuitpython/bm83/" \
-  "$CIRCUITPY_PATH"
+rsync -av --exclude="__pycache__" "$REPO_DIR/firmware/circuitpython/main.py" "$CIRCUITPY_PATH/"
+mkdir -p "$CIRCUITPY_PATH/lib"
+rsync -av --exclude="__pycache__" "$REPO_DIR/firmware/circuitpython/lib/" "$CIRCUITPY_PATH/lib/"
 
 echo "✅ Deployment complete!"

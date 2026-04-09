@@ -12,10 +12,11 @@ set -euo pipefail
 # firmware/circuitpython/
 #   main.py
 #   settings.toml (optional)
-#   <packages...>/*.py
+#   lib/<packages...>/*.py
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="${ROOT_DIR}/firmware/circuitpython"
+SRC_LIB_DIR="${SRC_DIR}/lib"
 DIST_DIR="${ROOT_DIR}/dist/circuitpython"
 DIST_LIB_DIR="${DIST_DIR}/lib"
 
@@ -37,6 +38,10 @@ fi
 
 if [[ ! -f "${SRC_DIR}/main.py" ]]; then
   echo "Error: Entry point not found: ${SRC_DIR}/main.py" >&2
+  exit 1
+fi
+if [[ ! -d "${SRC_LIB_DIR}" ]]; then
+  echo "Error: Library source directory not found: ${SRC_LIB_DIR}" >&2
   exit 1
 fi
 
@@ -68,6 +73,7 @@ if command -v rsync >/dev/null 2>&1; then
   rsync -a \
     --exclude="__pycache__" \
     --exclude="*.py" \
+    --exclude="lib/" \
     "${SRC_DIR}/" "${DIST_DIR}/"
 else
   echo "rsync not found; falling back to cp. Install rsync for faster builds." >&2
@@ -94,19 +100,14 @@ fi
 # -------------------------
 # Compile every .py EXCEPT main.py, preserving package structure under lib/.
 # Example:
-#   firmware/circuitpython/bm83/bm83.py  -> dist/circuitpython/lib/bm83/bm83.mpy
+#   firmware/circuitpython/lib/bm83/bm83.py  -> dist/circuitpython/lib/bm83/bm83.mpy
 while IFS= read -r -d '' py_file; do
-  rel_path="${py_file#"${SRC_DIR}"/}"
-
-  # Skip entrypoint
-  if [[ "${rel_path}" == "main.py" ]]; then
-    continue
-  fi
+  rel_path="${py_file#"${SRC_LIB_DIR}"/}"
 
   out_file="${DIST_LIB_DIR}/${rel_path%.py}.mpy"
   mkdir -p "$(dirname "${out_file}")"
   "${MPY_CROSS}" -o "${out_file}" "${py_file}"
-done < <(find "${SRC_DIR}" -type f -name "*.py" -print0)
+done < <(find "${SRC_LIB_DIR}" -type f -name "*.py" -print0)
 
 echo "✅ MPY build complete: ${DIST_DIR}"
 echo "   - Entry point: ${DIST_DIR}/main.py"
