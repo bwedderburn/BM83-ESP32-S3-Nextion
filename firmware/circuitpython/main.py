@@ -424,11 +424,6 @@ def main():
                         print("[BLE] erase-bonds requested")
                     else:
                         print("[BLE] erase-bonds request ignored (busy/cooldown)")
-                    if ble_request_erase_bonds():
-                        last_ebind_at = now
-                        print("[BLE] erase-bonds requested")
-                    else:
-                        print("[BLE] erase-bonds request ignored (busy/cooldown)")
                 else:
                     print("[BLE] erase-bonds request ignored (ui cooldown)")
 
