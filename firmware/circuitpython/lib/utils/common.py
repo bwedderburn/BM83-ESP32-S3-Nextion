@@ -1,5 +1,5 @@
 # endregion
-DEBUG = True
+DEBUG = False
 
 # endregion
 # Function: dprint - Defines the behavior for `dprint`.

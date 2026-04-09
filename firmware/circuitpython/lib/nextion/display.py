@@ -45,6 +45,7 @@ def ascii_upper_uscore(token):
 
 EQ_OBJ_PAGE0 = "tEQ0"
 EQ_OBJ_PAGE1 = "tEQ1"
+AUX_OBJ_PAGE0 = "tAUX1"
 AUX_OBJ_PAGE0 = "tAUX0"
 AUX_OBJ_PAGE1 = "tAUX1"
 

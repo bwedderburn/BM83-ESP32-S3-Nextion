@@ -20,15 +20,16 @@ This project implements a CircuitPython-based remote control system for audio de
 ```
 firmware/circuitpython/
 ├── main.py                  # Main control loop (entry point)
-├── blehid/
-│   └── ble.py               # BLE HID (volume/mute) logic
-├── bm83/
-│   └── bm83.py              # BM83 Bluetooth AVRCP/A2DP interface
-├── nextion/
-│   └── display.py           # Nextion screen interface
-└── utils/
-    ├── common.py            # Shared helpers (dprint, formatting)
-    └── compat.py            # Compatibility helpers
+└── lib/
+    ├── blehid/
+    │   └── ble.py           # BLE HID (volume/mute) logic
+    ├── bm83/
+    │   └── bm83.py          # BM83 Bluetooth AVRCP/A2DP interface
+    ├── nextion/
+    │   └── display.py       # Nextion screen interface
+    └── utils/
+        ├── common.py        # Shared helpers (dprint, formatting)
+        └── compat.py        # Compatibility helpers
 
 dist/circuitpython/
 ├── main.py                  # Optimized deployment entry point (.py)
@@ -46,7 +47,7 @@ Deployment is intentionally split into two explicit modes:
 Use this mode while bringing up new hardware, debugging regressions, or reproducing bugs.
 
 1. Flash **CircuitPython 10.x** to your ESP32-S3 DevKitC-1.
-2. Copy all files from `firmware/circuitpython/` into the mounted `CIRCUITPY` USB drive.
+2. Copy `firmware/circuitpython/main.py` to `CIRCUITPY/` and copy `firmware/circuitpython/lib/*` to `CIRCUITPY/lib/`.
 3. Install required libraries:
    - `adafruit_ble`
    - `adafruit_hid`
@@ -134,9 +135,9 @@ pip install mpy-cross
    - `adafruit_hid/`
 4. Reset the board.
 
-**Recommended flow**: Always validate first with plain `.py` files from `firmware/circuitpython/`, then switch to compiled `.mpy` artifacts from `dist/circuitpython/` for production.
+**Recommended flow**: Always validate first with plain `.py` files from `firmware/circuitpython/main.py` + `firmware/circuitpython/lib/`, then switch to compiled `.mpy` artifacts from `dist/circuitpython/` for production.
 
-**Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All other modules under `firmware/circuitpython/` are compiled to `.mpy` and placed in `lib/`.
+**Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All modules under `firmware/circuitpython/lib/` are compiled to `.mpy` and placed in `dist/circuitpython/lib/`.
 
 **Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. If you encounter `ValueError: incompatible .mpy file` errors, reinstall `mpy-cross` matching your CircuitPython version.
 
@@ -208,7 +209,7 @@ This is especially useful when your board still runs (`main.py` + `lib/*.mpy`) b
 
 The mitigations below are already in code and should be treated as current protections (not open work items):
 
-- **BLE operation gating + retry/backoff hardening** in `firmware/circuitpython/blehid/ble.py`.
+- **BLE operation gating + retry/backoff hardening** in `firmware/circuitpython/lib/blehid/ble.py`.
   - Critical-section windows gate overlapping heavy BLE operations.
   - Pairing/advertising/erase paths use retry accounting and bounded backoff.
   - E-BIND handling is deferred/throttled (`request_erase_bonds`) to avoid re-entrant erase flow.
@@ -218,8 +219,8 @@ The mitigations below are already in code and should be treated as current prote
   - Main loop also reduces AVRCP polling aggressiveness while BLE critical activity is active.
 
 - **Parser/queue protection against burst/noise traffic** in:
-  - `firmware/circuitpython/nextion/display.py` (queue cap, token dedupe/throttle, burst limits), and
-  - `firmware/circuitpython/bm83/bm83.py` (RX buffer ceiling/overflow reset, poll burst limiting, request throttles).
+  - `firmware/circuitpython/lib/nextion/display.py` (queue cap, token dedupe/throttle, burst limits), and
+  - `firmware/circuitpython/lib/bm83/bm83.py` (RX buffer ceiling/overflow reset, poll burst limiting, request throttles).
 
 ### Active Issues
 

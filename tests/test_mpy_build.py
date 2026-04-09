@@ -8,6 +8,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "firmware" / "circuitpython"
+SRC_LIB_DIR = SRC_DIR / "lib"
 DIST_DIR = REPO_ROOT / "dist" / "circuitpython"
 DIST_LIB_DIR = DIST_DIR / "lib"
 
@@ -49,10 +50,8 @@ def test_build_mpy_outputs():
     assert (DIST_DIR / "main.py").exists(), "main.py should remain as .py in dist"
     assert DIST_LIB_DIR.exists(), "dist/circuitpython/lib not created"
 
-    # Every .py file (except main.py) should have a .mpy in dist/lib
-    for py_file in SRC_DIR.rglob("*.py"):
-        rel = py_file.relative_to(SRC_DIR)
-        if rel.as_posix() == "main.py":
-            continue
+    # Every library .py should have a .mpy in dist/lib
+    for py_file in SRC_LIB_DIR.rglob("*.py"):
+        rel = py_file.relative_to(SRC_LIB_DIR)
         out = DIST_LIB_DIR / rel.with_suffix(".mpy")
         assert out.exists(), f"Missing compiled file: {out}"

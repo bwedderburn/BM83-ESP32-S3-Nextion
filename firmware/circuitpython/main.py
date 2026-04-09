@@ -55,6 +55,7 @@ def main():
     ble_volume = ble.volume
     ble_mute = ble.mute
     ble_request_erase_bonds = ble.request_erase_bonds
+    ble_is_connected = ble.is_connected
     eq_labels = bm.EQ_L
 
 # endregion
@@ -70,6 +71,7 @@ def main():
     desired_aux = ""
     aux_mode = False
     aux_mode_prev = False
+    avrcp_notifs_registered = False
 
 # endregion
     AVRCP_SILENCE_TO_AUX_S = 4.0
@@ -230,13 +232,16 @@ def main():
                 print("[BTM_Status] state=0x%02X" % state)
                 change = bm.note_btm_state(state)
     # Conditional check
-                if change == "CONNECTED":
+                if change == "CONNECTED" and not avrcp_notifs_registered:
                     print("[BTM] Connected -> register notifications + request metadata")
                     bm.avrcp_register_notification(0x01, interval_s=0)
                     bm.avrcp_register_notification(0x02, interval_s=0)
-                    bm.avrcp_register_notification(0x05, interval_s=1)
                     bm._next_playstatus_at = now + 0.05
                     bm.schedule_attrs(0.8)
+                    avrcp_notifs_registered = True
+                elif change == "DISCONNECTED":
+                    avrcp_notifs_registered = False
+                    last_play_status = None
     # Conditional check
             elif op == bm.EVT_EQ_MODE_IND and params:
                 mode = params[0]
@@ -408,8 +413,10 @@ def main():
     # Conditional check
             elif tok == b"BT_EBIND":
                 if (now - last_ebind_at) >= ebind_min_interval_s:
-                    if ble_request_erase_bonds():
-                        last_ebind_at = now
+                    last_ebind_at = now
+                    if ble_is_connected():
+                        print("[BLE] erase-bonds denied while BLE connection is active")
+                    elif ble_request_erase_bonds():
                         print("[BLE] erase-bonds requested")
                     else:
                         print("[BLE] erase-bonds request ignored (busy/cooldown)")
