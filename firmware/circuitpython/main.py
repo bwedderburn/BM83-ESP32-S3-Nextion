@@ -204,14 +204,13 @@ def main():
             aux_mode_prev = aux_mode
     # Conditional check
             if aux_mode:
-                print("[AUX] inferred -> gating AVRCP polling, showing tAUX1")
+                print("[AUX] inferred -> gating AVRCP polling, showing AUX indicators")
                 enter_aux_mode()
             else:
-                print("[AUX] cleared -> enabling AVRCP polling, hiding tAUX1")
+                print("[AUX] cleared -> enabling AVRCP polling, hiding AUX indicators")
                 exit_aux_mode()
-    # Conditional check
-            if nx.current_page == 1:
-                flush_page(1)
+    # Refresh current page to update AUX indicator
+            flush_page(nx.current_page)
 
 # endregion
     # Conditional check
@@ -282,7 +281,13 @@ def main():
                 elif pdu == 0x31 and len(avp) >= 1:
                     event_id = avp[0]
     # Conditional check
-                    if event_id == 0x02:
+                    if event_id == 0x01 and len(avp) >= 2:
+                        # PlaybackStatusChanged: keep local status cache fresh
+                        # between GetPlayStatus polling intervals.
+                        last_play_status = avp[1]
+                        bm.avrcp_register_notification(0x01, interval_s=1)
+    # Conditional check
+                    elif event_id == 0x02:
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
@@ -293,6 +298,14 @@ def main():
                         # Some sources still emit this even when not registered.
                         # Accept it only in playing/seek states to avoid pause drift.
                         desired_meta["time_cur"] = _fmt_ms(int.from_bytes(avp[1:5], "big"))
+                    elif event_id == 0x05 and len(avp) >= 5:
+                        pos = int.from_bytes(avp[1:5], "big")
+                        # Playback Position Changed notifications may still be emitted
+                        # around state transitions. Avoid advancing the UI clock while
+                        # paused/stopped to prevent "counting while paused" behavior.
+                        if last_play_status in (0x01, 0x03, 0x04):
+                            desired_meta["time_cur"] = _fmt_ms(pos)
+    # Conditional check
                         if nx.current_page == 1 and not aux_mode:
                             flush_page(1)
     # Conditional check
@@ -411,6 +424,13 @@ def main():
                         print("[BLE] erase-bonds requested")
                     else:
                         print("[BLE] erase-bonds request ignored (busy/cooldown)")
+                    if ble_request_erase_bonds():
+                        last_ebind_at = now
+                        print("[BLE] erase-bonds requested")
+                    else:
+                        print("[BLE] erase-bonds request ignored (busy/cooldown)")
+                else:
+                    print("[BLE] erase-bonds request ignored (ui cooldown)")
 
 # endregion
         # Handle volume hold-and-repeat
