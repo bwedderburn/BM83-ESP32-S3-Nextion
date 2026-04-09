@@ -294,10 +294,6 @@ def main():
                     elif event_id == 0x01 and len(avp) >= 2:
                         last_play_status = avp[1]
                     # Conditional check
-                    elif event_id == 0x05 and len(avp) >= 5 and last_play_status in (0x01, 0x03, 0x04):
-                        # Some sources still emit this even when not registered.
-                        # Accept it only in playing/seek states to avoid pause drift.
-                        desired_meta["time_cur"] = _fmt_ms(int.from_bytes(avp[1:5], "big"))
                     elif event_id == 0x05 and len(avp) >= 5:
                         pos = int.from_bytes(avp[1:5], "big")
                         # Playback Position Changed notifications may still be emitted
