@@ -547,15 +547,30 @@ class Bm83:
         total_len = int.from_bytes(payload[3:5], "big")
         part = payload[5:]
     # Conditional check
-        if self._gea_expect_len is None:
+        if total_len <= 0:
+            self._gea_frag = bytearray()
+            self._gea_expect_len = None
+            dprint("[META] drop empty GEA response")
+            return None
+        if self._gea_expect_len is None or self._gea_expect_len != total_len:
+            if self._gea_expect_len is not None and len(self._gea_frag):
+                dprint("[META] reset fragmented GEA len=%d->%d" % (self._gea_expect_len, total_len))
             self._gea_expect_len = total_len
             self._gea_frag = bytearray()
         self._gea_frag.extend(part)
+        if len(self._gea_frag) > self._gea_expect_len:
+            dprint("[META] trim oversized GEA frag %d>%d" % (len(self._gea_frag), self._gea_expect_len))
+            self._gea_frag = self._gea_frag[: self._gea_expect_len]
     # Conditional check
         if is_end != 0x01:
     # Return the result
             return None
 # endregion
+        if len(self._gea_frag) < self._gea_expect_len:
+            dprint("[META] drop short final GEA %d<%d" % (len(self._gea_frag), self._gea_expect_len))
+            self._gea_frag = bytearray()
+            self._gea_expect_len = None
+            return None
         full = bytes(self._gea_frag[: self._gea_expect_len])
         self._gea_frag = bytearray()
         self._gea_expect_len = None
@@ -565,16 +580,20 @@ class Bm83:
         for _ in range(attr_num):
     # Conditional check
             if idx + 8 > len(full):
+                dprint("[META] truncated GEA header at", idx)
                 break
             aid = int.from_bytes(full[idx : idx + 4], "big")
             vlen = int.from_bytes(full[idx + 6 : idx + 8], "big")
+            if idx + 8 + vlen > len(full):
+                dprint("[META] truncated GEA attr id=%d len=%d" % (aid, vlen))
+                break
             val = full[idx + 8 : idx + 8 + vlen]
             idx += 8 + vlen
     # Try block to catch exceptions
             try:
                 s = val.decode("utf-8", "replace").strip()
     # Handle exceptions
-            except Exception:
+            except UnicodeError:
                 s = "".join(chr(b) if 32 <= b <= 126 else " " for b in val).strip()
             attrs[aid] = s
     # Return the result

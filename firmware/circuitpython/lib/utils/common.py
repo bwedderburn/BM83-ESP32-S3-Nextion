@@ -1,5 +1,7 @@
 # endregion
 DEBUG = False
+TIME_UNKNOWN = "--:--"
+_MAX_TRACK_TIME_MS = 24 * 60 * 60 * 1000
 
 # endregion
 # Function: dprint - Defines the behavior for `dprint`.
@@ -73,6 +75,77 @@ def _fmt_ms(ms):
     # Return the result
     return "%d:%02d" % (m, s)
 # endregion
+
+
+# Function: _parse_uint - Parse unsigned decimal text/bytes without regex
+def _parse_uint(raw):
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, (bytes, bytearray, memoryview)):
+        start = 0
+        end = len(raw)
+        while start < end and raw[start] <= 32:
+            start += 1
+        while end > start and raw[end - 1] <= 32:
+            end -= 1
+        if start >= end:
+            return None
+        val = 0
+        while start < end:
+            b = raw[start]
+            if 48 <= b <= 57:
+                val = (val * 10) + (b - 48)
+                start += 1
+                continue
+            return None
+        return val
+    s = str(raw).strip()
+    if not s:
+        return None
+    val = 0
+    for ch in s:
+        o = ord(ch)
+        if 48 <= o <= 57:
+            val = (val * 10) + (o - 48)
+            continue
+        return None
+    return val
+
+
+# Function: _normalize_track_time_ms - Normalize media times to canonical milliseconds
+def _normalize_track_time_ms(raw, ref_ms=None, from_attr=False):
+    val = _parse_uint(raw)
+    if val is None:
+        dprint("[TIME] invalid:", raw)
+        return None
+    if val < 0:
+        dprint("[TIME] negative:", raw)
+        return None
+    if from_attr and val > 0:
+        scaled = val * 1000
+        if ref_ms is not None:
+            direct_delta = abs(val - ref_ms)
+            scaled_delta = abs(scaled - ref_ms) if scaled <= _MAX_TRACK_TIME_MS else None
+            if scaled_delta is not None and (scaled_delta + 1000) < direct_delta:
+                dprint("[TIME] attr seconds->ms:", raw, "=>", scaled)
+                val = scaled
+        elif val < 1000 and scaled <= _MAX_TRACK_TIME_MS:
+            dprint("[TIME] attr seconds heuristic:", raw, "=>", scaled)
+            val = scaled
+    if val > _MAX_TRACK_TIME_MS:
+        dprint("[TIME] out of range:", raw)
+        return None
+    return val
+
+
+# Function: _fmt_track_time_ms - Format canonical or attr-derived media times
+def _fmt_track_time_ms(raw, ref_ms=None, from_attr=False):
+    val = _normalize_track_time_ms(raw, ref_ms=ref_ms, from_attr=from_attr)
+    if val is None:
+        return TIME_UNKNOWN
+    return _fmt_ms(val)
 
 
 # Function: hexdump - Hex dump utility for debugging

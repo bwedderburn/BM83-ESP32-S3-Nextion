@@ -4,7 +4,14 @@ import board
 import busio
 
 # endregion
-from utils.common import dprint, _fmt_ms, _sanitize_text
+from utils.common import (
+    TIME_UNKNOWN,
+    dprint,
+    _fmt_ms,
+    _fmt_track_time_ms,
+    _normalize_track_time_ms,
+    _sanitize_text,
+)
 from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from blehid.ble import BleHid
 from bm83.bm83 import Bm83
@@ -67,7 +74,9 @@ def main():
 # endregion
     desired_eq = "OFF"
     # Loop through items
-    desired_meta = {k: "—" for k in NX_RUNTIME.keys()}
+    desired_meta = {}
+    for k in NX_RUNTIME.keys():
+        desired_meta[k] = TIME_UNKNOWN if k in ("time_cur", "time") else "—"
     desired_aux = ""
     aux_mode = False
     aux_mode_prev = False
@@ -95,6 +104,9 @@ def main():
     vol_repeat_interval_s = 0.35  # 350ms between repeats
 
 # endregion
+    META_UPDATE_ORDER = ("title", "artist", "album", "genre", "track_num", "total_tracks", "time_cur", "time")
+    TRACK_STALE_KEYS = ("album", "genre", "track_num", "total_tracks", "time_cur", "time")
+
     # Loop through items
 # Function: flush_page - Defines the behavior for `flush_page`.
     def flush_page(pageid):
@@ -113,6 +125,30 @@ def main():
                 nx_set_text(obj, desired_meta.get(k, "—"))
 
 # endregion
+    def push_meta_updates(keys):
+        if nx.current_page != 1 or aux_mode or not keys:
+            return
+        for key in META_UPDATE_ORDER:
+            if key in keys:
+                nx_set_text(NX_RUNTIME[key], desired_meta[key])
+
+
+    def meta_set(key, value, changed):
+        if value is None or desired_meta.get(key) == value:
+            return
+        desired_meta[key] = value
+        changed.append(key)
+
+
+    def invalidate_track_meta(clear_primary=False):
+        changed = []
+        if clear_primary:
+            meta_set("title", "—", changed)
+            meta_set("artist", "—", changed)
+        for key in TRACK_STALE_KEYS:
+            meta_set(key, TIME_UNKNOWN if key in ("time_cur", "time") else "—", changed)
+        return changed
+
     # Loop through items
 # Function: maybe_track_changed - Defines the behavior for `maybe_track_changed`.
     def maybe_track_changed(pos_ms, total_ms):
@@ -145,11 +181,10 @@ def main():
     def enter_aux_mode():
 # region enter_aux_mode
     # enter_aux_mode handles enter aux mode logic. #
-        nonlocal desired_aux, last_pos_ms, last_total_ms
+        nonlocal desired_aux, last_play_status, last_pos_ms, last_total_ms
         desired_aux = "AUX IN"
-    # Loop through items
-        for k in desired_meta:
-            desired_meta[k] = "—"
+        invalidate_track_meta(clear_primary=True)
+        last_play_status = None
         last_pos_ms = None
         last_total_ms = None
 
@@ -263,20 +298,19 @@ def main():
                 last_avrcp_rx_at = time.monotonic()
     # Conditional check
                 if pdu == 0x30 and len(avp) >= 9:
-                    total_ms = int.from_bytes(avp[0:4], "big")
-                    pos_ms = int.from_bytes(avp[4:8], "big")
+                    total_ms = _normalize_track_time_ms(int.from_bytes(avp[0:4], "big"))
+                    pos_ms = _normalize_track_time_ms(int.from_bytes(avp[4:8], "big"))
                     last_play_status = avp[8]
-                    desired_meta["time_cur"] = _fmt_ms(pos_ms)
-    # Conditional check
-                    if total_ms > 0:
-                        desired_meta["time"] = _fmt_ms(total_ms)
-    # Conditional check
+                    changed = []
                     if maybe_track_changed(pos_ms, total_ms):
+                        changed.extend(invalidate_track_meta())
                         dprint("[TRACK] inferred change -> request metadata")
                         bm.schedule_attrs(0.25)
-    # Conditional check
-                    if nx.current_page == 1 and not aux_mode:
-                        flush_page(1)
+                    if pos_ms is not None:
+                        meta_set("time_cur", _fmt_ms(pos_ms), changed)
+                    if total_ms is not None and total_ms > 0:
+                        meta_set("time", _fmt_ms(total_ms), changed)
+                    push_meta_updates(changed)
     # Conditional check
                 elif pdu == 0x31 and len(avp) >= 1:
                     event_id = avp[0]
@@ -288,22 +322,23 @@ def main():
                         bm.avrcp_register_notification(0x01, interval_s=1)
     # Conditional check
                     elif event_id == 0x02:
+                        last_pos_ms = None
+                        last_total_ms = None
+                        push_meta_updates(invalidate_track_meta())
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
                     elif event_id == 0x01 and len(avp) >= 2:
                         last_play_status = avp[1]
-                    # Conditional check
                     elif event_id == 0x05 and len(avp) >= 5:
-                        pos = int.from_bytes(avp[1:5], "big")
+                        pos = _normalize_track_time_ms(int.from_bytes(avp[1:5], "big"))
                         # Playback Position Changed notifications may still be emitted
                         # around state transitions. Avoid advancing the UI clock while
                         # paused/stopped to prevent "counting while paused" behavior.
-                        if last_play_status in (0x01, 0x03, 0x04):
-                            desired_meta["time_cur"] = _fmt_ms(pos)
-    # Conditional check
-                        if nx.current_page == 1 and not aux_mode:
-                            flush_page(1)
+                        if pos is not None and last_play_status in (0x01, 0x03, 0x04):
+                            changed = []
+                            meta_set("time_cur", _fmt_ms(pos), changed)
+                            push_meta_updates(changed)
     # Conditional check
             elif op == bm.EVT_AVRCP_VENDOR_DEP_RSP:
                 gea = bm.parse_gea_0x5d(params)
@@ -312,30 +347,34 @@ def main():
                     last_avrcp_rx_at = time.monotonic()
                     _resp, attrs = gea
                     print("[META] GetElementAttributes received:", sorted(attrs.keys()))
+                    changed = []
     # Conditional check
                     if 1 in attrs:
-                        desired_meta["title"] = _sanitize_text(attrs[1])
+                        meta_set("title", _sanitize_text(attrs[1]), changed)
     # Conditional check
                     if 2 in attrs:
-                        desired_meta["artist"] = _sanitize_text(attrs[2])
+                        meta_set("artist", _sanitize_text(attrs[2]), changed)
     # Conditional check
                     if 3 in attrs:
-                        desired_meta["album"] = _sanitize_text(attrs[3])
+                        meta_set("album", _sanitize_text(attrs[3]), changed)
     # Conditional check
                     if 6 in attrs:
-                        desired_meta["genre"] = _sanitize_text(attrs[6])
+                        meta_set("genre", _sanitize_text(attrs[6]), changed)
     # Conditional check
                     if 4 in attrs:
-                        desired_meta["track_num"] = _sanitize_text(attrs[4], max_len=8)
+                        meta_set("track_num", _sanitize_text(attrs[4], max_len=8), changed)
     # Conditional check
                     if 5 in attrs:
-                        desired_meta["total_tracks"] = _sanitize_text(attrs[5], max_len=8)
+                        meta_set("total_tracks", _sanitize_text(attrs[5], max_len=8), changed)
     # Conditional check
                     if 7 in attrs:
-                        desired_meta["time"] = _fmt_ms(attrs[7])
-    # Conditional check
-                    if nx.current_page == 1 and not aux_mode:
-                        flush_page(1)
+                        attr_time = _normalize_track_time_ms(attrs[7], ref_ms=last_total_ms, from_attr=True)
+                        if attr_time is not None and attr_time > 0:
+                            if last_total_ms is None or attr_time == last_total_ms:
+                                meta_set("time", _fmt_track_time_ms(attr_time), changed)
+                            else:
+                                dprint("[META] ignore duration attr", attrs[7], "baseline=", last_total_ms)
+                    push_meta_updates(changed)
 
 # endregion
     # Loop through items
@@ -417,6 +456,11 @@ def main():
                     if ble_is_connected():
                         print("[BLE] erase-bonds denied while BLE connection is active")
                     elif ble_request_erase_bonds():
+                        print("[BLE] erase-bonds requested")
+                    else:
+                        print("[BLE] erase-bonds request ignored (busy/cooldown)")
+                    if ble_request_erase_bonds():
+                        last_ebind_at = now
                         print("[BLE] erase-bonds requested")
                     else:
                         print("[BLE] erase-bonds request ignored (busy/cooldown)")
