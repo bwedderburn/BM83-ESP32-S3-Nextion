@@ -472,10 +472,12 @@ def main():
                     last_ebind_at = now
                     if ble_is_connected():
                         print("[BLE] erase-bonds denied while BLE connection is active")
-                    elif ble_request_erase_bonds():
-                        print("[BLE] erase-bonds requested")
                     else:
-                        print("[BLE] erase-bonds request ignored (busy/cooldown)")
+                        requested = ble_request_erase_bonds()
+                        if requested:
+                            print("[BLE] erase-bonds requested")
+                        else:
+                            print("[BLE] erase-bonds request ignored (busy/cooldown)")
                 else:
                     print("[BLE] erase-bonds request ignored (ui cooldown)")
 
