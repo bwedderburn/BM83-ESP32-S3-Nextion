@@ -202,3 +202,15 @@ def test_track_changed_reregister_throttle():
     result3 = bm.avrcp_reregister_track_changed()
     assert result3 is True
     assert len(uart.writes) == 2  # New command sent
+
+
+def test_schedule_attrs_force_bypasses_throttle():
+    uart = MockUART()
+    bm = Bm83(uart)
+
+    bm._last_attrs_req_at = time.monotonic()
+    assert bm.schedule_attrs(0.2) is False
+    assert bm._next_attrs_at == 0.0
+
+    assert bm.schedule_attrs(0.2, force=True) is True
+    assert bm._next_attrs_at > 0.0
