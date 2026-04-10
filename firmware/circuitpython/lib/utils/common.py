@@ -116,6 +116,10 @@ def _parse_uint(raw):
 
 # Function: _normalize_track_time_ms - Normalize media times to canonical milliseconds
 def _normalize_track_time_ms(raw, ref_ms=None, from_attr=False):
+    if ref_ms is not None:
+        ref_ms = _parse_uint(ref_ms)
+        if ref_ms is not None and (ref_ms <= 0 or ref_ms > _MAX_TRACK_TIME_MS):
+            ref_ms = None
     val = _parse_uint(raw)
     if val is None:
         dprint("[TIME] invalid:", raw)

@@ -22,6 +22,7 @@ def test_fmt_ms():
 def test_normalize_track_time_ms_prefers_playstatus_baseline_for_attr_seconds():
     assert _normalize_track_time_ms("773", ref_ms=773000, from_attr=True) == 773000
     assert _fmt_track_time_ms("773", ref_ms=773000, from_attr=True) == "12:53"
+    assert _normalize_track_time_ms("773", ref_ms=0, from_attr=True) == 773000
 
 
 def test_normalize_track_time_ms_rejects_invalid_and_oversized_values():

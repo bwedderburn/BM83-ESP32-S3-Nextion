@@ -106,6 +106,7 @@ def main():
 # endregion
     META_UPDATE_ORDER = ("title", "artist", "album", "genre", "track_num", "total_tracks", "time_cur", "time")
     TRACK_STALE_KEYS = ("album", "genre", "track_num", "total_tracks", "time_cur", "time")
+    PLAYING_STATES = (0x01, 0x03, 0x04)
 
     # Loop through items
 # Function: flush_page - Defines the behavior for `flush_page`.
@@ -148,6 +149,10 @@ def main():
         for key in TRACK_STALE_KEYS:
             meta_set(key, TIME_UNKNOWN if key in ("time_cur", "time") else "—", changed)
         return changed
+
+
+    def primary_metadata_missing():
+        return desired_meta.get("title") == "—" or desired_meta.get("artist") == "—"
 
     # Loop through items
 # Function: maybe_track_changed - Defines the behavior for `maybe_track_changed`.
@@ -271,6 +276,7 @@ def main():
                     print("[BTM] Connected -> register notifications + request metadata")
                     bm.avrcp_register_notification(0x01, interval_s=0)
                     bm.avrcp_register_notification(0x02, interval_s=0)
+                    bm.avrcp_register_notification(0x05, interval_s=1)
                     bm._next_playstatus_at = now + 0.05
                     bm.schedule_attrs(0.8)
                     avrcp_notifs_registered = True
@@ -306,7 +312,9 @@ def main():
                         changed.extend(invalidate_track_meta())
                         dprint("[TRACK] inferred change -> request metadata")
                         bm.schedule_attrs(0.25)
-                    if pos_ms is not None:
+                    if primary_metadata_missing() and (pos_ms is not None or (total_ms is not None and total_ms > 0)):
+                        bm.schedule_attrs(0.15)
+                    if pos_ms is not None and (last_play_status in PLAYING_STATES or desired_meta.get("time_cur") == TIME_UNKNOWN):
                         meta_set("time_cur", _fmt_ms(pos_ms), changed)
                     if total_ms is not None and total_ms > 0:
                         meta_set("time", _fmt_ms(total_ms), changed)
@@ -318,8 +326,16 @@ def main():
                     if event_id == 0x01 and len(avp) >= 2:
                         # PlaybackStatusChanged: keep local status cache fresh
                         # between GetPlayStatus polling intervals.
+                        prev_status = last_play_status
                         last_play_status = avp[1]
-                        bm.avrcp_register_notification(0x01, interval_s=1)
+                        bm.avrcp_register_notification(0x01, interval_s=0)
+                        bm._next_playstatus_at = now + 0.05
+                        if last_play_status in PLAYING_STATES and (
+                            primary_metadata_missing()
+                            or (prev_status != last_play_status and desired_meta.get("time") == TIME_UNKNOWN)
+                        ):
+                            dprint("[META] playback start -> request metadata")
+                            bm.schedule_attrs(0.15, force=True)
     # Conditional check
                     elif event_id == 0x02:
                         last_pos_ms = None
@@ -328,17 +344,16 @@ def main():
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25)
                         bm.avrcp_reregister_track_changed()
-                    elif event_id == 0x01 and len(avp) >= 2:
-                        last_play_status = avp[1]
                     elif event_id == 0x05 and len(avp) >= 5:
                         pos = _normalize_track_time_ms(int.from_bytes(avp[1:5], "big"))
                         # Playback Position Changed notifications may still be emitted
                         # around state transitions. Avoid advancing the UI clock while
                         # paused/stopped to prevent "counting while paused" behavior.
-                        if pos is not None and last_play_status in (0x01, 0x03, 0x04):
+                        if pos is not None and last_play_status in PLAYING_STATES:
                             changed = []
                             meta_set("time_cur", _fmt_ms(pos), changed)
                             push_meta_updates(changed)
+                        bm.avrcp_register_notification(0x05, interval_s=1)
     # Conditional check
             elif op == bm.EVT_AVRCP_VENDOR_DEP_RSP:
                 gea = bm.parse_gea_0x5d(params)
@@ -368,9 +383,11 @@ def main():
                         meta_set("total_tracks", _sanitize_text(attrs[5], max_len=8), changed)
     # Conditional check
                     if 7 in attrs:
-                        attr_time = _normalize_track_time_ms(attrs[7], ref_ms=last_total_ms, from_attr=True)
+                        ref_total_ms = last_total_ms if last_total_ms and last_total_ms > 0 else None
+                        attr_time = _normalize_track_time_ms(attrs[7], ref_ms=ref_total_ms, from_attr=True)
                         if attr_time is not None and attr_time > 0:
-                            if last_total_ms is None or attr_time == last_total_ms:
+                            if ref_total_ms is None or attr_time == ref_total_ms:
+                                last_total_ms = attr_time
                                 meta_set("time", _fmt_track_time_ms(attr_time), changed)
                             else:
                                 dprint("[META] ignore duration attr", attrs[7], "baseline=", last_total_ms)

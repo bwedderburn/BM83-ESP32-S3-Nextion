@@ -95,7 +95,7 @@ class Bm83:
         self._last_connected_seen = 0.0
         self._disconnect_hold_s = 2.0
         self._next_playstatus_at = 0.0
-        self._playstatus_period_s = 2.0
+        self._playstatus_period_s = 1.0
         self._next_attrs_at = 0.0
         self._attrs_throttle_s = 1.5
         self._last_attrs_req_at = 0.0
@@ -465,17 +465,19 @@ class Bm83:
 # endregion
     # Loop through items
 # Function: schedule_attrs - Defines the behavior for `schedule_attrs`.
-    def schedule_attrs(self, delay_s=0.35):
+    def schedule_attrs(self, delay_s=0.35, force=False):
 # region schedule_attrs
     # schedule_attrs handles schedule attrs logic. #
         now = time.monotonic()
     # Conditional check
-        if (now - self._last_attrs_req_at) < self._attrs_throttle_s:
-            return
+        if (not force) and (now - self._last_attrs_req_at) < self._attrs_throttle_s:
+            return False
         t = now + delay_s
     # Conditional check
         if self._next_attrs_at == 0.0 or t < self._next_attrs_at:
             self._next_attrs_at = t
+            return True
+        return False
 
 # endregion
     # Loop through items
