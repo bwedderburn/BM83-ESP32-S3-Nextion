@@ -501,7 +501,7 @@ class Bm83:
             return False
         if now is None:
             now = time.monotonic()
-        if self._next_attrs_at and now >= self._next_attrs_at:
+        if now >= self._next_attrs_at:
             self._last_attrs_req_at = now
             self._next_attrs_at = 0.0
             self.avrcp_get_element_attributes(0)
