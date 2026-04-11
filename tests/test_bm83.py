@@ -229,3 +229,20 @@ def test_tick_avrcp_attrs_drains_pending_attrs_only_when_connected():
     assert len(uart.writes) == 1
     assert uart.writes[0][3] == Bm83.OP_AVRCP_VENDOR_DEP_CMD
     assert bm._next_attrs_at == 0.0
+
+
+def test_tick_avrcp_attrs_uses_supplied_now_without_monotonic(monkeypatch):
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    now = time.monotonic()
+    bm._next_attrs_at = now - 0.1
+
+    def fail_monotonic():
+        raise AssertionError("tick_avrcp_attrs should reuse the supplied timestamp")
+
+    monkeypatch.setattr("bm83.bm83.time.monotonic", fail_monotonic)
+
+    assert bm.tick_avrcp_attrs(now) is True
+    assert len(uart.writes) == 1
+    assert bm._next_attrs_at == 0.0
