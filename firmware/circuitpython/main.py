@@ -57,6 +57,7 @@ def main():
     bm_ack = bm.ack_event
     bm_tick_power = bm.tick_power
     bm_tick_avrcp = bm.tick_avrcp
+    bm_tick_avrcp_attrs = bm.tick_avrcp_attrs
     bm_avrcp_get_play_status = bm.avrcp_get_play_status
     ble_tick = ble.tick
     ble_volume = ble.volume
@@ -161,21 +162,25 @@ def main():
     # maybe_track_changed handles maybe track changed logic. #
         nonlocal last_pos_ms, last_total_ms
     # Conditional check
-        if pos_ms is None or total_ms is None:
+        if pos_ms is None:
             last_pos_ms = pos_ms
-            last_total_ms = total_ms
+            if total_ms is not None and total_ms > 0:
+                last_total_ms = total_ms
     # Return the result
             return False
 # endregion
         changed = False
     # Conditional check
-        if last_total_ms and total_ms > 0 and last_total_ms > 0 and total_ms != last_total_ms:
+        if total_ms is not None and total_ms > 0 and last_total_ms and last_total_ms > 0 and total_ms != last_total_ms:
             changed = True
     # Conditional check
         if last_pos_ms is not None and (pos_ms + 2500) < last_pos_ms and pos_ms < 3000:
             changed = True
         last_pos_ms = pos_ms
-        last_total_ms = total_ms
+        if changed:
+            last_total_ms = total_ms if total_ms is not None and total_ms > 0 else None
+        elif total_ms is not None and total_ms > 0:
+            last_total_ms = total_ms
     # Return the result
         return changed
 # endregion
@@ -261,6 +266,8 @@ def main():
             if bm.connected and now >= next_avrcp_probe_at:
                 next_avrcp_probe_at = now + AVRCP_PROBE_PERIOD_S
                 bm_avrcp_get_play_status(0)
+            if bm.connected:
+                bm_tick_avrcp_attrs()
 
 # endregion
     # Loop through items
