@@ -493,11 +493,20 @@ class Bm83:
         if now >= self._next_playstatus_at:
             self.avrcp_get_play_status(0)
             self._next_playstatus_at = now + self._playstatus_period_s
-    # Conditional check
-        if self._next_attrs_at and now >= self._next_attrs_at:
+        self.tick_avrcp_attrs(now)
+
+# endregion
+    def tick_avrcp_attrs(self, now=None):
+        if (not self.connected) or (self._next_attrs_at == 0.0):
+            return False
+        if now is None:
+            now = time.monotonic()
+        if now >= self._next_attrs_at:
             self._last_attrs_req_at = now
             self._next_attrs_at = 0.0
             self.avrcp_get_element_attributes(0)
+            return True
+        return False
 
 # endregion
     @staticmethod
