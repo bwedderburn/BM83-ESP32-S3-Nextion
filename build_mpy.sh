@@ -23,6 +23,13 @@ DIST_LIB_DIR="${DIST_DIR}/lib"
 # Allow override (CI will set MPY_CROSS explicitly)
 MPY_CROSS="${MPY_CROSS:-mpy-cross}"
 
+# mpy-cross optimization level. -O2 strips docstrings and asserts which
+# shrinks .mpy files ~10-25% and speeds import. Firmware code has no
+# __doc__ lookups and no assert statements, so -O2 is safe. Override
+# via env if you want -O0 (default, full debug info) or -O3 (also
+# strips source line numbers — smaller, faster, fuzzier tracebacks).
+MPY_CROSS_OPT_LEVEL="${MPY_CROSS_OPT_LEVEL:-2}"
+
 # -------------------------
 # Preconditions
 # -------------------------
@@ -106,7 +113,7 @@ while IFS= read -r -d '' py_file; do
 
   out_file="${DIST_LIB_DIR}/${rel_path%.py}.mpy"
   mkdir -p "$(dirname "${out_file}")"
-  "${MPY_CROSS}" -o "${out_file}" "${py_file}"
+  "${MPY_CROSS}" -O"${MPY_CROSS_OPT_LEVEL}" -o "${out_file}" "${py_file}"
 done < <(find "${SRC_LIB_DIR}" -type f -name "*.py" -print0)
 
 echo "✅ MPY build complete: ${DIST_DIR}"

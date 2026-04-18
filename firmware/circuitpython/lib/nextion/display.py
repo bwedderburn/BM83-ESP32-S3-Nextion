@@ -22,7 +22,7 @@ EQ_MAP = {
 # Token sets for test compatibility
 TOK_BT = {
     b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
-    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_EBIND",
+    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN",
     # Press/release tokens for hold-and-repeat volume controls
     b"BT_VOLUP_P", b"BT_VOLUP_R", b"BT_VOLDN_P", b"BT_VOLDN_R"
 }
@@ -45,7 +45,6 @@ def ascii_upper_uscore(token):
 
 EQ_OBJ_PAGE0 = "tEQ0"
 EQ_OBJ_PAGE1 = "tEQ1"
-AUX_OBJ_PAGE0 = "tAUX1"
 AUX_OBJ_PAGE0 = "tAUX0"
 AUX_OBJ_PAGE1 = "tAUX1"
 
@@ -212,6 +211,7 @@ class Nextion:
             return None
 # endregion
         frame = bytes(self._rx[:i])
+        # CircuitPython bytearray doesn't support slice deletion — reassign.
         self._rx = self._rx[i + 3:]
     # Return the result
         return frame
