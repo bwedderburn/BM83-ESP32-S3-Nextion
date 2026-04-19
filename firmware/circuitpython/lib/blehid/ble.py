@@ -29,6 +29,13 @@ import gc
 from utils.common import dprint
 
 
+# Nimble on ESP32-S3 can hard-crash if heavy BLE operations run back to
+# back without letting the stack settle. A short sleep between stop_adv,
+# disconnect, erase_bonding, and start_adv avoids "out of memory" and
+# "stack busy" failures observed during bond-wipe.
+_BLE_STABILIZE_S = 0.05
+
+
 class BleHid:
     __slots__ = (
         "enabled",
@@ -51,6 +58,7 @@ class BleHid:
         "_pair_retry_s",
         "_pair_attempts",
         "_pair_attempt_limit",
+        "_erase_pending",
     )
 
     def __init__(self, enabled, name):
@@ -78,13 +86,20 @@ class BleHid:
         self._last_cc_at = 0.0
         self._cc_min_interval_s = 0.06
 
-        # Pairing state — some iOS versions want an explicit c.pair()
-        # after connect before bulk HID traffic is accepted.
+        # Pairing state — passive observer only. See _ensure_paired
+        # for why we no longer call c.pair() from the peripheral side.
         self._need_pairing_check = False
         self._last_pair_try_at = 0.0
         self._pair_retry_s = 2.0
         self._pair_attempts = 0
         self._pair_attempt_limit = 4
+
+        # Bond-wipe request flag. Set by request_erase_bonds() (typically
+        # from the Nextion BT_EBIND button) and serviced by tick() while
+        # fully disconnected. Running erase_bonding while connected or
+        # actively advertising has been observed to hard-crash NimBLE,
+        # so the request is buffered until we're in a quiet state.
+        self._erase_pending = False
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -249,6 +264,12 @@ class BleHid:
             else:
                 self._on_disconnect()
         if not connected:
+            # Service a pending bond wipe in the disconnected/quiet
+            # window before re-kicking advertising. _do_erase_bonds
+            # handles its own start_adv on the way out.
+            if self._erase_pending:
+                self._do_erase_bonds()
+                return
             if not self._is_advertising():
                 self._start_adv(force=False)
             elif (now - self._last_adv_kick_at) > self._adv_kick_period_s:
@@ -256,6 +277,85 @@ class BleHid:
         else:
             if self._need_pairing_check:
                 self._ensure_paired()
+
+    # ---- bond management ------------------------------------------------
+
+    def request_erase_bonds(self):
+        """Request a bond-store wipe.
+
+        Safe to call from any context, including while connected. The
+        actual erase runs from tick() once the link is down and the
+        radio is quiet, since erase_bonding is brittle on NimBLE under
+        active connections / advertising.
+        """
+        if not self._ready:
+            print("[BLE] erase_bonds: BLE not ready")
+            return
+        if self._erase_pending:
+            print("[BLE] erase_bonds: already pending")
+            return
+        self._erase_pending = True
+        print("[BLE] erase_bonds: queued — will run on next disconnect")
+        # If we're already disconnected, force a disconnect-edge style
+        # disconnect of any half-open links so the next tick() can do
+        # the wipe immediately.
+        try:
+            for c in list(getattr(self._ble, "connections", []) or []):
+                try:
+                    c.disconnect()
+                except Exception as e:
+                    dprint("[BLE] erase_bonds disconnect err:", e)
+        except Exception as e:
+            dprint("[BLE] erase_bonds connections err:", e)
+
+    def _do_erase_bonds(self):
+        """Perform the actual bond-store wipe. tick() only.
+
+        Sequence is modelled on the recovered_source flow that worked
+        on this hardware: stop advertising, GC, sleep, attempt erase
+        via adafruit_ble first then _bleio.adapter as fallback, sleep,
+        kick advertising back up. Every step is wrapped because any
+        of them can throw on Nimble under memory pressure.
+        """
+        self._erase_pending = False
+        print("[BLE] erase_bonds: running")
+        # 1. Stop advertising so the radio isn't actively pumping
+        try:
+            self._stop_adv()
+        except Exception as e:
+            dprint("[BLE] erase_bonds stop_adv err:", e)
+        # 2. Settle + GC so NVS write has headroom
+        time.sleep(_BLE_STABILIZE_S)
+        gc.collect()
+        gc.collect()
+        time.sleep(_BLE_STABILIZE_S)
+        # 3. Attempt the erase. Try adafruit_ble's wrapper first; if
+        # it doesn't exist on this build, fall back to the underlying
+        # _bleio.adapter call.
+        ok = False
+        try:
+            if hasattr(self._ble, "erase_bonding"):
+                self._ble.erase_bonding()
+                ok = True
+        except Exception as e:
+            dprint("[BLE] erase_bonding (adafruit_ble) err:", e)
+        if not ok:
+            try:
+                import _bleio
+                if hasattr(_bleio.adapter, "erase_bonding"):
+                    _bleio.adapter.erase_bonding()
+                    ok = True
+            except Exception as e:
+                dprint("[BLE] erase_bonding (_bleio.adapter) err:", e)
+        print("[BLE] erase_bonds:", "OK" if ok else "Unavailable on this build")
+        # 4. Settle again before re-advertising so the next central
+        # sees a clean radio.
+        time.sleep(_BLE_STABILIZE_S)
+        gc.collect()
+        try:
+            self._start_adv(force=True)
+        except Exception as e:
+            dprint("[BLE] erase_bonds restart adv err:", e)
 
     # ---- HID sends ------------------------------------------------------
 
