@@ -64,6 +64,8 @@ class BleHid:
         "_connected_at",
         "_pair_auto_after_s",
         "_pair_drive_tried",
+        "_ever_paired_this_conn",
+        "_fast_disconnect_s",
     )
 
     def __init__(self, enabled, name):
@@ -139,6 +141,17 @@ class BleHid:
         # doesn't disconnect first.
         self._pair_auto_after_s = 1.0
         self._pair_drive_tried = False
+
+        # Stale-bond diagnostics. When a central with a stale bond
+        # (we wiped our NVS with EBIND but it still thinks it's
+        # paired) reconnects, its stack sees the encryption mismatch
+        # and drops the link within ~1s, never completing pairing.
+        # We latch "did we ever see paired=True on this connection"
+        # and, on disconnect, if the link went down that fast without
+        # pairing, print a clear user-facing hint so the log tells
+        # Brian which side needs its bond cleared.
+        self._ever_paired_this_conn = False
+        self._fast_disconnect_s = 2.0
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -246,6 +259,22 @@ class BleHid:
 
     def _on_connect(self):
         print("[BLE] Connected")
+        # Log the peer address so iPhone vs PC connections can be
+        # told apart in the serial log without guessing. iPhone and
+        # modern Android use random resolvable addresses (different
+        # every reconnect) while Windows tends to present a stable
+        # public address — even the address *format* is a useful
+        # hint when triaging "which central is failing".
+        try:
+            for c in list(getattr(self._ble, "connections", []) or []):
+                try:
+                    addr = getattr(c, "peer_address", None)
+                    if addr is not None:
+                        print("[BLE] peer:", addr)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         # Re-init ConsumerControl on the new device to avoid a stale
         # binding if adafruit_ble swapped the HID device out.
         try:
@@ -258,12 +287,33 @@ class BleHid:
         self._last_pair_try_at = 0.0
         self._connected_at = time.monotonic()
         self._pair_drive_tried = False
+        self._ever_paired_this_conn = False
 
     def _on_disconnect(self):
-        print("[BLE] Disconnected")
+        # Measure how long we stayed up and whether pairing ever
+        # completed. If a central connects and drops within
+        # _fast_disconnect_s without ever encrypting, that is the
+        # classic stale-bond symptom: the central still has a bond
+        # we no longer have (e.g. we ran EBIND after it had paired),
+        # its stack sees the SMP mismatch and tears the link down
+        # before pairing can start. The only fix is on the central:
+        # Forget Device, then reconnect. Surface this in the log so
+        # the user isn't left guessing which side is stale.
+        try:
+            uptime = time.monotonic() - self._connected_at
+        except Exception:
+            uptime = 0.0
+        print("[BLE] Disconnected (uptime %.2fs, paired=%s)"
+              % (uptime, self._ever_paired_this_conn))
+        if (uptime < self._fast_disconnect_s) and (not self._ever_paired_this_conn):
+            print("[BLE] Fast disconnect without pairing — likely stale bond on")
+            print("      central side. Fix: Forget Device on the phone/PC, then")
+            print("      press EBIND on the device, then reconnect from the")
+            print("      central's OTHER DEVICES list.")
         self._need_pairing_check = False
         self._pair_attempts = 0
         self._pair_drive_tried = False
+        self._ever_paired_this_conn = False
         # Kick advertising immediately so the phone can re-find us.
         self._start_adv(force=True)
 
@@ -306,6 +356,7 @@ class BleHid:
                 if paired:
                     self._need_pairing_check = False
                     self._pair_attempts = 0
+                    self._ever_paired_this_conn = True
                     print("[BLE] Paired/encrypted")
                     continue
                 # Not paired yet.
@@ -324,6 +375,7 @@ class BleHid:
                     if paired:
                         self._need_pairing_check = False
                         self._pair_attempts = 0
+                        self._ever_paired_this_conn = True
                         print("[BLE] Paired/encrypted")
                         continue
                 # Still not paired — bump counter so we eventually
