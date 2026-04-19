@@ -61,6 +61,9 @@ class BleHid:
         "_erase_pending",
         "_last_erase_at",
         "_erase_cooldown_s",
+        "_connected_at",
+        "_pair_auto_after_s",
+        "_pair_drive_tried",
     )
 
     def __init__(self, enabled, name):
@@ -106,8 +109,30 @@ class BleHid:
         # the radio; doing it back-to-back is what crashed the stack in
         # earlier hardware runs. 30s between successful erases is
         # plenty for the "Forget Device -> EBIND -> re-pair" flow.
-        self._last_erase_at = 0.0
+        # Initialised well in the past so the very first EBIND after
+        # boot is not blocked by a "cooldown" against t=0.
         self._erase_cooldown_s = 30.0
+        self._last_erase_at = -self._erase_cooldown_s - 1.0
+
+        # Cross-platform pairing driver.
+        #
+        # iOS auto-initiates pairing within ~1-2s of connect when it
+        # sees an encrypted HID characteristic, so we stay passive
+        # long enough for that path to complete on its own (which keeps
+        # us from redundantly calling c.pair() and starving the main
+        # loop while iOS is already halfway through the handshake).
+        #
+        # Windows does NOT auto-initiate pairing — a BLE-only device
+        # advertising HID lands under "Other devices" until something
+        # on either side drives the Security Request. If we're still
+        # unpaired _pair_auto_after_s seconds after connect, we call
+        # c.pair() once (not in a loop) as a fallback nudge. With a
+        # clean NVS bond store (i.e. after EBIND), this call returns
+        # quickly on both sides — the 30-40s blocks we saw in earlier
+        # hardware logs were the stale-bond mismatch case, not normal.
+        self._connected_at = 0.0
+        self._pair_auto_after_s = 3.0
+        self._pair_drive_tried = False
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -204,31 +229,36 @@ class BleHid:
         self._need_pairing_check = True
         self._pair_attempts = 0
         self._last_pair_try_at = 0.0
+        self._connected_at = time.monotonic()
+        self._pair_drive_tried = False
 
     def _on_disconnect(self):
         print("[BLE] Disconnected")
         self._need_pairing_check = False
         self._pair_attempts = 0
+        self._pair_drive_tried = False
         # Kick advertising immediately so the phone can re-find us.
         self._start_adv(force=True)
 
     def _ensure_paired(self):
-        # Passive pairing observer.
+        # Hybrid pairing driver.
         #
-        # We deliberately do NOT call c.pair() from the peripheral side.
-        # c.pair() sends an LL Security Request and then BLOCKS the main
-        # loop until pairing completes, times out (~30s), or the link
-        # drops. On recent iOS, the peer-initiated Security Request can
-        # be interpreted as a key mismatch against any stale bond and
-        # triggers an immediate disconnect — which then leaves us hung
-        # in pair() for the full connection supervision timeout. During
-        # that block the BM83 UART FIFO overruns and events are lost
-        # (the heartbeat exposes this as 30-50s [BM83 RX] silences).
+        # Phase 1 (passive observer, first few seconds after connect):
+        #   We watch getattr(c, "paired") and log when the central
+        #   establishes encryption on its own. iOS auto-initiates
+        #   pairing within ~1-2s of connecting to a BLE HID device,
+        #   so most iPhone handshakes complete here without us ever
+        #   sending a Security Request from our side.
         #
-        # iOS / Android / Windows all auto-initiate pairing when they
-        # access an encrypted HID characteristic. Our job is just to
-        # notice when encryption has been established and stop polling,
-        # which this loop does via getattr(c, "paired").
+        # Phase 2 (one-shot drive, if still unpaired after _pair_auto_after_s):
+        #   Windows does NOT auto-initiate pairing for BLE devices
+        #   advertising HID — they show up under "Other devices" and
+        #   never pair unless something drives it. After the grace
+        #   period, if the central has not encrypted on its own, we
+        #   call c.pair() exactly once. With a clean NVS bond store
+        #   (after EBIND) this returns quickly; the 30-40s blocks
+        #   observed in earlier hardware logs were the stale-bond
+        #   mismatch case, not normal operation.
         if not self._ble or not getattr(self._ble, "connected", False):
             return
         if self._pair_attempts >= self._pair_attempt_limit:
@@ -242,6 +272,7 @@ class BleHid:
             conns = list(getattr(self._ble, "connections", []))
         except Exception:
             conns = []
+        since_connect = now - self._connected_at
         for c in conns:
             try:
                 paired = getattr(c, "paired", None)
@@ -249,13 +280,31 @@ class BleHid:
                     self._need_pairing_check = False
                     self._pair_attempts = 0
                     print("[BLE] Paired/encrypted")
-                else:
-                    # Not encrypted yet — bump attempt counter so we
-                    # eventually stop polling even if the central never
-                    # initiates pairing on its own.
-                    self._pair_attempts += 1
-                    dprint("[BLE] pair poll %d/%d: paired=%r"
-                           % (self._pair_attempts, self._pair_attempt_limit, paired))
+                    continue
+                # Not paired yet.
+                if (not self._pair_drive_tried) and since_connect >= self._pair_auto_after_s:
+                    # One-shot drive — the central has had its chance
+                    # to auto-pair and didn't. This is the Windows
+                    # path (and a few stubborn Linux BT stacks).
+                    self._pair_drive_tried = True
+                    print("[BLE] Pairing... (driving from peripheral)")
+                    try:
+                        c.pair()
+                    except Exception as e:
+                        dprint("[BLE] pair() err:", e)
+                    # Re-check after the call returns.
+                    paired = getattr(c, "paired", None)
+                    if paired:
+                        self._need_pairing_check = False
+                        self._pair_attempts = 0
+                        print("[BLE] Paired/encrypted")
+                        continue
+                # Still not paired — bump counter so we eventually
+                # stop polling if this connection never encrypts.
+                self._pair_attempts += 1
+                dprint("[BLE] pair poll %d/%d: paired=%r since_connect=%.1fs"
+                       % (self._pair_attempts, self._pair_attempt_limit,
+                          paired, since_connect))
             except Exception as e:
                 self._pair_attempts += 1
                 dprint("[BLE] pair poll err (attempt %d):" % self._pair_attempts, e)
