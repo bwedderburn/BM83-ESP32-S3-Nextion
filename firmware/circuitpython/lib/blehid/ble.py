@@ -59,6 +59,8 @@ class BleHid:
         "_pair_attempts",
         "_pair_attempt_limit",
         "_erase_pending",
+        "_last_erase_at",
+        "_erase_cooldown_s",
     )
 
     def __init__(self, enabled, name):
@@ -100,6 +102,12 @@ class BleHid:
         # actively advertising has been observed to hard-crash NimBLE,
         # so the request is buffered until we're in a quiet state.
         self._erase_pending = False
+        # Rate-limit repeat erases. Each wipe rewrites NVS and cycles
+        # the radio; doing it back-to-back is what crashed the stack in
+        # earlier hardware runs. 30s between successful erases is
+        # plenty for the "Forget Device -> EBIND -> re-pair" flow.
+        self._last_erase_at = 0.0
+        self._erase_cooldown_s = 30.0
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -283,10 +291,19 @@ class BleHid:
     def request_erase_bonds(self):
         """Request a bond-store wipe.
 
-        Safe to call from any context, including while connected. The
-        actual erase runs from tick() once the link is down and the
-        radio is quiet, since erase_bonding is brittle on NimBLE under
-        active connections / advertising.
+        Pure flag-setter. The actual erase runs from tick() once the
+        link is down and the radio is quiet — erase_bonding is brittle
+        on NimBLE under active connections / advertising, and a
+        synchronous c.disconnect() from this callsite was observed to
+        hard-crash the stack when the BM83 UART was mid-handshake (the
+        AVRCP metadata exchange right after reconnect is a common
+        trigger).
+
+        If the user wants to wipe bonds while BLE is connected, they
+        should drop the link from the central side (Forget Device, or
+        Disconnect) first, or just leave the flag set and walk out of
+        range — tick() will service the request as soon as the link
+        is down.
         """
         if not self._ready:
             print("[BLE] erase_bonds: BLE not ready")
@@ -294,19 +311,16 @@ class BleHid:
         if self._erase_pending:
             print("[BLE] erase_bonds: already pending")
             return
+        now = time.monotonic()
+        if (now - self._last_erase_at) < self._erase_cooldown_s:
+            remaining = self._erase_cooldown_s - (now - self._last_erase_at)
+            print("[BLE] erase_bonds: on cooldown (%.1fs left)" % remaining)
+            return
         self._erase_pending = True
-        print("[BLE] erase_bonds: queued — will run on next disconnect")
-        # If we're already disconnected, force a disconnect-edge style
-        # disconnect of any half-open links so the next tick() can do
-        # the wipe immediately.
-        try:
-            for c in list(getattr(self._ble, "connections", []) or []):
-                try:
-                    c.disconnect()
-                except Exception as e:
-                    dprint("[BLE] erase_bonds disconnect err:", e)
-        except Exception as e:
-            dprint("[BLE] erase_bonds connections err:", e)
+        if getattr(self._ble, "connected", False):
+            print("[BLE] erase_bonds: queued — disconnect central first, then it'll run")
+        else:
+            print("[BLE] erase_bonds: queued — will run on next tick")
 
     def _do_erase_bonds(self):
         """Perform the actual bond-store wipe. tick() only.
@@ -318,6 +332,7 @@ class BleHid:
         of them can throw on Nimble under memory pressure.
         """
         self._erase_pending = False
+        self._last_erase_at = time.monotonic()
         print("[BLE] erase_bonds: running")
         # 1. Stop advertising so the radio isn't actively pumping
         try:
