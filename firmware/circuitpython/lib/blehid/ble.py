@@ -131,7 +131,13 @@ class BleHid:
         # quickly on both sides — the 30-40s blocks we saw in earlier
         # hardware logs were the stale-bond mismatch case, not normal.
         self._connected_at = 0.0
-        self._pair_auto_after_s = 3.0
+        # Windows' BLE stack gives up on a non-pairing HID device
+        # within ~1-2s of connect (it expects either auto-pairing or a
+        # peripheral-driven Security Request quickly). 1.0s gives iOS
+        # enough of a head start that its auto-pair usually completes
+        # before we fire, while still being fast enough that Windows
+        # doesn't disconnect first.
+        self._pair_auto_after_s = 1.0
         self._pair_drive_tried = False
 
     # ---- lifecycle ------------------------------------------------------
@@ -148,8 +154,29 @@ class BleHid:
 
             self._ble = BLERadio()
             self._ble.name = self.name
+            # Advertise the GAP Appearance so Windows' BLE stack
+            # classifies us as a keyboard HID device and runs the
+            # right service-discovery / driver flow. Without this,
+            # Windows often lands us under "Other devices" after
+            # pairing and never binds an HID driver. 0x03C1 = HID
+            # Subtype: Keyboard (the most broadly-recognised BLE HID
+            # class; ConsumerControl volume keys route through this
+            # profile fine). iOS and Android also read Appearance but
+            # are more forgiving when it is absent.
+            try:
+                self._ble.appearance = 0x03C1
+            except Exception as e:
+                dprint("[BLE] set appearance err:", e)
             self._hid = HIDService()
             self._adv = ProvideServicesAdvertisement(self._hid)
+            # Expose Appearance in the scan-response side of the
+            # advertisement too, so Windows can read it during device
+            # discovery (before the full GATT connect), which is when
+            # it decides whether to even offer "Add device" as HID.
+            try:
+                self._adv.appearance = 0x03C1
+            except Exception as e:
+                dprint("[BLE] set adv appearance err:", e)
             self._cc = ConsumerControl(self._hid.devices)
             self._CCC = CCC
             self._ready = True
