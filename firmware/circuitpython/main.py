@@ -280,10 +280,11 @@ def main():
             if aux_mode:
                 print("[AUX] inferred -> gating AVRCP polling, showing AUX indicators")
                 enter_aux_mode()
-                # Kick the BM83 audio routing once on the first plug-in
-                # edge to work around the jack-detect miss that otherwise
-                # leaves AUX silent until the user unplugs+replugs.
-                bm.kick_aux_routing()
+                # Kick the BM83 audio routing only when a definite AUX source
+                # transition was observed (audio_source == 0x81), not when
+                # aux_mode was inferred from the fallback heuristic at boot.
+                if bm.audio_source == bm.AUDIO_SRC_AUX:
+                    bm.kick_aux_routing()
             else:
                 print("[AUX] cleared -> enabling AVRCP polling, hiding AUX indicators")
                 exit_aux_mode()

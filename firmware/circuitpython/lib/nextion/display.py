@@ -23,6 +23,8 @@ EQ_MAP = {
 TOK_BT = {
     b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
     b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN",
+    # Retain documented Erase Bonds token for HMI/docs compatibility.
+    b"BT_EBIND",
     # Press/release tokens for hold-and-repeat volume controls
     b"BT_VOLUP_P", b"BT_VOLUP_R", b"BT_VOLDN_P", b"BT_VOLDN_R"
 }

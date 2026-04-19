@@ -1,4 +1,5 @@
 from bm83.bm83 import Bm83
+import time
 
 
 def test_avrcp_parse_metadata_attrs():
@@ -62,3 +63,35 @@ def test_avrcp_parse_metadata_resets_stale_fragment_on_new_length():
     resp, attrs = bm.parse_gea_0x5d(fresh)
     assert resp == 0x01
     assert attrs == {2: "New Artist"}
+
+
+def test_avrcp_parse_metadata_drops_stale_fragment_after_timeout():
+    """Fragments older than _gea_frag_timeout_s are dropped on next parse call."""
+    bm = Bm83(None)
+
+    def attr(aid, text):
+        val = text.encode("utf-8")
+        return aid.to_bytes(4, "big") + b"\x00\x00" + len(val).to_bytes(2, "big") + val
+
+    payload = attr(1, "Song Title")
+    total_len = len(payload).to_bytes(2, "big")
+
+    # Send first fragment (not final)
+    part1 = bytes([0x20, 0x00, 0x01, 0x00, 0x01]) + total_len + payload[:6]
+    assert bm.parse_gea_0x5d(part1) is None
+    assert len(bm._gea_frag) > 0
+
+    # Simulate aging past timeout by backdating _gea_frag_at
+    bm._gea_frag_at = time.monotonic() - bm._gea_frag_timeout_s - 1.0
+
+    # Send the second fragment (final) — the stale fragment should be dropped
+    # and a fresh accumulation started from this packet alone. Since it is marked
+    # is_end=1 but the reassembled buffer won't match total_len, the result
+    # depends on whether the single packet covers the full total_len.
+    part2_fresh = bytes([0x20, 0x00, 0x01, 0x01, 0x01]) + total_len + payload
+    result = bm.parse_gea_0x5d(part2_fresh)
+    # The stale fragment buffer should have been cleared before accumulating
+    # the new packet, so we get a clean reassembly of the full payload.
+    assert result is not None
+    resp, attrs = result
+    assert attrs[1] == "Song Title"

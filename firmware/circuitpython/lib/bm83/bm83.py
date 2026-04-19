@@ -478,11 +478,15 @@ class Bm83:
         # Audio-source tracking. States 0x80/0x81/0x82 report which audio
         # source the BM83 is currently routing (none / AUX / A2DP). They are
         # orthogonal to link-state codes like 0x06 (A2DP link established),
-        # so we record them separately and do NOT use them to drive
-        # self.connected. should_show_aux() reads this to gate the AUX UI.
-        if state in self.AUDIO_SRC_STATES:
+        # so we record them separately. If a firmware value overlaps with a
+        # connected-state code (for example 0x82 on some firmware builds),
+        # keep tracking the source but do not return early before the
+        # connection-state update runs.
+        is_audio_src_state = state in self.AUDIO_SRC_STATES
+        if is_audio_src_state:
             self.audio_source = state
-            return None
+            if state not in self.CONNECTED_STATES:
+                return None
     # Conditional check
         if state in self.CONNECTED_STATES:
             self._last_connected_seen = now
