@@ -84,20 +84,21 @@ if command -v rsync >/dev/null 2>&1; then
     "${SRC_DIR}/" "${DIST_DIR}/"
 else
   echo "rsync not found; falling back to cp. Install rsync for faster builds." >&2
-  error_flag="$(mktemp)"
-  trap 'rm -f "${error_flag}"' EXIT
+  copy_failed=0
 
+  # Note: `while ... done < <(cmd)` does NOT spawn a subshell in bash, so
+  # copy_failed set inside the loop is visible here.
   while IFS= read -r -d '' file; do
     rel_path="${file#"${SRC_DIR}"/}"
     dest="${DIST_DIR}/${rel_path}"
     if ! mkdir -p "$(dirname "${dest}")" || ! cp -p "${file}" "${dest}"; then
       echo "Error: Failed to copy ${file} to ${dest}" >&2
-      touch "${error_flag}"
+      copy_failed=1
       break
     fi
   done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0)
 
-  if [[ -f "${error_flag}" ]]; then
+  if (( copy_failed )); then
     exit 1
   fi
 fi
