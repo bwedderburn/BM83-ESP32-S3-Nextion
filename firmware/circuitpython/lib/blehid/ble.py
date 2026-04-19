@@ -36,10 +36,50 @@ from utils.common import dprint
 _BLE_STABILIZE_S = 0.05
 
 
+# Persistent counter file for BLE name cycling.
+#
+# Windows caches BLE HID devices aggressively: after Forget Device from
+# Settings it may still hold a cached bond / resolved-address entry for
+# the device name, then silently attempt a stale-key reconnect when the
+# device reappears. That reconnect fails in ~1s because our NVS bond
+# store was wiped by EBIND, but Windows never re-prompts for pairing
+# -- it just loops. The cleanest exit is to give the device a NEW name
+# after every bond wipe so Windows sees it as a brand-new device with
+# no cached state, forcing a clean "Add device -> Pair" flow.
+#
+# CIRCUITPY is RO to the board when USB is mounted RW to the host, so
+# writes can fail silently. In that case we still bump the in-memory
+# counter for the life of the session -- cycling still works until
+# power-cycle. Persist-on-next-boot is fine because EBIND-then-power-
+# cycle is not a meaningful real-world workflow.
+_BLE_COUNTER_FILE = "/ble_counter.txt"
+
+
+def _read_ble_counter():
+    try:
+        with open(_BLE_COUNTER_FILE, "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+
+def _write_ble_counter(count):
+    try:
+        with open(_BLE_COUNTER_FILE, "w") as f:
+            f.write(str(count))
+        return True
+    except Exception as e:
+        dprint("[BLE] counter write err:", e)
+        return False
+
+
 class BleHid:
     __slots__ = (
         "enabled",
+        "base_name",
         "name",
+        "_memory_counter",
+        "_counter_persisted",
         "_ble",
         "_adv",
         "_hid",
@@ -71,7 +111,23 @@ class BleHid:
 
     def __init__(self, enabled, name):
         self.enabled = enabled
+        # base_name is the immutable identifier from main.py; the
+        # cycling counter is appended to it to form self.name, which
+        # is what actually gets advertised. If the counter file says
+        # 7, advertised name is "<base>_7". Base stays the same so
+        # the "erase counter" story is: always build name from base
+        # + counter, never mutate base.
+        self.base_name = name
         self.name = name
+        # Counter state. _memory_counter is the source of truth for
+        # the current session; _counter_persisted tracks whether we
+        # were able to write it to CIRCUITPY (fails when USB is
+        # mounted RW to the host, which is common during development).
+        # When persistence fails the in-memory value still advances
+        # so naming within a single session still cycles; we just
+        # don't survive a reboot in that case, which is fine.
+        self._memory_counter = 0
+        self._counter_persisted = False
         self._ble = None
         self._adv = None
         self._hid = None
@@ -180,6 +236,17 @@ class BleHid:
             from adafruit_hid.consumer_control_code import ConsumerControlCode as CCC
 
             self._ble = BLERadio()
+            # Load persisted cycling counter and apply it to the
+            # advertised name before the radio comes up. If the file
+            # doesn't exist yet (fresh device) counter is 0 and the
+            # name is just base_name -- no suffix until first EBIND.
+            counter = _read_ble_counter()
+            self._memory_counter = counter
+            self._counter_persisted = True  # read succeeded; assume FS is writable
+            if counter > 0:
+                self.name = "%s_%d" % (self.base_name, counter)
+            else:
+                self.name = self.base_name
             self._ble.name = self.name
             # Advertise the GAP Appearance so Windows' BLE stack
             # classifies us as a keyboard HID device and runs the
@@ -506,7 +573,26 @@ class BleHid:
             except Exception as e:
                 dprint("[BLE] erase_bonding (_bleio.adapter) err:", e)
         print("[BLE] erase_bonds:", "OK" if ok else "Unavailable on this build")
-        # 4. Settle again before re-advertising so the next central
+        # 4. If the erase succeeded, bump the cycling counter and
+        # update the advertised name. This is the key mechanism for
+        # rescuing Windows' stale-handle auto-reconnect loop -- a
+        # new name means Windows sees a new device with no cached
+        # state, forcing a clean "Add device -> Pair" flow.
+        if ok:
+            try:
+                # max() guards against a corrupted / stale persisted
+                # value dragging the counter backwards relative to
+                # our in-memory view.
+                persisted = _read_ble_counter() if self._counter_persisted else 0
+                counter = max(persisted, self._memory_counter) + 1
+                self._memory_counter = counter
+                self._counter_persisted = _write_ble_counter(counter)
+                if not self._counter_persisted:
+                    dprint("[BLE] counter: in-memory only (FS read-only)")
+                self._update_ble_name(counter)
+            except Exception as e:
+                dprint("[BLE] name-cycle err:", e)
+        # 5. Settle again before re-advertising so the next central
         # sees a clean radio.
         time.sleep(_BLE_STABILIZE_S)
         gc.collect()
@@ -514,6 +600,24 @@ class BleHid:
             self._start_adv(force=True)
         except Exception as e:
             dprint("[BLE] erase_bonds restart adv err:", e)
+
+    def _update_ble_name(self, counter):
+        """Rewrite the advertised BLE name to base_name + counter.
+
+        Called right after a successful bond wipe so the next
+        advertising cycle presents a fresh identity to any central
+        that still has a cached handle for the old name. The counter
+        suffix format is "_%d" so the first cycled name is
+        "<base>_1", second "<base>_2", etc. ConsumerControl bonds
+        from the central's perspective are keyed on device name, so
+        this is sufficient to look like a new device.
+        """
+        self.name = "%s_%d" % (self.base_name, counter)
+        try:
+            self._ble.name = self.name
+            print("[BLE] Name updated to:", self.name)
+        except Exception as e:
+            dprint("[BLE] name update err:", e)
 
     # ---- HID sends ------------------------------------------------------
 
