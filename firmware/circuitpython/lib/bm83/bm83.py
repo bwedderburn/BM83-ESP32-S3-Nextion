@@ -370,14 +370,25 @@ class Bm83:
             free = gc.mem_free()
         except Exception:
             free = -1
-        if effective_gap >= self._hb_silence_warn_s:
-            # Print every period while silent so the gap is visible growing.
-            print("[BM83 RX] SILENT for %.1fs | free=%d" % (effective_gap, free))
+        # Gate SILENT on *instantaneous* gap, not effective_gap. A single
+        # transient stall earlier in the window (e.g., boot -> first RX,
+        # or a 4s AVRCP lull that already recovered) would otherwise
+        # produce a misleading "SILENT" line while bytes are actively
+        # flowing now. window_max is still included in the message for
+        # context when it exceeds the instantaneous reading.
+        if instantaneous_gap >= self._hb_silence_warn_s:
+            if window_max > instantaneous_gap:
+                print("[BM83 RX] SILENT for %.1fs (window max %.2fs) | free=%d"
+                      % (instantaneous_gap, window_max, free))
+            else:
+                print("[BM83 RX] SILENT for %.1fs | free=%d"
+                      % (instantaneous_gap, free))
         elif effective_gap >= self._hb_degraded_warn_s:
-            # DEGRADED — BT link is throttling but radio is alive. Observed
-            # as the earliest warning (0.2-0.5s) before a full 0x08 link-back
-            # fail cascade. Show both max-in-window and instantaneous so it's
-            # obvious whether the stall is current or historical.
+            # DEGRADED — BT link is throttling or briefly stalled but the
+            # radio is alive. Observed as the earliest warning (0.2-0.5s)
+            # before a full 0x08 link-back fail cascade. Show both max-in
+            # -window and instantaneous so it's obvious whether the stall
+            # is current or a historical blip we already recovered from.
             print("[BM83 RX] DEGRADED: max %.2fs in last %.0fs window (now %.2fs) | free=%d"
                   % (effective_gap, self._hb_period_s, instantaneous_gap, free))
         else:
@@ -485,8 +496,10 @@ class Bm83:
         # but this guard closes the race window between a fresh AUX
         # plug-in and the first 0x81 BTM_Status — during which main.py
         # still thinks we're in A2DP mode but the chip is playing Line-In.
-        # Also guard against AUDIO_SRC_NONE when not connected: same
-        # disruption risk, and there's nothing to pause anyway.
+        # Deliberately narrow: AUDIO_SRC_NONE and unknown (None) are left
+        # as pass-through so that pressing Play from an idle state can
+        # still kick A2DP resume, which is the common "resume playback"
+        # intent.
         if self.audio_source == self.AUDIO_SRC_AUX:
             print("[PLAY/PAUSE] suppressed (AUX source active)")
             return

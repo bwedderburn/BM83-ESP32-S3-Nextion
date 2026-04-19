@@ -262,8 +262,10 @@ def main():
 
 # endregion
         # UART RX heartbeat — self-throttled (~10s), surfaces BM83 freezes
-        # and USB CDC drops in the log.
-        bm_tick_heartbeat()
+        # and USB CDC drops in the log. Pass `now` so every ticker shares
+        # the same time base and we don't pay an extra time.monotonic()
+        # per main-loop iteration.
+        bm_tick_heartbeat(now)
 
 # endregion
         # Tick non-blocking power state machine

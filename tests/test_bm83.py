@@ -277,3 +277,82 @@ def test_connection_watchdog_noop_when_disconnected():
     bm = Bm83(None)
     bm.connected = False
     assert bm.check_connection_watchdog() is None
+
+
+# --- play_pause AUX guard -------------------------------------------------
+
+def test_play_pause_suppressed_when_aux_source():
+    """play_pause must not write OP_MUSIC_CONTROL when audio_source is AUX.
+
+    Sending the AVRCP transport MMI while the BM83 is routing Line-In
+    nudges the chip's source state machine toward A2DP and interrupts
+    AUX audio. See main.py:bm83 commit message for the full rationale.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.audio_source = bm.AUDIO_SRC_AUX
+    bm.play_pause()
+    assert uart.writes == [], "play_pause must be a no-op while AUX is active"
+
+
+def test_play_pause_sends_when_a2dp_source():
+    """play_pause sends OP_MUSIC_CONTROL when audio_source is A2DP."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.audio_source = bm.AUDIO_SRC_A2DP
+    bm.play_pause()
+    assert len(uart.writes) == 1
+    # Frame: 0xAA <hi> <lo> OP_MUSIC_CONTROL <db> MC_PLAY_PAUSE <chk>
+    pkt = uart.writes[0]
+    assert pkt[0] == 0xAA
+    assert pkt[3] == Bm83.OP_MUSIC_CONTROL
+    assert pkt[5] == Bm83.MC_PLAY_PAUSE
+
+
+def test_play_pause_sends_when_source_unknown():
+    """play_pause sends when audio_source is None (boot, before first source event).
+
+    The AUX guard is deliberately narrow: a None source means we haven't
+    seen a 0x80/0x81/0x82 yet, in which case the user's Play press should
+    still be honored as a "kick A2DP / resume" intent.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    assert bm.audio_source is None  # default
+    bm.play_pause()
+    assert len(uart.writes) == 1
+
+
+# --- audio_source reset on disconnect -------------------------------------
+
+def test_note_btm_state_clears_audio_source_on_disconnect_hold():
+    """note_btm_state hold-timeout disconnect path resets audio_source to None.
+
+    Without this, audio_source stays pinned at 0x82 from the last A2DP
+    session, and should_show_aux() never returns True even when AUX is
+    the active physical source after the BT link drops.
+    """
+    bm = Bm83(None)
+    bm.connected = True
+    bm.audio_source = bm.AUDIO_SRC_A2DP
+    # Pretend the BM83 hasn't been seen for longer than the disconnect hold.
+    bm._last_connected_seen = time.monotonic() - (bm._disconnect_hold_s + 1.0)
+    # Pass a state that's NOT in CONNECTED_STATES and NOT in AUDIO_SRC_STATES
+    # so the disconnect branch fires. 0x0F (SPP/iAP disconnected) qualifies.
+    result = bm.note_btm_state(0x0F)
+    assert result == "DISCONNECTED"
+    assert bm.connected is False
+    assert bm.audio_source is None
+
+
+def test_check_connection_watchdog_clears_audio_source_on_timeout():
+    """check_connection_watchdog silence-timeout path resets audio_source."""
+    bm = Bm83(None)
+    bm.connected = True
+    bm.audio_source = bm.AUDIO_SRC_A2DP
+    now = time.monotonic()
+    bm._last_connected_seen = now
+    result = bm.check_connection_watchdog(now + bm._btm_silence_timeout_s + 1.0)
+    assert result == "DISCONNECTED"
+    assert bm.connected is False
+    assert bm.audio_source is None
