@@ -234,7 +234,7 @@ class BleHid:
             if not self._is_advertising():
                 self._start_adv(force=False)
             elif (now - self._last_adv_kick_at) > self._adv_kick_period_s:
-                self._last_adv_kick_at = now
+                self._start_adv(force=True)
         else:
             if self._need_pairing_check:
                 self._ensure_paired()

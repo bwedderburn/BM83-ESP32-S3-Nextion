@@ -17,9 +17,9 @@ def test_main_imports():
     in CI environments without CircuitPython hardware. Volume-specific functional
     tests can be added here as needed.
     """
-    # Verify that main module has expected attributes. Volume now flows through
-    # the BM83 UART (Set_Overall_Gain 0x23) instead of BLE HID, so we assert
-    # against the BM83-side constants rather than the old BLE_* shims.
+    # Verify that main exposes the expected top-level attributes. Current volume
+    # routing is split: A2DP volume uses BLE HID, while AUX uses BM83 MMI
+    # Line-In gain commands (0x82/0x83). This test is only an import smoke test.
     assert hasattr(main, 'main')
     assert callable(main.main)
     assert hasattr(main, 'VOL_REPEAT_MAX')

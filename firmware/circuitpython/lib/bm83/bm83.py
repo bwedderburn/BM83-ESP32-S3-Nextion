@@ -63,18 +63,7 @@ class Bm83:
     OP_BTM_UTILITY_FUNC = const(0x13)
     OP_EVENT_ACK = const(0x14)
     OP_EQ_MODE_SETTING = const(0x1C)
-    OP_SET_OVERALL_GAIN = const(0x23)
     OP_AVRCP_VENDOR_DEP_CMD = const(0x4A)
-
-    # Set_Overall_Gain (0x23) mask bits (datasheet section 4, command 0x23).
-    # Bit set => apply the gain change to that audio path.
-    GAIN_MASK_A2DP   = const(0x01)  # bit0: A2DP sink gain
-    GAIN_MASK_HF     = const(0x02)  # bit1: HF (phone call) gain
-    GAIN_MASK_LINEIN = const(0x04)  # bit2: Line_In (AUX) gain
-    GAIN_MASK_PCM    = const(0x08)  # bit3: PCM gain
-    # Set_Overall_Gain type field.
-    GAIN_TYPE_UP     = const(0x01)  # step volume up (one step)
-    GAIN_TYPE_DOWN   = const(0x02)  # step volume down (one step)
 
 # endregion
     EVT_BTM_STATUS = const(0x01)
@@ -493,6 +482,7 @@ class Bm83:
         # self.connected. should_show_aux() reads this to gate the AUX UI.
         if state in self.AUDIO_SRC_STATES:
             self.audio_source = state
+            return None
     # Conditional check
         if state in self.CONNECTED_STATES:
             self._last_connected_seen = now

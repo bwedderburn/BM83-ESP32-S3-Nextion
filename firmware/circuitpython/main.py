@@ -25,8 +25,9 @@ VOL_REPEAT_MAX = 2
 
 # BLE HID Consumer Control. The phone sees this as a media remote and
 # moves its OS volume slider in response to VOLUME_INCREMENT/DECREMENT.
-# Used for the BT-streaming case; AUX-mode volume goes via BM83 UART
-# (Set_Overall_Gain) since the phone isn't in the AUX signal path.
+# Used for the BT-streaming case; AUX-mode volume goes via BM83 MMI
+# Line-In gain commands (0x82/0x83) since the phone isn't in the AUX
+# signal path.
 BLE_ENABLED = True
 BLE_NAME = "B's Groovy BT CTRL"
 
@@ -71,13 +72,17 @@ def main():
     def volume_step(up):
         """Route a volume button press to the right backend.
 
-        When the BM83 reports AUX as the active audio source, the phone
-        is not in the signal path — only the BM83's Line_In gain matters.
-        Otherwise (A2DP streaming, or before we've seen a source event),
-        send a BLE HID Consumer Control code so the phone's OS volume
-        slider moves, matching the Flipper-Zero-style media-remote UX.
+        When the UI is in AUX mode, the phone is not in the signal
+        path — only the BM83's Line_In gain matters.  Otherwise (A2DP
+        streaming, or before we've seen a source event), send a BLE
+        HID Consumer Control code so the phone's OS volume slider
+        moves, matching the Flipper-Zero-style media-remote UX.
+
+        Uses the same ``aux_mode`` flag that drives the Nextion AUX
+        indicator so the volume backend always matches what the user
+        sees on screen.
         """
-        if bm.audio_source == bm.AUDIO_SRC_AUX:
+        if aux_mode:
             if up:
                 bm_volume_up()
             else:
@@ -501,6 +506,12 @@ def main():
                 if vol_hold_active == "down":
                     vol_hold_active = None
                     vol_repeat_count = 0
+            elif tok == b"BT_VOLUP":
+                # Legacy single-shot volume up (no press/release pair).
+                volume_step(True)
+            elif tok == b"BT_VOLDN":
+                # Legacy single-shot volume down (no press/release pair).
+                volume_step(False)
 
 # endregion
         # Handle volume hold-and-repeat
