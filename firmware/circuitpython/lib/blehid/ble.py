@@ -190,6 +190,22 @@ class BleHid:
         self._start_adv(force=True)
 
     def _ensure_paired(self):
+        # Passive pairing observer.
+        #
+        # We deliberately do NOT call c.pair() from the peripheral side.
+        # c.pair() sends an LL Security Request and then BLOCKS the main
+        # loop until pairing completes, times out (~30s), or the link
+        # drops. On recent iOS, the peer-initiated Security Request can
+        # be interpreted as a key mismatch against any stale bond and
+        # triggers an immediate disconnect — which then leaves us hung
+        # in pair() for the full connection supervision timeout. During
+        # that block the BM83 UART FIFO overruns and events are lost
+        # (the heartbeat exposes this as 30-50s [BM83 RX] silences).
+        #
+        # iOS / Android / Windows all auto-initiate pairing when they
+        # access an encrypted HID characteristic. Our job is just to
+        # notice when encryption has been established and stop polling,
+        # which this loop does via getattr(c, "paired").
         if not self._ble or not getattr(self._ble, "connected", False):
             return
         if self._pair_attempts >= self._pair_attempt_limit:
@@ -206,18 +222,20 @@ class BleHid:
         for c in conns:
             try:
                 paired = getattr(c, "paired", None)
-                if paired is False:
-                    print("[BLE] Pairing...")
-                    c.pair()
-                    self._pair_attempts += 1
-                    paired = getattr(c, "paired", None)
                 if paired:
                     self._need_pairing_check = False
                     self._pair_attempts = 0
                     print("[BLE] Paired/encrypted")
+                else:
+                    # Not encrypted yet — bump attempt counter so we
+                    # eventually stop polling even if the central never
+                    # initiates pairing on its own.
+                    self._pair_attempts += 1
+                    dprint("[BLE] pair poll %d/%d: paired=%r"
+                           % (self._pair_attempts, self._pair_attempt_limit, paired))
             except Exception as e:
                 self._pair_attempts += 1
-                dprint("[BLE] pair err (attempt %d):" % self._pair_attempts, e)
+                dprint("[BLE] pair poll err (attempt %d):" % self._pair_attempts, e)
 
     def tick(self):
         if not self._ready or not self._ble:
