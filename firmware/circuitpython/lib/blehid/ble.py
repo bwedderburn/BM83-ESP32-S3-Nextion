@@ -66,6 +66,7 @@ class BleHid:
         "_pair_drive_tried",
         "_ever_paired_this_conn",
         "_fast_disconnect_s",
+        "_peer_logged",
     )
 
     def __init__(self, enabled, name):
@@ -133,13 +134,17 @@ class BleHid:
         # quickly on both sides — the 30-40s blocks we saw in earlier
         # hardware logs were the stale-bond mismatch case, not normal.
         self._connected_at = 0.0
-        # Windows' BLE stack gives up on a non-pairing HID device
-        # within ~1-2s of connect (it expects either auto-pairing or a
-        # peripheral-driven Security Request quickly). 1.0s gives iOS
-        # enough of a head start that its auto-pair usually completes
-        # before we fire, while still being fast enough that Windows
-        # doesn't disconnect first.
-        self._pair_auto_after_s = 1.0
+        # Windows' "Add device -> Pair device? Allow" flow takes a
+        # human 3-6s to click through. If we drive c.pair() at 1.0s
+        # (as we did originally for the "Other device" rescue), our
+        # Security Request lands while Windows is still waiting for
+        # the user to click Allow on its own pairing dialog, and the
+        # two pair requests collide -> "Connection failed". 6.0s is
+        # long enough for a typical slow human click to finish Just
+        # Works pairing on its own (which is what we want), while
+        # still being short enough to rescue the truly-stuck
+        # "Other device" case where the central never initiates.
+        self._pair_auto_after_s = 6.0
         self._pair_drive_tried = False
 
         # Stale-bond diagnostics. When a central with a stale bond
@@ -152,6 +157,15 @@ class BleHid:
         # Brian which side needs its bond cleared.
         self._ever_paired_this_conn = False
         self._fast_disconnect_s = 2.0
+
+        # Per-connection "did we log the peer address yet" latch.
+        # On NimBLE the BLERadio.connections list is often empty at
+        # the moment _on_connect fires (the peer record hasn't been
+        # linked into the list yet), so iterating there silently
+        # yields nothing. Instead we log peer_address during the
+        # first _ensure_paired poll, one tick later, where the list
+        # is reliably populated.
+        self._peer_logged = False
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -259,22 +273,9 @@ class BleHid:
 
     def _on_connect(self):
         print("[BLE] Connected")
-        # Log the peer address so iPhone vs PC connections can be
-        # told apart in the serial log without guessing. iPhone and
-        # modern Android use random resolvable addresses (different
-        # every reconnect) while Windows tends to present a stable
-        # public address — even the address *format* is a useful
-        # hint when triaging "which central is failing".
-        try:
-            for c in list(getattr(self._ble, "connections", []) or []):
-                try:
-                    addr = getattr(c, "peer_address", None)
-                    if addr is not None:
-                        print("[BLE] peer:", addr)
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        # Peer address is logged from _ensure_paired one tick later,
+        # because NimBLE's connections list is frequently still empty
+        # at the moment this callback fires.
         # Re-init ConsumerControl on the new device to avoid a stale
         # binding if adafruit_ble swapped the HID device out.
         try:
@@ -288,6 +289,7 @@ class BleHid:
         self._connected_at = time.monotonic()
         self._pair_drive_tried = False
         self._ever_paired_this_conn = False
+        self._peer_logged = False
 
     def _on_disconnect(self):
         # Measure how long we stayed up and whether pairing ever
@@ -350,6 +352,19 @@ class BleHid:
         except Exception:
             conns = []
         since_connect = now - self._connected_at
+        # Log the peer address on the first poll after connect, when
+        # NimBLE has populated the connections list. Useful for
+        # telling iPhone (random resolvable, changes each reconnect)
+        # apart from Windows (stable public address) in the log.
+        if (not self._peer_logged) and conns:
+            for c in conns:
+                try:
+                    addr = getattr(c, "peer_address", None)
+                    if addr is not None:
+                        print("[BLE] peer:", addr)
+                except Exception:
+                    pass
+            self._peer_logged = True
         for c in conns:
             try:
                 paired = getattr(c, "paired", None)
