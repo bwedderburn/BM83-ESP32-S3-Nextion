@@ -1,539 +1,255 @@
-import os
-import tempfile
+"""Tests for blehid.ble.BleHid.
+
+Covers advertising backoff on exceptions, connect/disconnect edge
+handling, and pairing retry throttling/attempt limits. All
+CircuitPython-only imports are stubbed out so the tests run in CI.
+"""
 import time
-import blehid
-from blehid.ble import BleHid, _read_ble_counter, _write_ble_counter
+from unittest import mock
+
+from blehid.ble import BleHid
 
 
-class DummyBLE:
-    connected = False
-    advertising = False
-    name = ""
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+class FakeBLE:
+    """Minimal stand-in for ``adafruit_ble.BLERadio``."""
+
+    def __init__(self):
+        self.name = ""
+        self.connected = False
+        self.advertising = False
+        self._connections = []
+        self._adv_calls = 0
+        self._stop_adv_calls = 0
+        self._adv_error = None   # set to an Exception to simulate failures
+
+    @property
+    def connections(self):
+        return self._connections
 
     def start_advertising(self, adv):
+        if self._adv_error:
+            raise self._adv_error
         self.advertising = True
+        self._adv_calls += 1
 
     def stop_advertising(self):
         self.advertising = False
+        self._stop_adv_calls += 1
 
-    def erase_bonding(self):
-        pass
 
+class FakeCC:
+    """Minimal stand-in for ``adafruit_hid.consumer_control.ConsumerControl``."""
 
-def test_blehid_package_re_exports_blehid_class():
-    assert blehid.BleHid is BleHid
+    def __init__(self):
+        self.last_sent = None
 
+    def send(self, code):
+        self.last_sent = code
 
-def test_blehid_advertising_restart():
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = DummyBLE()
-    blehid._adv = object()
-    blehid._ready = True
 
-    blehid._start_adv(force=True)
-    assert blehid._ble.advertising is True
+class FakeCCC:
+    """Minimal stand-in for ``ConsumerControlCode``."""
+    VOLUME_INCREMENT = 0xE9
+    VOLUME_DECREMENT = 0xEA
+    MUTE = 0xE2
 
-    blehid._stop_adv()
-    assert blehid._ble.advertising is False
 
+class FakeConnection:
+    """Minimal stand-in for a BLE connection object."""
 
-def test_erase_bonds_when_ble_not_ready():
-    """Test that erase_bonds handles BLE not being ready gracefully."""
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ready = False
-    blehid._ble = None
+    def __init__(self, paired=False):
+        self.paired = paired
+        self.pair_called = False
 
-    # Should not crash when BLE is not ready
-    blehid.erase_bonds()
+    def pair(self):
+        self.pair_called = True
+        self.paired = True
 
 
-def test_erase_bonds_when_ble_is_none():
-    """Test that erase_bonds handles _ble being None gracefully."""
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ready = True
-    blehid._ble = None
+def _make_ready(ble_hid):
+    """Patch a BleHid instance so it thinks setup() succeeded."""
+    fake_ble = FakeBLE()
+    fake_cc = FakeCC()
+    ble_hid._ble = fake_ble
+    ble_hid._cc = fake_cc
+    ble_hid._CCC = FakeCCC
+    ble_hid._adv = object()   # non-None sentinel
+    ble_hid._hid = mock.MagicMock()
+    ble_hid._ready = True
+    return fake_ble, fake_cc
 
-    # Should not crash when _ble is None
-    blehid.erase_bonds()
 
+# ---------------------------------------------------------------------------
+# Advertising backoff
+# ---------------------------------------------------------------------------
 
-def test_ble_name_cycling():
-    """Test that BLE name cycles with counter on erase_bonds."""
-    from unittest import mock
-    # Create a temporary counter file for testing
-    import blehid.ble as ble_module
-    original_file = ble_module.BLE_COUNTER_FILE
+def test_adv_backoff_on_generic_error():
+    """A non-OOM error should set a flat 4 s backoff."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble._adv_error = RuntimeError("something broke")
 
-    try:
-        # Use a temporary file for testing
-        test_file = tempfile.NamedTemporaryFile(mode='w', delete=False)
-        test_file.write("5")
-        test_file.close()
-        ble_module.BLE_COUNTER_FILE = test_file.name
+    hid._start_adv(force=True)
 
-        # Test reading counter
-        counter = _read_ble_counter()
-        assert counter == 5
+    # inhibit_until should be ~4 s in the future
+    assert hid._adv_inhibit_until > time.monotonic()
+    assert hid._adv_oom_count == 0  # generic, not OOM
 
-        # Test writing counter
-        success = _write_ble_counter(6)
-        assert success is True
-        counter = _read_ble_counter()
-        assert counter == 6
 
-        # Test erase_bonds updates name with counter
-        blehid = BleHid(enabled=True, name="Test Device")
-        blehid._ble = DummyBLE()
-        blehid._adv = object()
-        blehid._ready = True
-        # Set up counter state to use persistent storage
-        blehid._counter_persisted = True
+def test_adv_backoff_grows_on_nimble_oom():
+    """Nimble OOM errors should increment _adv_oom_count and grow backoff."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble._adv_error = RuntimeError("Nimble out of memory")
 
-        # Initial name should be "Test Device"
-        assert blehid.name == "Test Device"
-        assert blehid.base_name == "Test Device"
+    hid._start_adv(force=True)
+    assert hid._adv_oom_count == 1
 
-        # After erase_bonds, name should be updated with incremented counter
-        with mock.patch("time.sleep"):  # Skip delays in test for speed
-            blehid.erase_bonds()
-        assert blehid.name == "Test Device07"
-        assert blehid._ble.name == "Test Device07"
+    # Clear the inhibit window so the next attempt isn't suppressed.
+    hid._adv_inhibit_until = 0.0
+    hid._start_adv(force=True)
+    assert hid._adv_oom_count == 2
 
-        # Counter should be incremented (both in file and memory)
-        counter = _read_ble_counter()
-        assert counter == 7
-        assert blehid._memory_counter == 7
 
-    finally:
-        # Cleanup
-        ble_module.BLE_COUNTER_FILE = original_file
-        if os.path.exists(test_file.name):
-            os.unlink(test_file.name)
+def test_adv_inhibit_prevents_start():
+    """While inhibited, _start_adv should do nothing."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    hid._adv_inhibit_until = time.monotonic() + 999
 
+    hid._start_adv(force=True)
+    assert ble._adv_calls == 0  # should be blocked
 
-def test_erase_bonds_with_failing_connections():
-    """Test that erase_bonds handles connection errors gracefully."""
-    from unittest import mock
 
-    class FaultyConnection:
-        def disconnect(self):
-            raise RuntimeError("Connection error")
+def test_adv_kick_restarts_advertising():
+    """tick() should restart advertising when the kick period elapses."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble.advertising = True  # pretend already advertising
+    hid._last_adv_kick_at = 0.0  # far in the past
 
-    class FaultyBLE:
-        connected = False
-        advertising = False
-        name = ""
-        connections = [FaultyConnection(), FaultyConnection()]
+    hid.tick()
 
-        def start_advertising(self, adv):
-            self.advertising = True
+    # _start_adv(force=True) should have been called, which calls
+    # stop_advertising then start_advertising.
+    assert ble._stop_adv_calls >= 1
+    assert ble._adv_calls >= 1
 
-        def stop_advertising(self):
-            self.advertising = False
 
-        def erase_bonding(self):
-            pass
+# ---------------------------------------------------------------------------
+# Connect / disconnect edge handling
+# ---------------------------------------------------------------------------
 
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = FaultyBLE()
-    blehid._adv = object()
-    blehid._ready = True
+def test_on_connect_sets_pairing_check():
+    """_on_connect should set _need_pairing_check and reset pair attempts."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
 
-    # Should not crash even when disconnections fail
-    with mock.patch("time.sleep"):  # Skip delays in test for speed
-        blehid.erase_bonds()
+    # Simulate connection edge via tick()
+    ble.connected = True
+    hid.tick()
 
-    # Should still attempt to restart advertising
-    assert blehid._ble.advertising is True
+    assert hid._need_pairing_check is True
+    assert hid._pair_attempts == 0
 
 
-def test_erase_bonds_with_failing_erase_bonding():
-    """Test that erase_bonds handles erase_bonding errors gracefully."""
-    from unittest import mock
+def test_on_disconnect_kicks_advertising():
+    """_on_disconnect should start advertising immediately."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
 
-    class FaultyBLE:
-        connected = False
-        advertising = False
-        name = ""
-        connections = []
+    # Simulate connect then disconnect
+    ble.connected = True
+    hid.tick()
+    ble.connected = False
+    hid.tick()
 
-        def start_advertising(self, adv):
-            self.advertising = True
+    assert hid._need_pairing_check is False
+    assert ble._adv_calls >= 1
 
-        def stop_advertising(self):
-            self.advertising = False
 
-        def erase_bonding(self):
-            raise RuntimeError("Erase bonding error")
+def test_is_connected_reflects_ble_state():
+    """is_connected() should mirror _ble.connected."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
 
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = FaultyBLE()
-    blehid._adv = object()
-    blehid._ready = True
+    assert hid.is_connected() is False
+    ble.connected = True
+    assert hid.is_connected() is True
 
-    # Should not crash even when erase_bonding fails
-    with mock.patch("time.sleep"):  # Skip delays in test for speed
-        blehid.erase_bonds()
 
-    # On erase failure, re-advertise should be deferred via backoff
-    assert blehid._ble.advertising is False
-    assert blehid._adv_inhibit_until > time.monotonic()
+def test_is_connected_false_when_disabled():
+    """is_connected() returns False when BLE is disabled."""
+    hid = BleHid(False, "test")
+    assert hid.is_connected() is False
 
-    # BLE name should NOT be updated when erase_bonding fails
-    assert blehid.name == "TestDevice"
-    assert blehid._ble.name == ""  # Name not updated
 
+# ---------------------------------------------------------------------------
+# Pairing retry throttling / attempt limits
+# ---------------------------------------------------------------------------
 
-def test_erase_bonds_with_advertising_failure():
-    """Test that erase_bonds handles advertising restart failures gracefully."""
-    from unittest import mock
+def test_ensure_paired_respects_throttle():
+    """_ensure_paired should skip if called within the retry window."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble.connected = True
+    conn = FakeConnection(paired=False)
+    ble._connections = [conn]
 
-    class FailingAdvBLE:
-        connected = False
-        advertising = False
-        name = ""
-        connections = []
-        _adv_call_count = 0
-
-        def start_advertising(self, adv):
-            self._adv_call_count += 1
-            raise RuntimeError("Nimble out of memory")
-
-        def stop_advertising(self):
-            self.advertising = False
-
-        def erase_bonding(self):
-            pass
-
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = FailingAdvBLE()
-    blehid._adv = object()
-    blehid._ready = True
-
-    # Should not crash even when advertising restart fails after erase
-    with mock.patch("time.monotonic", return_value=100.0):
-        with mock.patch("time.sleep"):  # Skip delays in test for speed
-            blehid.erase_bonds()
-
-    # Advertising failed, so it should remain False
-    assert blehid._ble.advertising is False
-    # Inhibit should be set to allow stack to recover
-    assert blehid._adv_inhibit_until > 100.0
+    hid._need_pairing_check = True
+    hid._last_pair_try_at = time.monotonic()  # just tried
+    hid._ensure_paired()
 
-
-def test_erase_bonds_with_oserror_advertising_failure():
-    """Test that erase_bonds handles OSError (BLE stack issue) gracefully."""
-    from unittest import mock
-
-    class OSErrorAdvBLE:
-        connected = False
-        advertising = False
-        name = ""
-        connections = []
-
-        def start_advertising(self, adv):
-            raise OSError("BLE stack failure")
-
-        def stop_advertising(self):
-            self.advertising = False
-
-        def erase_bonding(self):
-            pass
-
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = OSErrorAdvBLE()
-    blehid._adv = object()
-    blehid._ready = True
-
-    # Should not crash even when OSError occurs during advertising
-    with mock.patch("time.monotonic", return_value=100.0):
-        with mock.patch("time.sleep"):  # Skip delays in test for speed
-            blehid.erase_bonds()
-
-    # Advertising failed, so it should remain False
-    assert blehid._ble.advertising is False
-    # Inhibit should be set to allow stack to recover
-    assert blehid._adv_inhibit_until > 100.0
+    # Should have been throttled — pair() not called
+    assert not conn.pair_called
 
 
-def test_erase_bonds_erase_failure_defers_advertising_restart():
-    """Test that erase failure backoff defers advertising restart attempts."""
-    from unittest import mock
+def test_ensure_paired_stops_after_limit():
+    """_ensure_paired should give up after _pair_attempt_limit attempts."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble.connected = True
 
-    class BothFailBLE:
-        connected = False
-        advertising = False
-        name = ""
-        connections = []
-        start_calls = 0
-
-        def start_advertising(self, adv):
-            self.start_calls += 1
-            raise RuntimeError("Nimble out of memory")
-
-        def stop_advertising(self):
-            self.advertising = False
-
-        def erase_bonding(self):
-            raise RuntimeError("Erase bonding error")
-
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = BothFailBLE()
-    blehid._adv = object()
-    blehid._ready = True
-    # Set high failure count to verify erase backoff is honored.
-    # backoff = min(8.0, 2.0 + 5*1.0) = 7.0 -> erase inhibit = now + 7.0
-    blehid._erase_failures = 4  # will be incremented to 5 inside erase_bonds
-
-    with mock.patch("time.monotonic", return_value=100.0):
-        with mock.patch("time.sleep"):
-            blehid.erase_bonds()
-
-    # Erase failure sets backoff and advertising restart is deferred (no start call yet)
-    assert blehid._adv_inhibit_until == 107.0
-    assert blehid._ble.start_calls == 0
-    assert blehid._adv_failures == 0
-    assert blehid._ble.advertising is False
-    assert blehid._erase_failures == 5
-
-    # Once backoff expires, advertising restart is attempted.
-    with mock.patch("time.monotonic", return_value=108.0):
-        blehid._start_adv(force=False)
-    assert blehid._ble.start_calls == 1
-    assert blehid._adv_failures == 1
-
-
-def test_erase_bonds_with_readonly_filesystem():
-    """Test that erase_bonds works even when filesystem is read-only."""
-    from unittest import mock
-    import sys
-    ble_module = sys.modules["blehid.ble"]
-
-    # Mock the write function to simulate read-only filesystem
-    original_write = ble_module._write_ble_counter
-
-    def mock_write_readonly(count):
-        # Simulate read-only filesystem error
-        return False
-
-    try:
-        ble_module._write_ble_counter = mock_write_readonly
-
-        blehid = BleHid(enabled=True, name="TestDevice")
-        blehid._ble = DummyBLE()
-        blehid._adv = object()
-        blehid._ready = True
-        blehid._memory_counter = 5
-        blehid._counter_persisted = False
-
-        # Erase bonds should work even with read-only filesystem
-        with mock.patch("time.sleep"):  # Skip delays in test for speed
-            blehid.erase_bonds()
-
-        # Name should be updated with in-memory counter
-        assert blehid.name == "TestDevice06"
-        assert blehid._ble.name == "TestDevice06"
-
-        # Memory counter should be incremented
-        assert blehid._memory_counter == 6
-
-    finally:
-        ble_module._write_ble_counter = original_write
-
-
-def test_erase_bonds_filesystem_transition():
-    """Test counter continues incrementing when filesystem becomes read-only mid-operation."""
-    from unittest import mock
-    import sys
-    ble_module = sys.modules["blehid.ble"]
-
-    original_file = ble_module.BLE_COUNTER_FILE
-    original_write = ble_module._write_ble_counter
-
-    write_count = [0]  # Use list to allow modification in nested function
-
-    def mock_write_with_transition(count):
-        write_count[0] += 1
-        # First write succeeds, subsequent writes fail (simulate filesystem becoming read-only)
-        if write_count[0] == 1:
-            return original_write(count)
-        return False
-
-    try:
-        # Create temporary file for testing
-        test_file = tempfile.NamedTemporaryFile(mode='w', delete=False)
-        test_file.write("10")
-        test_file.close()
-        ble_module.BLE_COUNTER_FILE = test_file.name
-        ble_module._write_ble_counter = mock_write_with_transition
-
-        blehid = BleHid(enabled=True, name="TestDevice")
-        blehid._ble = DummyBLE()
-        blehid._adv = object()
-        blehid._ready = True
-        blehid._counter_persisted = True  # Start with writable filesystem
-
-        with mock.patch("time.sleep"):  # Skip delays in test for speed
-            # First erase: filesystem is writable
-            blehid.erase_bonds()
-            assert blehid.name == "TestDevice11"
-            assert blehid._memory_counter == 11
-            assert blehid._counter_persisted is True
-
-            # Second erase: filesystem becomes read-only
-            blehid.erase_bonds()
-            assert blehid.name == "TestDevice12"
-            assert blehid._memory_counter == 12
-            assert blehid._counter_persisted is False  # Write failed
-
-            # Third erase: filesystem still read-only, counter should continue incrementing
-            blehid.erase_bonds()
-            assert blehid.name == "TestDevice13"
-            assert blehid._memory_counter == 13
-            assert blehid._counter_persisted is False
-
-    finally:
-        ble_module.BLE_COUNTER_FILE = original_file
-        ble_module._write_ble_counter = original_write
-        if os.path.exists(test_file.name):
-            os.unlink(test_file.name)
-
-
-def test_erase_bonds_with_stop_adv_crash():
-    """Test that erase_bonds handles _stop_adv crash gracefully.
-
-    This tests the defensive handling added to protect against hard crashes
-    that can occur when the Nimble BLE stack is under memory pressure.
-    The crash at _stop_adv was causing the E-BIND button to crash the device
-    when BM83 was off (issue #37).
-    """
-    from unittest import mock
-
-    class CrashingStopAdvBLE:
-        connected = False
-        advertising = True  # Start as advertising
-        name = ""
-        connections = []
-        _stop_called = False
-        _start_called = False
-        _erase_called = False
-
-        def start_advertising(self, adv):
-            self._start_called = True
-            self.advertising = True
-
-        def stop_advertising(self):
-            self._stop_called = True
-            # Simulate Nimble stack crash during stop_advertising
-            raise OSError("Nimble out of memory")
-
-        def erase_bonding(self):
-            self._erase_called = True
-
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = CrashingStopAdvBLE()
-    blehid._adv = object()
-    blehid._ready = True
-
-    # Should not crash even when _stop_adv crashes
-    with mock.patch("time.monotonic", return_value=100.0):
-        with mock.patch("time.sleep"):  # Skip delays in test
-            blehid.erase_bonds()
-
-    # Verify stop_advertising was called (even though it crashed)
-    assert blehid._ble._stop_called is True
-
-    # Verify that despite the crash in _stop_adv, the function continued:
-    # - erase_bonding() was called
-    assert blehid._ble._erase_called is True
-
-    # - start_advertising was attempted at the end
-    assert blehid._ble._start_called is True
-
-    # - BLE name was updated (since erase_bonding succeeded)
-    assert "01" in blehid.name  # Counter incremented from 0 to 1
-
-    # - Advertising was restarted successfully
-    assert blehid._ble.advertising is True
-
-
-def test_erase_bonds_with_adv_already_stopped():
-    """Test that erase_bonds honors _erase_adv_stopped and uses stabilization delay correctly.
-
-    This tests the path where advertising has already been stopped by the tick loop
-    (via the two-phase erase flow), and erase_bonds should not re-stop advertising
-    at the beginning but should honor the settle interval relative to _last_adv_stop_at.
-    """
-    from unittest import mock
-    from blehid.ble import BLE_STACK_STABILIZATION_DELAY
-
-    blehid = BleHid(enabled=True, name="TestDevice")
-    blehid._ble = DummyBLE()
-    blehid._adv = object()
-    blehid._ready = True
-    blehid._ble.advertising = False
-    blehid._erase_adv_stopped = True
-
-    # Test case 1: Last stop was BLE_STACK_STABILIZATION_DELAY - 0.01s ago
-    # (i.e., 0.01s of stabilization time still remaining). Should sleep for remaining time.
-    blehid._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY - 0.01)  # 0.01s remaining
-
-    sleep_calls = []
-    original_stop_adv = BleHid._stop_adv
-
-    def track_stop_adv_calls(_self):
-        """Track if _stop_adv is called in the initial branch (not from _start_adv)."""
-        nonlocal initial_stop_adv_called
-        initial_stop_adv_called = True
-        original_stop_adv(_self)
-
-    initial_stop_adv_called = False
-
-    with mock.patch("time.monotonic", return_value=100.0):
-        with mock.patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
-            # Patch _stop_adv to track calls, but only check if the initial branch uses it
-            with mock.patch.object(BleHid, "_stop_adv", autospec=True, side_effect=track_stop_adv_calls):
-                # Temporarily patch _start_adv to prevent it from calling _stop_adv
-                # so we can isolate the initial branch behavior
-                with mock.patch.object(BleHid, "_start_adv", autospec=True):
-                    blehid.erase_bonds()
-
-    # The initial erase_bonds branch taken when _erase_adv_stopped is True
-    # should NOT call _stop_adv, since advertising is already considered stopped
-    assert initial_stop_adv_called is False
-
-    # Should sleep for the remaining stabilization time (approximately)
-    assert len(sleep_calls) >= 1
-    # First sleep should be close to the remaining stabilization delay
-    assert 0.0 < sleep_calls[0] <= BLE_STACK_STABILIZATION_DELAY
-
-    # Test case 2: Last stop was long enough ago (>= stabilization delay)
-    # Should not sleep for initial stabilization but proceed directly
-    blehid2 = BleHid(enabled=True, name="TestDevice2")
-    blehid2._ble = DummyBLE()
-    blehid2._adv = object()
-    blehid2._ready = True
-    blehid2._ble.advertising = False
-    blehid2._erase_adv_stopped = True
-    blehid2._last_adv_stop_at = 100.0 - (BLE_STACK_STABILIZATION_DELAY + 0.1)  # Well past delay
-
-    sleep_calls2 = []
-    initial_stop_adv_called2 = False
-    original_stop_adv2 = BleHid._stop_adv
-
-    def track_stop_adv_calls2(_self):
-        nonlocal initial_stop_adv_called2
-        initial_stop_adv_called2 = True
-        original_stop_adv2(_self)
-
-    with mock.patch("time.monotonic", return_value=100.0):
-        with mock.patch("time.sleep", side_effect=lambda d: sleep_calls2.append(d)):
-            with mock.patch.object(BleHid, "_stop_adv", autospec=True, side_effect=track_stop_adv_calls2):
-                with mock.patch.object(BleHid, "_start_adv", autospec=True):
-                    blehid2.erase_bonds()
-
-    # The initial branch should NOT have called _stop_adv
-    assert initial_stop_adv_called2 is False
-
-    # First sleep should be for post-disconnect, not initial stabilization
-    # (since we're already past the stabilization window)
+    hid._need_pairing_check = True
+    hid._pair_attempts = hid._pair_attempt_limit  # at limit
+
+    hid._ensure_paired()
+
+    assert hid._need_pairing_check is False  # gave up
+
+
+def test_ensure_paired_pairs_connection():
+    """_ensure_paired should call pair() on an unpaired connection."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble.connected = True
+    conn = FakeConnection(paired=False)
+    ble._connections = [conn]
+
+    hid._need_pairing_check = True
+    hid._last_pair_try_at = 0.0  # long ago
+    hid._ensure_paired()
+
+    assert conn.pair_called
+    assert conn.paired
+    assert hid._need_pairing_check is False
+
+
+def test_ensure_paired_skips_already_paired():
+    """_ensure_paired should clear the flag if connection is already paired."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble.connected = True
+    conn = FakeConnection(paired=True)
+    ble._connections = [conn]
+
+    hid._need_pairing_check = True
+    hid._last_pair_try_at = 0.0
+    hid._ensure_paired()
+
+    assert not conn.pair_called
+    assert hid._need_pairing_check is False

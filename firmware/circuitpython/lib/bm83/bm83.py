@@ -1,5 +1,6 @@
 import time
 from utils.common import dprint
+from utils import common as _utils_common
 from utils.compat import const
 
 # endregion
@@ -36,13 +37,24 @@ class Bm83:
         "_last_attrs_req_at",
         "_gea_frag",
         "_gea_expect_len",
+        "_gea_frag_at",
+        "_gea_frag_timeout_s",
         "_power_state",
         "_power_next_at",
         "_last_eq_cmd_at",
         "_eq_throttle_s",
         "_last_track_changed_reg_at",
         "_track_changed_reg_throttle_s",
+        "_btm_silence_timeout_s",
+        "audio_source",
     )
+    # Audio-source values reported by BTM_Status (MSPKv2 / Audio Transceiver
+    # BM83 variants). Datasheet "AudioUARTCommandSet v2.09" section 7.2
+    # BTM_Status state table, page 169.
+    AUDIO_SRC_NONE = const(0x80)   # Current audio source is not Aux in or A2DP
+    AUDIO_SRC_AUX  = const(0x81)   # Current audio source is Aux in
+    AUDIO_SRC_A2DP = const(0x82)   # Current audio source is A2DP
+    AUDIO_SRC_STATES = (AUDIO_SRC_NONE, AUDIO_SRC_AUX, AUDIO_SRC_A2DP)
     OP_MMI_ACTION = const(0x02)
     OP_EVENT_FILTER = const(0x03)
     OP_MUSIC_CONTROL = const(0x04)
@@ -65,6 +77,13 @@ class Bm83:
     MMI_POWER_OFF_PRESS = const(0x53)
     MMI_POWER_OFF_RELEASE = const(0x54)
     MMI_ENTER_PAIRING = const(0x5D)
+    # Line-In input gain controls (AudioUARTCommandSet v2.09, table on
+    # page 136, Support version V2.07). These target the *analog/input*
+    # Line-In gain stage directly, unlike Set_Overall_Gain 0x23 with the
+    # Line_In mask bit which only moves a digital mixer level and leaves
+    # the actual AUX loudness unchanged on this firmware variant.
+    MMI_LINE_IN_GAIN_UP = const(0x82)
+    MMI_LINE_IN_GAIN_DOWN = const(0x83)
 
 # endregion
     MC_PLAY_PAUSE = const(0x07)
@@ -101,6 +120,10 @@ class Bm83:
         self._last_attrs_req_at = 0.0
         self._gea_frag = bytearray()
         self._gea_expect_len = None
+        self._gea_frag_at = 0.0
+        # Drop any fragment we haven't added to within this many seconds — a
+        # dropped final packet from the BM83 would otherwise leave state dangling.
+        self._gea_frag_timeout_s = 5.0
         # Non-blocking power state machine
         self._power_state = None  # None, "on_press", "on_init", "off_press"
         self._power_next_at = 0.0
@@ -110,6 +133,17 @@ class Bm83:
         # TrackChanged re-registration throttle to prevent feedback loops
         self._last_track_changed_reg_at = 0.0
         self._track_changed_reg_throttle_s = 2.0  # Min time between re-registrations
+        # If no BTM_Status (or other connection-refreshing event) arrives for this
+        # many seconds while we think we're connected, assume the radio went silent
+        # and flip to disconnected. The AVRCP-silence heuristic in main.py alone
+        # can't clear self.connected, so without this the state sticks forever.
+        self._btm_silence_timeout_s = 30.0
+
+        # Current audio source reported by BTM_Status (state 0x80/0x81/0x82).
+        # None until the first source event arrives. 0x81 means AUX jack is the
+        # active source; UI gates "AUX IN" indicators on this. See AUDIO_SRC_*
+        # constants and should_show_aux().
+        self.audio_source = None
 
 # endregion
     @staticmethod
@@ -171,7 +205,9 @@ class Bm83:
 # region send
     # send handles send logic. #
         pkt = self._frame(op, params)
-        dprint("[BM83 TX]", " ".join("%02X" % b for b in pkt))
+        # Avoid hex formatting when DEBUG is off (hot path, allocates)
+        if _utils_common.DEBUG:
+            dprint("[BM83 TX]", " ".join("%02X" % b for b in pkt))
     # Try block to catch exceptions
         try:
             self.uart.write(pkt)
@@ -210,11 +246,13 @@ class Bm83:
     # Conditional check
         if chunk:
             self._rx.extend(chunk)
-        # Limit buffer size to prevent memory exhaustion - clear buffer on overflow
-        # since partial frames would be corrupted anyway
+        # Limit buffer size to prevent memory exhaustion. Keep the tail so an
+        # in-progress frame can still resync from its start-of-frame byte.
         if len(self._rx) > self._rx_max:
-            dprint("[BM83] buffer overflow, clearing to prevent corruption")
-            self._rx.clear()
+            keep = 256  # Larger than any plausible single frame
+            dprint("[BM83] buffer overflow, trimming head, keeping", keep, "bytes")
+            # CircuitPython bytearray doesn't support slice deletion — reassign.
+            self._rx = self._rx[-keep:]
     # While loop execution
         while len(out) < max_events:
     # Conditional check
@@ -227,6 +265,7 @@ class Bm83:
                 break
     # Conditional check
             if sof > 0:
+                # CircuitPython bytearray doesn't support slice deletion.
                 self._rx = self._rx[sof:]
     # Conditional check
             if len(self._rx) < 4:
@@ -241,12 +280,22 @@ class Bm83:
             chk = self._rx[3 + ln]
     # Conditional check
             if chk != self._checksum(hi, lo, body):
+                # CircuitPython bytearray doesn't support slice deletion.
                 self._rx = self._rx[1:]
                 continue
             op = body[0]
             params = body[1:]
-            dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
+            # Avoid hex formatting when DEBUG is off (hot path, allocates)
+            if _utils_common.DEBUG:
+                dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
             out.append((op, params))
+            # Any successful inbound frame proves the BM83 is alive. Refresh
+            # the connection-watchdog timestamp so the silence watchdog only
+            # trips on an actually-silent radio (not on steady-state BT
+            # playback where BTM_Status doesn't re-emit between transitions).
+            if self.connected:
+                self._last_connected_seen = time.monotonic()
+            # CircuitPython bytearray doesn't support slice deletion.
             self._rx = self._rx[total:]
     # Return the result
         return out
@@ -383,6 +432,42 @@ class Bm83:
         return mode
 # endregion
 
+    def volume_up(self):
+        """Step Line-In input gain up via MMI 0x82.
+
+        Used only when AUX is the active source (BT-streaming volume is
+        routed through BLE HID in main.py). The `Set_Overall_Gain` 0x23
+        path with mask=Line_In was tried first but only moved a digital
+        mixer level — audible output didn't change on this firmware
+        variant, just a cap-chirp at max. MMI 0x82 hits the actual
+        Line-In input gain stage instead. Datasheet v2.09 p.136.
+        """
+        self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_LINE_IN_GAIN_UP]))
+        print("[VOL+] (BM83 Line-In gain up)")
+
+    def volume_down(self):
+        """Step Line-In input gain down via MMI 0x83. See volume_up()."""
+        self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_LINE_IN_GAIN_DOWN]))
+        print("[VOL-] (BM83 Line-In gain down)")
+
+    def kick_aux_routing(self):
+        """Nudge the BM83 audio engine when AUX has just gone active.
+
+        Works around a BM83 jack-detect quirk: on the very first AUX
+        plug-in after boot (or sometimes after a soft disconnect), the
+        chip's internal detection misses the mating transition and the
+        Line-In path stays muted until you unplug and replug. Sending a
+        Line-In gain-up MMI right after we observe audio_source flip to
+        0x81 re-triggers the routing path inside the BM83 and the audio
+        starts passing through without the user needing to replug.
+
+        Side effect: Line-In gain bumps one step louder per fresh plug-in.
+        Accepted trade-off; if gain ever pegs at max there's a chirp but
+        no audible side effect on loudness.
+        """
+        self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_LINE_IN_GAIN_UP]))
+        print("[AUX] routing kick sent (MMI Line-In gain up)")
+
 # endregion
     # Loop through items
 # Function: note_btm_state - Defines the behavior for `note_btm_state`.
@@ -390,6 +475,18 @@ class Bm83:
 # region note_btm_state
     # note_btm_state handles note btm state logic. #
         now = time.monotonic()
+        # Audio-source tracking. States 0x80/0x81/0x82 report which audio
+        # source the BM83 is currently routing (none / AUX / A2DP). They are
+        # orthogonal to link-state codes like 0x06 (A2DP link established),
+        # so we record them separately. If a firmware value overlaps with a
+        # connected-state code (for example 0x82 on some firmware builds),
+        # keep tracking the source but do not return early before the
+        # connection-state update runs.
+        is_audio_src_state = state in self.AUDIO_SRC_STATES
+        if is_audio_src_state:
+            self.audio_source = state
+            if state not in self.CONNECTED_STATES:
+                return None
     # Conditional check
         if state in self.CONNECTED_STATES:
             self._last_connected_seen = now
@@ -411,6 +508,46 @@ class Bm83:
     # Return the result
         return None
 # endregion
+
+    def should_show_aux(self):
+        """Return True when the UI should show AUX IN indicators.
+
+        Primary signal is the BM83 audio-source state reported by
+        BTM_Status (0x80/0x81/0x82). 0x81 = AUX is the active source, so
+        show. 0x80 (no source) and 0x82 (A2DP) both mean: do not show AUX.
+
+        Before the first source event arrives (audio_source is None), we
+        fall back to the pre-existing link-state heuristic so the UI still
+        behaves sanely during the boot-to-first-BTM_Status window.
+        """
+        if not self.power_on:
+            return False
+        if self.audio_source == self.AUDIO_SRC_AUX:
+            return True
+        if self.audio_source in (self.AUDIO_SRC_NONE, self.AUDIO_SRC_A2DP):
+            return False
+        # Haven't seen a source event yet — fall back to link state.
+        return not self.connected
+
+    def check_connection_watchdog(self, now=None):
+        """Return "DISCONNECTED" if the BM83 has gone completely silent.
+
+        ``_last_connected_seen`` is refreshed on *any* successful inbound frame
+        in ``poll()`` while ``self.connected`` is True — BTM_Status events,
+        AVRCP notifications, metadata responses, play-status replies, etc. —
+        so this watchdog only trips when the radio emits nothing at all for
+        ``_btm_silence_timeout_s`` (e.g., crash, brown-out, UART wedged).
+        Steady-state playback that triggers only AVRCP traffic (no BTM state
+        transitions) must NOT trip this, otherwise the UI will flap into AUX.
+        """
+        if not self.connected:
+            return None
+        if now is None:
+            now = time.monotonic()
+        if (now - self._last_connected_seen) > self._btm_silence_timeout_s:
+            self.connected = False
+            return "DISCONNECTED"
+        return None
 
 # endregion
     @staticmethod
@@ -463,6 +600,14 @@ class Bm83:
         self.send(self.OP_AVRCP_VENDOR_DEP_CMD, bytes([db, 0x20]) + _AVRCP_ATTR_PAYLOAD)
 
 # endregion
+    def schedule_play_status(self, delay_s=0.05):
+        """Request the next AVRCP GetPlayStatus poll after ``delay_s`` seconds.
+
+        Use this from callers (e.g., the main loop) instead of poking
+        ``_next_playstatus_at`` directly.
+        """
+        self._next_playstatus_at = time.monotonic() + delay_s
+
     # Loop through items
 # Function: schedule_attrs - Defines the behavior for `schedule_attrs`.
     def schedule_attrs(self, delay_s=0.35, force=False):
@@ -561,14 +706,28 @@ class Bm83:
         if total_len <= 0:
             self._gea_frag = bytearray()
             self._gea_expect_len = None
+            self._gea_frag_at = 0.0
             dprint("[META] drop empty GEA response")
             return None
+        now = time.monotonic()
+        # Age out a fragment that was never completed — a dropped final packet
+        # would otherwise keep the buffer alive until the next total_len change.
+        if (
+            self._gea_expect_len is not None
+            and self._gea_frag_at > 0.0
+            and (now - self._gea_frag_at) > self._gea_frag_timeout_s
+        ):
+            dprint("[META] drop stale GEA frag age=%.1fs" % (now - self._gea_frag_at))
+            self._gea_frag = bytearray()
+            self._gea_expect_len = None
+            self._gea_frag_at = 0.0
         if self._gea_expect_len is None or self._gea_expect_len != total_len:
             if self._gea_expect_len is not None and len(self._gea_frag):
                 dprint("[META] reset fragmented GEA len=%d->%d" % (self._gea_expect_len, total_len))
             self._gea_expect_len = total_len
             self._gea_frag = bytearray()
         self._gea_frag.extend(part)
+        self._gea_frag_at = now
         if len(self._gea_frag) > self._gea_expect_len:
             dprint("[META] trim oversized GEA frag %d>%d" % (len(self._gea_frag), self._gea_expect_len))
             self._gea_frag = self._gea_frag[: self._gea_expect_len]
@@ -581,10 +740,12 @@ class Bm83:
             dprint("[META] drop short final GEA %d<%d" % (len(self._gea_frag), self._gea_expect_len))
             self._gea_frag = bytearray()
             self._gea_expect_len = None
+            self._gea_frag_at = 0.0
             return None
         full = bytes(self._gea_frag[: self._gea_expect_len])
         self._gea_frag = bytearray()
         self._gea_expect_len = None
+        self._gea_frag_at = 0.0
         attrs = {}
         idx = 0
     # Loop through items

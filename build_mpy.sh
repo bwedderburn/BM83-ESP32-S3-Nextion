@@ -23,6 +23,13 @@ DIST_LIB_DIR="${DIST_DIR}/lib"
 # Allow override (CI will set MPY_CROSS explicitly)
 MPY_CROSS="${MPY_CROSS:-mpy-cross}"
 
+# mpy-cross optimization level. -O2 strips docstrings and asserts which
+# shrinks .mpy files ~10-25% and speeds import. Firmware code has no
+# __doc__ lookups and no assert statements, so -O2 is safe. Override
+# via env if you want -O0 (default, full debug info) or -O3 (also
+# strips source line numbers — smaller, faster, fuzzier tracebacks).
+MPY_CROSS_OPT_LEVEL="${MPY_CROSS_OPT_LEVEL:-2}"
+
 # -------------------------
 # Preconditions
 # -------------------------
@@ -77,20 +84,21 @@ if command -v rsync >/dev/null 2>&1; then
     "${SRC_DIR}/" "${DIST_DIR}/"
 else
   echo "rsync not found; falling back to cp. Install rsync for faster builds." >&2
-  error_flag="$(mktemp)"
-  trap 'rm -f "${error_flag}"' EXIT
+  copy_failed=0
 
+  # Note: `while ... done < <(cmd)` does NOT spawn a subshell in bash, so
+  # copy_failed set inside the loop is visible here.
   while IFS= read -r -d '' file; do
     rel_path="${file#"${SRC_DIR}"/}"
     dest="${DIST_DIR}/${rel_path}"
     if ! mkdir -p "$(dirname "${dest}")" || ! cp -p "${file}" "${dest}"; then
       echo "Error: Failed to copy ${file} to ${dest}" >&2
-      touch "${error_flag}"
+      copy_failed=1
       break
     fi
   done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -path "*/__pycache__/*" -print0)
 
-  if [[ -f "${error_flag}" ]]; then
+  if (( copy_failed )); then
     exit 1
   fi
 fi
@@ -106,7 +114,7 @@ while IFS= read -r -d '' py_file; do
 
   out_file="${DIST_LIB_DIR}/${rel_path%.py}.mpy"
   mkdir -p "$(dirname "${out_file}")"
-  "${MPY_CROSS}" -o "${out_file}" "${py_file}"
+  "${MPY_CROSS}" -O"${MPY_CROSS_OPT_LEVEL}" -o "${out_file}" "${py_file}"
 done < <(find "${SRC_LIB_DIR}" -type f -name "*.py" -print0)
 
 echo "✅ MPY build complete: ${DIST_DIR}"

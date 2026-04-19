@@ -24,7 +24,10 @@ def _sanitize_impl(txt, max_len, ellipsis):
     for ch in str(txt):
         o = ord_(ch)
         out_append(ch if 32 <= o <= 126 else " ")
-    s = "".join(out).replace('"', "'").strip()
+    # Replace characters that could break out of a Nextion .txt="..." command.
+    # Double quote would close the string; backslash is defensive — Nextion
+    # doesn't document an escape, but some firmwares treat it specially.
+    s = "".join(out).replace('"', "'").replace("\\", "/").strip()
     if not s:
         s = "—"
     if len(s) > max_len:

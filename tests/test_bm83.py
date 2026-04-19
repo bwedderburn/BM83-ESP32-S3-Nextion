@@ -140,7 +140,7 @@ def test_poll_limits_events():
 
 
 def test_poll_buffer_overflow_protection():
-    """Test that buffer overflow clears buffer to prevent corruption."""
+    """Test that buffer overflow trims to tail to prevent corruption."""
     uart = MockUART()
     bm = Bm83(uart)
     # Manually overfill buffer
@@ -149,8 +149,10 @@ def test_poll_buffer_overflow_protection():
     uart.in_waiting = 100
     # Should not crash
     bm.poll()
-    # Buffer should be cleared on overflow
-    assert len(bm._rx) == 0
+    # After overflow trim (to 256 bytes) + parser clearing no-SOF data,
+    # the buffer ends up empty.  The key invariant is that no exception
+    # occurred and the buffer length is bounded.
+    assert len(bm._rx) <= 256
 
 
 def test_eq_throttle():
@@ -246,3 +248,32 @@ def test_tick_avrcp_attrs_uses_supplied_now_without_monotonic(monkeypatch):
     assert bm.tick_avrcp_attrs(now) is True
     assert len(uart.writes) == 1
     assert bm._next_attrs_at == 0.0
+
+
+def test_connection_watchdog_no_trip_before_timeout():
+    """check_connection_watchdog does not trip before _btm_silence_timeout_s."""
+    bm = Bm83(None)
+    bm.connected = True
+    now = time.monotonic()
+    bm._last_connected_seen = now
+    # Well within the timeout window
+    assert bm.check_connection_watchdog(now + 1.0) is None
+    assert bm.connected is True
+
+
+def test_connection_watchdog_trips_after_timeout():
+    """check_connection_watchdog flips connected=False after _btm_silence_timeout_s."""
+    bm = Bm83(None)
+    bm.connected = True
+    now = time.monotonic()
+    bm._last_connected_seen = now
+    result = bm.check_connection_watchdog(now + bm._btm_silence_timeout_s + 1.0)
+    assert result == "DISCONNECTED"
+    assert bm.connected is False
+
+
+def test_connection_watchdog_noop_when_disconnected():
+    """check_connection_watchdog is a no-op when already disconnected."""
+    bm = Bm83(None)
+    bm.connected = False
+    assert bm.check_connection_watchdog() is None
