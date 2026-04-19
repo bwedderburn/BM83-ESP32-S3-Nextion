@@ -1,4 +1,5 @@
 import time
+import gc
 from utils.common import dprint
 from utils import common as _utils_common
 from utils.compat import const
@@ -47,6 +48,22 @@ class Bm83:
         "_track_changed_reg_throttle_s",
         "_btm_silence_timeout_s",
         "audio_source",
+        # UART RX heartbeat — used by tick_heartbeat() to surface freezes that
+        # would otherwise be invisible (e.g. when serial console has died but
+        # the display is still alive). _last_rx_byte_at is refreshed on every
+        # non-empty UART read in poll(), independent of frame parsing.
+        "_last_rx_byte_at",
+        "_hb_next_at",
+        "_hb_period_s",
+        "_hb_silence_warn_s",
+        # DEGRADED tier — gap is short enough that the radio is alive, but
+        # long enough that A2DP framing is at risk. Observed pre-freeze gaps
+        # were 0.31-0.43s while healthy gaps stayed 0.01-0.07s, so anything
+        # >= _hb_degraded_warn_s is the earliest visible warning. We also
+        # track the *max* gap seen during each heartbeat window so a brief
+        # stall between 10s prints isn't lost to instantaneous sampling.
+        "_hb_degraded_warn_s",
+        "_hb_max_gap_window",
     )
     # Audio-source values reported by BTM_Status (MSPKv2 / Audio Transceiver
     # BM83 variants). Datasheet "AudioUARTCommandSet v2.09" section 7.2
@@ -144,6 +161,19 @@ class Bm83:
         # active source; UI gates "AUX IN" indicators on this. See AUDIO_SRC_*
         # constants and should_show_aux().
         self.audio_source = None
+
+        # UART RX heartbeat. tick_heartbeat() prints periodic status so a
+        # silent BM83 link is visible in the log immediately, instead of being
+        # inferred only from missing BTM_Status events. Initialised to "now"
+        # at boot so the first silence window is measured from boot, not from
+        # the epoch.
+        now = time.monotonic()
+        self._last_rx_byte_at = now
+        self._hb_next_at = now + 10.0   # First heartbeat 10s after boot
+        self._hb_period_s = 10.0        # Print state at most every 10s
+        self._hb_silence_warn_s = 3.0   # Mark RX as SILENT after this gap
+        self._hb_degraded_warn_s = 0.2  # Mark RX as DEGRADED after this gap
+        self._hb_max_gap_window = 0.0   # Max inter-byte gap in current window
 
 # endregion
     @staticmethod
@@ -246,6 +276,17 @@ class Bm83:
     # Conditional check
         if chunk:
             self._rx.extend(chunk)
+            # Refresh UART RX heartbeat timestamp on *any* inbound bytes, even
+            # if they don't form a valid frame. A BM83 that's emitting noise
+            # is still alive; silence is what indicates a wedged chip or TX line.
+            _now = time.monotonic()
+            # Track the largest inter-byte gap seen during the current
+            # heartbeat window so a brief stall between 10s prints is still
+            # surfaced. tick_heartbeat() reads & resets _hb_max_gap_window.
+            _gap_since_last = _now - self._last_rx_byte_at
+            if _gap_since_last > self._hb_max_gap_window:
+                self._hb_max_gap_window = _gap_since_last
+            self._last_rx_byte_at = _now
         # Limit buffer size to prevent memory exhaustion. Keep the tail so an
         # in-progress frame can still resync from its start-of-frame byte.
         if len(self._rx) > self._rx_max:
@@ -299,6 +340,50 @@ class Bm83:
             self._rx = self._rx[total:]
     # Return the result
         return out
+# endregion
+
+# endregion
+    # Loop through items
+# Function: tick_heartbeat - Periodic UART RX liveness log.
+    def tick_heartbeat(self, now=None):
+# region tick_heartbeat
+    # tick_heartbeat prints a periodic line so a wedged BM83 UART RX shows
+    # up in the log within a few seconds, instead of being inferred silently
+    # from missing BTM_Status events. Safe to call every loop iteration —
+    # it self-throttles to _hb_period_s.
+        if now is None:
+            now = time.monotonic()
+        if now < self._hb_next_at:
+            return
+        self._hb_next_at = now + self._hb_period_s
+        instantaneous_gap = now - self._last_rx_byte_at
+        # effective_gap = max of (current silence, largest stall seen in
+        # window). This catches brief degradations that recover before the
+        # next 10s print would otherwise sample them as "healthy".
+        window_max = self._hb_max_gap_window
+        effective_gap = instantaneous_gap if instantaneous_gap > window_max else window_max
+        # Reset window tracker for the next heartbeat period.
+        self._hb_max_gap_window = 0.0
+        # gc.mem_free() is a fast inspection on CircuitPython (no collect),
+        # safe to call every heartbeat. Trending toward 0 over time = leak.
+        try:
+            free = gc.mem_free()
+        except Exception:
+            free = -1
+        if effective_gap >= self._hb_silence_warn_s:
+            # Print every period while silent so the gap is visible growing.
+            print("[BM83 RX] SILENT for %.1fs | free=%d" % (effective_gap, free))
+        elif effective_gap >= self._hb_degraded_warn_s:
+            # DEGRADED — BT link is throttling but radio is alive. Observed
+            # as the earliest warning (0.2-0.5s) before a full 0x08 link-back
+            # fail cascade. Show both max-in-window and instantaneous so it's
+            # obvious whether the stall is current or historical.
+            print("[BM83 RX] DEGRADED: max %.2fs in last %.0fs window (now %.2fs) | free=%d"
+                  % (effective_gap, self._hb_period_s, instantaneous_gap, free))
+        else:
+            # Also print during healthy operation so "log went silent" is
+            # itself a diagnostic signal (serial CDC dropped, not radio).
+            print("[BM83 RX] alive: %.2fs since last byte | free=%d" % (instantaneous_gap, free))
 # endregion
 
 # endregion
@@ -393,6 +478,18 @@ class Bm83:
     def play_pause(self):
 # region play_pause
     # play_pause handles play pause logic. #
+        # Guard: MC_PLAY_PAUSE is an AVRCP transport command. Sending it
+        # while the BM83 is routing AUX IN (audio_source == 0x81) nudges
+        # the chip's source state machine toward A2DP and interrupts
+        # Line-In audio. main.py's aux_mode gate covers the steady state,
+        # but this guard closes the race window between a fresh AUX
+        # plug-in and the first 0x81 BTM_Status — during which main.py
+        # still thinks we're in A2DP mode but the chip is playing Line-In.
+        # Also guard against AUDIO_SRC_NONE when not connected: same
+        # disruption risk, and there's nothing to pause anyway.
+        if self.audio_source == self.AUDIO_SRC_AUX:
+            print("[PLAY/PAUSE] suppressed (AUX source active)")
+            return
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PLAY_PAUSE]))
         print("[PLAY/PAUSE] toggled")
 
@@ -502,6 +599,13 @@ class Bm83:
     # Conditional check
         if self.connected and (now - self._last_connected_seen) > self._disconnect_hold_s:
             self.connected = False
+            # Clear cached audio_source so should_show_aux() falls back to
+            # the link-state heuristic ("not connected => show AUX"). The
+            # BM83 often does NOT emit a 0x80/0x81 follow-up after a BT
+            # drop, so if we leave audio_source pinned at 0x82 from the
+            # last A2DP session, the UI will wrongly stay in "A2DP" mode
+            # while the user is actually listening to Line-In.
+            self.audio_source = None
     # Return the result
             return "DISCONNECTED"
 # endregion
@@ -546,6 +650,8 @@ class Bm83:
             now = time.monotonic()
         if (now - self._last_connected_seen) > self._btm_silence_timeout_s:
             self.connected = False
+            # See note in note_btm_state(): clear so AUX fallback re-engages.
+            self.audio_source = None
             return "DISCONNECTED"
         return None
 

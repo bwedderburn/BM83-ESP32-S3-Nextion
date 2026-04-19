@@ -62,6 +62,7 @@ def main():
     bm_tick_power = bm.tick_power
     bm_tick_avrcp = bm.tick_avrcp
     bm_tick_avrcp_attrs = bm.tick_avrcp_attrs
+    bm_tick_heartbeat = bm.tick_heartbeat
     bm_avrcp_get_play_status = bm.avrcp_get_play_status
     bm_volume_up = bm.volume_up
     bm_volume_down = bm.volume_down
@@ -258,6 +259,11 @@ def main():
 
 # endregion
         ble_tick()
+
+# endregion
+        # UART RX heartbeat — self-throttled (~10s), surfaces BM83 freezes
+        # and USB CDC drops in the log.
+        bm_tick_heartbeat()
 
 # endregion
         # Tick non-blocking power state machine
