@@ -382,8 +382,8 @@ def main():
                             primary_metadata_missing()
                             or (prev_status != last_play_status and desired_meta.get("time") == TIME_UNKNOWN)
                         ):
-                            dprint("[META] playback start -> request metadata")
-                            bm.schedule_attrs(0.15, force=True)
+                            dprint("[META] playback start -> request metadata (throttled)")
+                            bm.schedule_attrs(0.15)
     # Conditional check
                     elif event_id == 0x02:
                         last_pos_ms = None
