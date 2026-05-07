@@ -277,3 +277,38 @@ def test_connection_watchdog_noop_when_disconnected():
     bm = Bm83(None)
     bm.connected = False
     assert bm.check_connection_watchdog() is None
+
+
+def test_status_changed_reregister_throttle():
+    """avrcp_reregister_status_changed is throttled to ~0.5 s."""
+    uart = MockUART()
+    bm = Bm83(uart)
+
+    # First call goes through.
+    assert bm.avrcp_reregister_status_changed() is True
+    assert len(uart.writes) == 1
+
+    # Immediate second call is throttled.
+    assert bm.avrcp_reregister_status_changed() is False
+    assert len(uart.writes) == 1
+
+    # After the throttle window, allowed again.
+    bm._last_status_changed_reg_at = time.monotonic() - (bm._status_reg_throttle_s + 0.1)
+    assert bm.avrcp_reregister_status_changed() is True
+    assert len(uart.writes) == 2
+
+
+def test_position_changed_reregister_throttle():
+    """avrcp_reregister_position_changed is throttled to ~0.5 s."""
+    uart = MockUART()
+    bm = Bm83(uart)
+
+    assert bm.avrcp_reregister_position_changed() is True
+    assert len(uart.writes) == 1
+
+    assert bm.avrcp_reregister_position_changed() is False
+    assert len(uart.writes) == 1
+
+    bm._last_pos_changed_reg_at = time.monotonic() - (bm._pos_reg_throttle_s + 0.1)
+    assert bm.avrcp_reregister_position_changed() is True
+    assert len(uart.writes) == 2

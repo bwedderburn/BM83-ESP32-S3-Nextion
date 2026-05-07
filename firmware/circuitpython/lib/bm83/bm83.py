@@ -45,6 +45,10 @@ class Bm83:
         "_eq_throttle_s",
         "_last_track_changed_reg_at",
         "_track_changed_reg_throttle_s",
+        "_last_status_changed_reg_at",
+        "_status_reg_throttle_s",
+        "_last_pos_changed_reg_at",
+        "_pos_reg_throttle_s",
         "_btm_silence_timeout_s",
         "audio_source",
     )
@@ -133,6 +137,15 @@ class Bm83:
         # TrackChanged re-registration throttle to prevent feedback loops
         self._last_track_changed_reg_at = 0.0
         self._track_changed_reg_throttle_s = 2.0  # Min time between re-registrations
+        # PlaybackStatusChanged / PlaybackPositionChanged re-registration throttles.
+        # Some BM83 firmware revs choke on rapid AVRCP register-notification calls
+        # during CT-side establishment and silently drop the A2DP profile while
+        # leaving the BT link nominally up. Tighter than TrackChanged (2.0 s) since
+        # status/position re-arms fire more frequently in steady state.
+        self._last_status_changed_reg_at = 0.0
+        self._status_reg_throttle_s = 0.5
+        self._last_pos_changed_reg_at = 0.0
+        self._pos_reg_throttle_s = 0.5
         # If no BTM_Status (or other connection-refreshing event) arrives for this
         # many seconds while we think we're connected, assume the radio went silent
         # and flip to disconnected. The AVRCP-silence heuristic in main.py alone
@@ -590,6 +603,31 @@ class Bm83:
         self.avrcp_register_notification(0x02, interval_s=0, db=db)
         return True
 # endregion
+
+# Function: avrcp_reregister_status_changed - Throttled re-register PlaybackStatusChanged
+    def avrcp_reregister_status_changed(self, db=0):
+        """Throttled re-registration for PlaybackStatusChanged.
+
+        Some BM83 firmware revs choke on rapid register-notification calls
+        during AVRCP CT-side establishment, silently dropping the A2DP
+        profile while keeping the link up. Throttle to ~0.5 s.
+        """
+        now = time.monotonic()
+        if (now - self._last_status_changed_reg_at) < self._status_reg_throttle_s:
+            return False
+        self._last_status_changed_reg_at = now
+        self.avrcp_register_notification(0x01, interval_s=0, db=db)
+        return True
+
+# Function: avrcp_reregister_position_changed - Throttled re-register PlaybackPositionChanged
+    def avrcp_reregister_position_changed(self, interval_s=1, db=0):
+        """Throttled re-registration for PlaybackPositionChanged. See above."""
+        now = time.monotonic()
+        if (now - self._last_pos_changed_reg_at) < self._pos_reg_throttle_s:
+            return False
+        self._last_pos_changed_reg_at = now
+        self.avrcp_register_notification(0x05, interval_s=interval_s, db=db)
+        return True
 
 # endregion
     # Loop through items
