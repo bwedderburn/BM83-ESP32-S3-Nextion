@@ -150,7 +150,11 @@ class Bm83:
         # many seconds while we think we're connected, assume the radio went silent
         # and flip to disconnected. The AVRCP-silence heuristic in main.py alone
         # can't clear self.connected, so without this the state sticks forever.
-        self._btm_silence_timeout_s = 30.0
+        # Bumped from 30.0s to 90.0s: paused playback on some BM83 firmwares emits
+        # no BTM_Status / AVRCP traffic for minutes at a time. The new value still
+        # trips on a hung radio (crash, brown-out, UART wedge) but tolerates idle
+        # pauses without falsely demoting self.connected.
+        self._btm_silence_timeout_s = 90.0
 
         # Current audio source reported by BTM_Status (state 0x80/0x81/0x82).
         # None until the first source event arrives. 0x81 means AUX jack is the
@@ -304,9 +308,11 @@ class Bm83:
             out.append((op, params))
             # Any successful inbound frame proves the BM83 is alive. Refresh
             # the connection-watchdog timestamp so the silence watchdog only
-            # trips on an actually-silent radio (not on steady-state BT
-            # playback where BTM_Status doesn't re-emit between transitions).
-            if self.connected:
+            # trips on an actually-silent radio. Exclude BTM_Status itself —
+            # otherwise note_btm_state's _disconnect_hold_s check (2.0 s) is
+            # always-false because we just stamped 'now', and a real
+            # disconnect-state BTM_Status would never demote self.connected.
+            if self.connected and op != self.EVT_BTM_STATUS:
                 self._last_connected_seen = time.monotonic()
             # CircuitPython bytearray doesn't support slice deletion.
             self._rx = self._rx[total:]
