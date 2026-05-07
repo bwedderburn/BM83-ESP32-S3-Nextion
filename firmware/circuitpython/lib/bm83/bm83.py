@@ -551,10 +551,11 @@ class Bm83:
     def check_connection_watchdog(self, now=None):
         """Return "DISCONNECTED" if the BM83 has gone completely silent.
 
-        ``_last_connected_seen`` is refreshed on *any* successful inbound frame
-        in ``poll()`` while ``self.connected`` is True — BTM_Status events,
-        AVRCP notifications, metadata responses, play-status replies, etc. —
-        so this watchdog only trips when the radio emits nothing at all for
+        ``_last_connected_seen`` is refreshed on successful inbound non-BTM
+        frames in ``poll()`` while ``self.connected`` is True (for example,
+        AVRCP notifications, metadata responses, and play-status replies).
+        Connected-state BTM_Status events refresh it via ``note_btm_state()``.
+        This watchdog only trips when the radio emits nothing at all for
         ``_btm_silence_timeout_s`` (e.g., crash, brown-out, UART wedged).
         Steady-state playback that triggers only AVRCP traffic (no BTM state
         transitions) must NOT trip this, otherwise the UI will flap into AUX.
