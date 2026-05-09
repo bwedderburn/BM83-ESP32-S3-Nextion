@@ -55,6 +55,8 @@ The fix is to treat the user's bond-wipe request as a *flag* rather than an imme
 
 Also rate-limit: add a ~30 second cooldown between successful erases. Back-to-back wipes crash the NimBLE stack. Initialise the last-erase timestamp well in the past (`-cooldown - 1`) so the *first* EBIND after boot isn't blocked by a false-positive cooldown check against `t=0`.
 
+One API note: in `adafruit_ble` 10.1.3 the wrapper method `BLERadio.erase_bonding()` was **removed** — only the underlying `_bleio.adapter.erase_bonding()` is still available. Code written for older versions that calls `self._ble.erase_bonding()` directly will silently no-op (or `AttributeError` depending on how you guard it). Always probe `hasattr(self._ble, "erase_bonding")` first and fall through to `_bleio.adapter.erase_bonding()`. The sample in `references/safe_erase_bonds.py` does this correctly.
+
 ### 4. Never call `c.pair()` or `c.disconnect()` synchronously from a UI callback
 
 Both calls are blocking on NimBLE and both can take 30-50 seconds to return when the bond stores disagree. Calling them from a Nextion-button-press handler (or any synchronous handler) starves the main loop: UART input from your BM83 / CSR / other BT audio module piles up, AVRCP handshake metadata times out, and in the worst case the call crashes the stack outright because the stack is mid-handshake when you pulled the rug out.
@@ -91,7 +93,21 @@ This turns a mysterious "it just doesn't work" into a self-explaining log line. 
 
 Instead, set a `_peer_logged = False` latch in `_on_connect` and print the peer address from your pair-polling routine, where `connections` is reliably populated.
 
-One subtle trap: NimBLE often populates the `connections` list a tick or two *before* it resolves `peer_address`, so on the very first non-empty poll `c.peer_address` can still return `None`. Only set `_peer_logged = True` *after* you've actually printed an address — not just because `conns` was non-empty. If you latch on the basis of a non-empty list, you silently miss the peer line for the whole connection. (First hardware test of the rule-7 code hit exactly this: `connections` populated by the 6-second drive poll, `peer_address` still `None`, latch flipped, no `peer:` line ever appeared.)
+There are actually *two* traps stacked here, and you'll hit both:
+
+**Trap 7a — premature latch.** NimBLE often populates the `connections` list a tick or two *before* it resolves the peer address, so on the very first non-empty poll the address may still be `None`. Only set `_peer_logged = True` *after* you've actually printed an address — not just because `conns` was non-empty. Otherwise the line is silently missed for the whole connection.
+
+**Trap 7b — wrong attribute path on the wrapper.** In `adafruit_ble` 10.1.3 the `BLEConnection` wrapper does **not** expose `peer_address` directly. (Verified by dumping the `.mpy` string table — the wrapper has `paired`, `pair`, `peer`, `connection_interval`, but no `peer_address`.) The address lives on the underlying `_bleio.Connection`. So `getattr(c, "peer_address", None)` returns `None` on every poll forever, even if you fixed trap 7a.
+
+The robust shape is to probe a small list of attribute paths in priority order and use the first one that yields an address:
+
+    for path in ("peer_address",
+                 "_bleio_connection.peer_address",
+                 "_bleio_connection.address",
+                 "peer.address"):
+        # walk the dotted path with getattr — first non-None wins
+
+This survives both old wrappers (where `peer_address` was on the wrapper) and the current 10.1.3 wrapper (where you have to dig through `_bleio_connection` or `peer`). See `references/hybrid_pair_driver.py` for the full snippet.
 
 Peer address is genuinely useful in a mixed-central log: iOS / Android use random resolvable addresses (different every reconnect), while Windows typically presents a stable public address. Even the *format* of the address tells you which central is in play without guessing.
 

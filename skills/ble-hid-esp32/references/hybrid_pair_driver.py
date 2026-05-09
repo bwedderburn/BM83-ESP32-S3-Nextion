@@ -67,24 +67,43 @@ def _ensure_paired(self):
         conns = []
     since_connect = now - self._connected_at
 
-    # Log peer address on the first poll where we can actually read
-    # it. NimBLE often populates the connections list a tick or two
-    # before it resolves peer_address, so conns can be non-empty
-    # while addr is still None on the very first poll. Only latch
-    # _peer_logged once we've actually printed something — otherwise
-    # we silently miss it for the whole connection (this is exactly
-    # what happened in the first hardware test of this code). Useful
-    # for telling iPhone (random resolvable address, different each
-    # reconnect) from Windows (stable public address) in the log.
+    # Log peer address on the first poll where we can read it.
+    # Two traps stacked here:
+    #   1. NimBLE often populates the connections list a tick or two
+    #      before it resolves the peer address, so on the very first
+    #      non-empty poll the address may still be None. Only latch
+    #      _peer_logged once we've actually printed something.
+    #   2. adafruit_ble 10.1.3's BLEConnection wrapper does NOT
+    #      expose peer_address directly (verified by dumping the .mpy
+    #      string table — wrapper has paired/pair/peer/connection_
+    #      interval but no peer_address). The address lives on the
+    #      underlying _bleio.Connection. Probe a few likely paths in
+    #      priority order and use the first that yields an address.
+    #      Survives both old wrappers (peer_address present) and new
+    #      wrappers (must dig through _bleio_connection or peer).
+    # Useful for telling iPhone (random resolvable address, different
+    # each reconnect) from Windows (stable public address) in the log.
     if (not self._peer_logged) and conns:
         for c in conns:
-            try:
-                addr = getattr(c, "peer_address", None)
-                if addr is not None:
-                    print("[BLE] peer:", addr)
-                    self._peer_logged = True
-            except Exception:
-                pass
+            addr = None
+            for path in ("peer_address",
+                         "_bleio_connection.peer_address",
+                         "_bleio_connection.address",
+                         "peer.address"):
+                try:
+                    obj = c
+                    for part in path.split("."):
+                        obj = getattr(obj, part, None)
+                        if obj is None:
+                            break
+                    if obj is not None:
+                        addr = obj
+                        break
+                except Exception:
+                    pass
+            if addr is not None:
+                print("[BLE] peer:", addr)
+                self._peer_logged = True
 
     for c in conns:
         try:

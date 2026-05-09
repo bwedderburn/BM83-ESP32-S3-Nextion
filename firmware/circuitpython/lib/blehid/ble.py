@@ -409,25 +409,47 @@ class BleHid:
         except Exception:
             conns = []
         since_connect = now - self._connected_at
-        # Log the peer address on the first poll where we can actually
-        # read it. NimBLE often populates the connections list a tick
-        # or two before it resolves peer_address, so conns can be non-
-        # empty while addr is still None on the very first poll. Only
-        # latch _peer_logged once we've actually printed something —
-        # otherwise we silently miss the line for the entire connection,
-        # which is exactly what happened in the first hardware run of
-        # this code. Useful for telling iPhone (random resolvable
-        # address, different each reconnect) from Windows (stable
-        # public address) in the serial log.
+        # Log the peer address on the first poll where we can read it.
+        # Two traps stacked here:
+        #   1. NimBLE often populates the connections list a tick or
+        #      two before it resolves the peer address, so on the very
+        #      first non-empty poll the address may still be None.
+        #      Only latch _peer_logged once we've actually printed
+        #      something — otherwise we silently miss the line for the
+        #      whole connection.
+        #   2. adafruit_ble 10.1.3's BLEConnection wrapper does NOT
+        #      expose `peer_address` directly (verified by dumping the
+        #      .mpy string table — the wrapper has paired/pair/peer/
+        #      connection_interval but no peer_address). The address
+        #      lives on the underlying _bleio.Connection. Probe a few
+        #      likely attribute paths in priority order and use the
+        #      first one that yields a real address. This survives
+        #      both old wrappers (peer_address present) and new
+        #      wrappers (must dig through _bleio_connection or peer).
+        # Useful for telling iPhone (random resolvable address,
+        # different each reconnect) from Windows (stable public
+        # address) in the serial log.
         if (not self._peer_logged) and conns:
             for c in conns:
-                try:
-                    addr = getattr(c, "peer_address", None)
-                    if addr is not None:
-                        print("[BLE] peer:", addr)
-                        self._peer_logged = True
-                except Exception:
-                    pass
+                addr = None
+                for path in ("peer_address",
+                             "_bleio_connection.peer_address",
+                             "_bleio_connection.address",
+                             "peer.address"):
+                    try:
+                        obj = c
+                        for part in path.split("."):
+                            obj = getattr(obj, part, None)
+                            if obj is None:
+                                break
+                        if obj is not None:
+                            addr = obj
+                            break
+                    except Exception:
+                        pass
+                if addr is not None:
+                    print("[BLE] peer:", addr)
+                    self._peer_logged = True
         for c in conns:
             try:
                 paired = getattr(c, "paired", None)
