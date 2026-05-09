@@ -384,7 +384,7 @@ def main():
                         # between GetPlayStatus polling intervals.
                         prev_status = last_play_status
                         last_play_status = avp[1]
-                        bm.avrcp_register_notification(0x01, interval_s=0)
+                        bm.avrcp_reregister_status_changed()
                         bm.schedule_play_status(0.05)
                         if last_play_status in PLAYING_STATES and (
                             primary_metadata_missing()
@@ -409,7 +409,7 @@ def main():
                             changed = []
                             meta_set("time_cur", _fmt_ms(pos), changed)
                             push_meta_updates(changed)
-                        bm.avrcp_register_notification(0x05, interval_s=1)
+                        bm.avrcp_reregister_position_changed()
     # Conditional check
             elif op == bm.EVT_AVRCP_VENDOR_DEP_RSP:
                 gea = bm.parse_gea_0x5d(params)

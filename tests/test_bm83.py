@@ -356,3 +356,83 @@ def test_check_connection_watchdog_clears_audio_source_on_timeout():
     assert result == "DISCONNECTED"
     assert bm.connected is False
     assert bm.audio_source is None
+def test_status_changed_reregister_throttle():
+    """avrcp_reregister_status_changed is throttled to ~0.5 s."""
+    uart = MockUART()
+    bm = Bm83(uart)
+
+    # First call goes through.
+    assert bm.avrcp_reregister_status_changed() is True
+    assert len(uart.writes) == 1
+
+    # Immediate second call is throttled.
+    assert bm.avrcp_reregister_status_changed() is False
+    assert len(uart.writes) == 1
+
+    # After the throttle window, allowed again.
+    bm._last_status_changed_reg_at = time.monotonic() - (bm._status_reg_throttle_s + 0.1)
+    assert bm.avrcp_reregister_status_changed() is True
+    assert len(uart.writes) == 2
+
+
+def test_position_changed_reregister_throttle():
+    """avrcp_reregister_position_changed is throttled to ~0.5 s."""
+    uart = MockUART()
+    bm = Bm83(uart)
+
+    assert bm.avrcp_reregister_position_changed() is True
+    assert len(uart.writes) == 1
+
+    assert bm.avrcp_reregister_position_changed() is False
+    assert len(uart.writes) == 1
+
+    bm._last_pos_changed_reg_at = time.monotonic() - (bm._pos_reg_throttle_s + 0.1)
+    assert bm.avrcp_reregister_position_changed() is True
+    assert len(uart.writes) == 2
+
+
+def test_poll_does_not_refresh_watchdog_on_btm_status():
+    """poll() must NOT stamp _last_connected_seen on BTM_Status frames.
+
+    Otherwise note_btm_state's _disconnect_hold_s check is always-false
+    and a real disconnect-state BTM_Status can never demote self.connected.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    # Anchor the watchdog timestamp far in the past so we can detect a refresh.
+    stale = time.monotonic() - 100.0
+    bm._last_connected_seen = stale
+
+    # Inject a BTM_Status frame (op=0x01) with a non-connected state byte.
+    btm_frame = bm.frame(Bm83.EVT_BTM_STATUS, bytes([0x00]))
+    uart.to_read = bytearray(btm_frame)
+    uart.in_waiting = len(uart.to_read)
+    events = bm.poll()
+    assert any(op == Bm83.EVT_BTM_STATUS for op, _ in events)
+    # Must remain stale — BTM_Status is excluded from the refresh.
+    assert bm._last_connected_seen == stale
+
+
+def test_poll_refreshes_watchdog_on_non_btm_frame():
+    """poll() refreshes _last_connected_seen on non-BTM inbound frames."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    stale = time.monotonic() - 100.0
+    bm._last_connected_seen = stale
+
+    # AVRCP vendor response frame — a non-BTM op.
+    avrcp_frame = bm.frame(Bm83.EVT_AVC_VENDOR_RSP, bytes([0x00, 0x00]))
+    uart.to_read = bytearray(avrcp_frame)
+    uart.in_waiting = len(uart.to_read)
+    events = bm.poll()
+    assert any(op == Bm83.EVT_AVC_VENDOR_RSP for op, _ in events)
+    # Must have been refreshed.
+    assert bm._last_connected_seen > stale
+
+
+def test_btm_silence_timeout_default_is_90s():
+    """The watchdog default tolerates idle pauses (>=90s)."""
+    bm = Bm83(None)
+    assert bm._btm_silence_timeout_s >= 90.0
