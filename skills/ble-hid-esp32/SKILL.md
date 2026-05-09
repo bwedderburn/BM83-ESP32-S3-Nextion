@@ -89,7 +89,9 @@ This turns a mysterious "it just doesn't work" into a self-explaining log line. 
 
 `BLERadio.connections` is frequently still an empty list at the moment your connect-event handler fires — the peer record hasn't been linked into the list yet on NimBLE builds. Iterating there silently yields nothing and your `peer:` log line never appears.
 
-Instead, set a `_peer_logged = False` latch in `_on_connect` and print the peer address from the first iteration of your pair-polling routine (one tick later), where `connections` is reliably populated. Once printed, latch `_peer_logged = True` so you only log once per connection.
+Instead, set a `_peer_logged = False` latch in `_on_connect` and print the peer address from your pair-polling routine, where `connections` is reliably populated.
+
+One subtle trap: NimBLE often populates the `connections` list a tick or two *before* it resolves `peer_address`, so on the very first non-empty poll `c.peer_address` can still return `None`. Only set `_peer_logged = True` *after* you've actually printed an address — not just because `conns` was non-empty. If you latch on the basis of a non-empty list, you silently miss the peer line for the whole connection. (First hardware test of the rule-7 code hit exactly this: `connections` populated by the 6-second drive poll, `peer_address` still `None`, latch flipped, no `peer:` line ever appeared.)
 
 Peer address is genuinely useful in a mixed-central log: iOS / Android use random resolvable addresses (different every reconnect), while Windows typically presents a stable public address. Even the *format* of the address tells you which central is in play without guessing.
 

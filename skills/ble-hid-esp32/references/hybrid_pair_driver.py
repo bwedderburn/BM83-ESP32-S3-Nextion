@@ -67,18 +67,24 @@ def _ensure_paired(self):
         conns = []
     since_connect = now - self._connected_at
 
-    # Log peer address on the first non-empty poll. Useful for
-    # telling iPhone (random resolvable, changes each reconnect)
-    # from Windows (stable public address) in the serial log.
+    # Log peer address on the first poll where we can actually read
+    # it. NimBLE often populates the connections list a tick or two
+    # before it resolves peer_address, so conns can be non-empty
+    # while addr is still None on the very first poll. Only latch
+    # _peer_logged once we've actually printed something — otherwise
+    # we silently miss it for the whole connection (this is exactly
+    # what happened in the first hardware test of this code). Useful
+    # for telling iPhone (random resolvable address, different each
+    # reconnect) from Windows (stable public address) in the log.
     if (not self._peer_logged) and conns:
         for c in conns:
             try:
                 addr = getattr(c, "peer_address", None)
                 if addr is not None:
                     print("[BLE] peer:", addr)
+                    self._peer_logged = True
             except Exception:
                 pass
-        self._peer_logged = True
 
     for c in conns:
         try:

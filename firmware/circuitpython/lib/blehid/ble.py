@@ -409,19 +409,25 @@ class BleHid:
         except Exception:
             conns = []
         since_connect = now - self._connected_at
-        # Log the peer address on the first poll after connect, when
-        # NimBLE has populated the connections list. Useful for
-        # telling iPhone (random resolvable, changes each reconnect)
-        # apart from Windows (stable public address) in the log.
+        # Log the peer address on the first poll where we can actually
+        # read it. NimBLE often populates the connections list a tick
+        # or two before it resolves peer_address, so conns can be non-
+        # empty while addr is still None on the very first poll. Only
+        # latch _peer_logged once we've actually printed something —
+        # otherwise we silently miss the line for the entire connection,
+        # which is exactly what happened in the first hardware run of
+        # this code. Useful for telling iPhone (random resolvable
+        # address, different each reconnect) from Windows (stable
+        # public address) in the serial log.
         if (not self._peer_logged) and conns:
             for c in conns:
                 try:
                     addr = getattr(c, "peer_address", None)
                     if addr is not None:
                         print("[BLE] peer:", addr)
+                        self._peer_logged = True
                 except Exception:
                     pass
-            self._peer_logged = True
         for c in conns:
             try:
                 paired = getattr(c, "paired", None)
