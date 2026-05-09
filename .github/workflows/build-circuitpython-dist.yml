@@ -91,7 +91,7 @@ jobs:
           zip -r circuitpython-dist-${{ github.sha }}.zip circuitpython
 
       - name: Upload artifact (zip)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: circuitpython-dist-${{ github.sha }}
           path: dist/circuitpython-dist-${{ github.sha }}.zip
@@ -99,7 +99,7 @@ jobs:
 
       # Optional: also upload the raw folder (handy for browsing without unzipping)
       - name: Upload artifact (folder)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: circuitpython-folder-${{ github.sha }}
           path: dist/circuitpython
