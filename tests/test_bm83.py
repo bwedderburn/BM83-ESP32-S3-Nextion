@@ -290,13 +290,14 @@ def test_tick_heartbeat_throttles_until_next_deadline(capsys, monkeypatch):
     assert bm._hb_max_gap_window == 0.75
 
 
-def test_tick_heartbeat_silent_uses_instantaneous_gap(capsys, monkeypatch):
+def test_tick_heartbeat_degraded_uses_instantaneous_gap(capsys, monkeypatch):
     bm = Bm83(None)
     monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
     now = time.monotonic()
+    silence_margin_s = 1.0
     bm._hb_next_at = now
     bm._last_rx_byte_at = now - 0.05
-    bm._hb_max_gap_window = bm._hb_silence_warn_s + 1.0
+    bm._hb_max_gap_window = bm._hb_silence_warn_s + silence_margin_s
     bm.tick_heartbeat(now)
     out = capsys.readouterr().out
     assert "DEGRADED" in out
@@ -312,7 +313,7 @@ def test_tick_heartbeat_window_max_resets_each_period(capsys, monkeypatch):
 
     bm._hb_next_at = now
     bm._last_rx_byte_at = now - 0.01
-    bm._hb_max_gap_window = 0.8
+    bm._hb_max_gap_window = bm._hb_silence_warn_s - 0.2
     bm.tick_heartbeat(now)
     first = capsys.readouterr().out
     assert "DEGRADED" in first

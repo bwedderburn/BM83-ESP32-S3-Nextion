@@ -522,13 +522,13 @@ def main():
                 # Legacy single-shot volume down (no press/release pair).
                 volume_step(False)
             elif tok == b"BT_EBIND":
-                # Bond wipe is documented-only on this CP build:
+                # Bond wipe requires manual intervention on this CP build:
                 # adapter.erase_bonding() destabilized NimBLE in testing,
                 # so the reliable workflow is: Forget Device on the
                 # central, then power-cycle the unit. Keep the button
                 # alive as a reminder rather than letting it crash or
                 # silently no-op.
-                print("[BT_EBIND] Manual flow: Forget Device on phone, then power-cycle unit")
+                print("[NX] BT_EBIND manual flow: Forget Device on phone, then power-cycle unit")
 
 # endregion
         # Handle volume hold-and-repeat
