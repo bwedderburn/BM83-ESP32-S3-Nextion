@@ -62,6 +62,7 @@ def main():
     bm_tick_power = bm.tick_power
     bm_tick_avrcp = bm.tick_avrcp
     bm_tick_avrcp_attrs = bm.tick_avrcp_attrs
+    bm_tick_heartbeat = bm.tick_heartbeat
     bm_avrcp_get_play_status = bm.avrcp_get_play_status
     bm_volume_up = bm.volume_up
     bm_volume_down = bm.volume_down
@@ -258,6 +259,13 @@ def main():
 
 # endregion
         ble_tick()
+
+# endregion
+        # UART RX heartbeat — self-throttled (~10s), surfaces BM83 freezes
+        # and USB CDC drops in the log. Pass `now` so every ticker shares
+        # the same time base and we don't pay an extra time.monotonic()
+        # per main-loop iteration.
+        bm_tick_heartbeat(now)
 
 # endregion
         # Tick non-blocking power state machine
@@ -513,6 +521,14 @@ def main():
             elif tok == b"BT_VOLDN":
                 # Legacy single-shot volume down (no press/release pair).
                 volume_step(False)
+            elif tok == b"BT_EBIND":
+                # Bond wipe requires manual intervention on this CP build:
+                # adapter.erase_bonding() destabilized NimBLE in testing,
+                # so the reliable workflow is: Forget Device on the
+                # central, then power-cycle the unit. Keep the button
+                # alive as a reminder rather than letting it crash or
+                # silently no-op.
+                print("[NX] BT_EBIND manual flow: Forget Device on phone, then power-cycle unit")
 
 # endregion
         # Handle volume hold-and-repeat

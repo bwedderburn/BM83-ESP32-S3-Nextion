@@ -279,6 +279,131 @@ def test_connection_watchdog_noop_when_disconnected():
     assert bm.check_connection_watchdog() is None
 
 
+def test_tick_heartbeat_throttles_until_next_deadline(capsys, monkeypatch):
+    bm = Bm83(None)
+    monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
+    now = time.monotonic()
+    bm._hb_next_at = now + 5.0
+    bm._hb_max_gap_window = 0.75
+    bm.tick_heartbeat(now)
+    assert capsys.readouterr().out == ""
+    assert bm._hb_max_gap_window == 0.75
+
+
+def test_tick_heartbeat_degraded_uses_instantaneous_gap(capsys, monkeypatch):
+    bm = Bm83(None)
+    monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
+    now = time.monotonic()
+    silence_margin_s = 1.0
+    bm._hb_next_at = now
+    bm._last_rx_byte_at = now - 0.05
+    bm._hb_max_gap_window = bm._hb_silence_warn_s + silence_margin_s
+    bm.tick_heartbeat(now)
+    out = capsys.readouterr().out
+    assert "DEGRADED" in out
+    assert "SILENT" not in out
+    assert bm._hb_max_gap_window == 0.0
+
+
+def test_tick_heartbeat_window_max_resets_each_period(capsys, monkeypatch):
+    bm = Bm83(None)
+    monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
+    bm._hb_period_s = 1.0
+    now = time.monotonic()
+
+    bm._hb_next_at = now
+    bm._last_rx_byte_at = now - 0.01
+    bm._hb_max_gap_window = bm._hb_silence_warn_s - 0.2
+    bm.tick_heartbeat(now)
+    first = capsys.readouterr().out
+    assert "DEGRADED" in first
+    assert bm._hb_max_gap_window == 0.0
+
+    next_now = now + bm._hb_period_s
+    bm._last_rx_byte_at = next_now - 0.01
+    bm.tick_heartbeat(next_now)
+    second = capsys.readouterr().out
+    assert "alive" in second
+    assert "DEGRADED" not in second
+
+
+# --- play_pause AUX guard -------------------------------------------------
+
+def test_play_pause_suppressed_when_aux_source():
+    """play_pause must not write OP_MUSIC_CONTROL when audio_source is AUX.
+
+    Sending the AVRCP transport MMI while the BM83 is routing Line-In
+    nudges the chip's source state machine toward A2DP and interrupts
+    AUX audio. See main.py:bm83 commit message for the full rationale.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.audio_source = bm.AUDIO_SRC_AUX
+    bm.play_pause()
+    assert uart.writes == [], "play_pause must be a no-op while AUX is active"
+
+
+def test_play_pause_sends_when_a2dp_source():
+    """play_pause sends OP_MUSIC_CONTROL when audio_source is A2DP."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.audio_source = bm.AUDIO_SRC_A2DP
+    bm.play_pause()
+    assert len(uart.writes) == 1
+    # Frame: 0xAA <hi> <lo> OP_MUSIC_CONTROL <db> MC_PLAY_PAUSE <chk>
+    pkt = uart.writes[0]
+    assert pkt[0] == 0xAA
+    assert pkt[3] == Bm83.OP_MUSIC_CONTROL
+    assert pkt[5] == Bm83.MC_PLAY_PAUSE
+
+
+def test_play_pause_sends_when_source_unknown():
+    """play_pause sends when audio_source is None (boot, before first source event).
+
+    The AUX guard is deliberately narrow: a None source means we haven't
+    seen a 0x80/0x81/0x82 yet, in which case the user's Play press should
+    still be honored as a "kick A2DP / resume" intent.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    assert bm.audio_source is None  # default
+    bm.play_pause()
+    assert len(uart.writes) == 1
+
+
+# --- audio_source reset on disconnect -------------------------------------
+
+def test_note_btm_state_clears_audio_source_on_disconnect_hold():
+    """note_btm_state hold-timeout disconnect path resets audio_source to None.
+
+    Without this, audio_source stays pinned at 0x82 from the last A2DP
+    session, and should_show_aux() never returns True even when AUX is
+    the active physical source after the BT link drops.
+    """
+    bm = Bm83(None)
+    bm.connected = True
+    bm.audio_source = bm.AUDIO_SRC_A2DP
+    # Pretend the BM83 hasn't been seen for longer than the disconnect hold.
+    bm._last_connected_seen = time.monotonic() - (bm._disconnect_hold_s + 1.0)
+    # Pass a state that's NOT in CONNECTED_STATES and NOT in AUDIO_SRC_STATES
+    # so the disconnect branch fires. 0x0F (SPP/iAP disconnected) qualifies.
+    result = bm.note_btm_state(0x0F)
+    assert result == "DISCONNECTED"
+    assert bm.connected is False
+    assert bm.audio_source is None
+
+
+def test_check_connection_watchdog_clears_audio_source_on_timeout():
+    """check_connection_watchdog silence-timeout path resets audio_source."""
+    bm = Bm83(None)
+    bm.connected = True
+    bm.audio_source = bm.AUDIO_SRC_A2DP
+    now = time.monotonic()
+    bm._last_connected_seen = now
+    result = bm.check_connection_watchdog(now + bm._btm_silence_timeout_s + 1.0)
+    assert result == "DISCONNECTED"
+    assert bm.connected is False
+    assert bm.audio_source is None
 def test_status_changed_reregister_throttle():
     """avrcp_reregister_status_changed is throttled to ~0.5 s."""
     uart = MockUART()
