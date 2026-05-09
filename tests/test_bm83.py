@@ -279,6 +279,53 @@ def test_connection_watchdog_noop_when_disconnected():
     assert bm.check_connection_watchdog() is None
 
 
+def test_tick_heartbeat_throttles_until_next_deadline(capsys, monkeypatch):
+    bm = Bm83(None)
+    monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
+    now = time.monotonic()
+    bm._hb_next_at = now + 5.0
+    bm._hb_max_gap_window = 0.75
+    bm.tick_heartbeat(now)
+    assert capsys.readouterr().out == ""
+    assert bm._hb_max_gap_window == 0.75
+
+
+def test_tick_heartbeat_silent_uses_instantaneous_gap(capsys, monkeypatch):
+    bm = Bm83(None)
+    monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
+    now = time.monotonic()
+    bm._hb_next_at = now
+    bm._last_rx_byte_at = now - 0.05
+    bm._hb_max_gap_window = bm._hb_silence_warn_s + 1.0
+    bm.tick_heartbeat(now)
+    out = capsys.readouterr().out
+    assert "DEGRADED" in out
+    assert "SILENT" not in out
+    assert bm._hb_max_gap_window == 0.0
+
+
+def test_tick_heartbeat_window_max_resets_each_period(capsys, monkeypatch):
+    bm = Bm83(None)
+    monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
+    bm._hb_period_s = 1.0
+    now = time.monotonic()
+
+    bm._hb_next_at = now
+    bm._last_rx_byte_at = now - 0.01
+    bm._hb_max_gap_window = 0.8
+    bm.tick_heartbeat(now)
+    first = capsys.readouterr().out
+    assert "DEGRADED" in first
+    assert bm._hb_max_gap_window == 0.0
+
+    next_now = now + bm._hb_period_s
+    bm._last_rx_byte_at = next_now - 0.01
+    bm.tick_heartbeat(next_now)
+    second = capsys.readouterr().out
+    assert "alive" in second
+    assert "DEGRADED" not in second
+
+
 # --- play_pause AUX guard -------------------------------------------------
 
 def test_play_pause_suppressed_when_aux_source():

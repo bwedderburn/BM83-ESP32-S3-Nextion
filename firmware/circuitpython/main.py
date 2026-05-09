@@ -522,14 +522,13 @@ def main():
                 # Legacy single-shot volume down (no press/release pair).
                 volume_step(False)
             elif tok == b"BT_EBIND":
-                # Queue a bond-store wipe. The BleHid module will defer
-                # the erase until we're disconnected and the radio is
-                # quiet, then run the stop-adv / GC / erase / restart-adv
-                # sequence that is stable on this NimBLE build. After
-                # the wipe, re-pair from the central side (Settings ->
-                # Bluetooth -> tap the device name).
-                print("[NX] BT_EBIND requested")
-                ble.request_erase_bonds()
+                # Bond wipe is documented-only on this CP build:
+                # adapter.erase_bonding() destabilized NimBLE in testing,
+                # so the reliable workflow is: Forget Device on the
+                # central, then power-cycle the unit. Keep the button
+                # alive as a reminder rather than letting it crash or
+                # silently no-op.
+                print("[BT_EBIND] Manual flow: Forget Device on phone, then power-cycle unit")
 
 # endregion
         # Handle volume hold-and-repeat
