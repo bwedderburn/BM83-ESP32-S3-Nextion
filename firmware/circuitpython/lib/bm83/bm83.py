@@ -25,6 +25,7 @@ class Bm83:
     __slots__ = (
         "uart",
         "_rx",
+        "_rx_head",
         "_rx_max",
         "power_on",
         "eq_index",
@@ -127,8 +128,11 @@ class Bm83:
 # region __init__
     # __init__ handles   init   logic. #
         self.uart = uart
+        # Head-index buffer: advance _rx_head past consumed bytes, compact
+        # lazily. Avoids per-frame bytearray slice-reassignment on CP.
         self._rx = bytearray()
-        self._rx_max = 4096  # Max buffer size to prevent memory exhaustion
+        self._rx_head = 0
+        self._rx_max = 4096  # Max *active* (unconsumed) bytes before trim
         self.power_on = False
         self.eq_index = 0
         self.connected = False
@@ -206,8 +210,8 @@ class Bm83:
 # endregion
     @staticmethod
     def _checksum_range(hi, lo, buf, start, end):
-        """Compute checksum over buf[start:end] without copying caller buffers."""
-        view = buf[start:end]
+        """Checksum buf[start:end] via memoryview (no allocation on CP)."""
+        view = memoryview(buf)[start:end]
         return (-((hi + lo + sum(view)) & 0xFF)) & 0xFF
 
 # endregion
@@ -277,86 +281,72 @@ class Bm83:
     # Loop through items
 # Function: poll - Defines the behavior for `poll`.
     def poll(self, max_read=768, max_events=8):
-# region poll
-    # poll handles poll logic. #
+        """Drain UART, return up to max_events parsed (op, params) tuples.
+
+        Uses _rx_head index to avoid per-frame bytearray reallocation.
+        """
         out = []
-    # Try block to catch exceptions
         try:
             n = getattr(self.uart, "in_waiting", 0) or 0
             chunk = self.uart.read(min(max_read, n)) if n else None
-    # Handle exceptions
         except Exception as e:
             dprint("[BM83] read err:", e)
-    # Return the result
             return out
-# endregion
-    # Conditional check
         if chunk:
             self._rx.extend(chunk)
-            # Refresh UART RX heartbeat timestamp on *any* inbound bytes, even
-            # if they don't form a valid frame. A BM83 that's emitting noise
-            # is still alive; silence is what indicates a wedged chip or TX line.
             _now = time.monotonic()
-            # Track the largest inter-byte gap seen during the current
-            # heartbeat window so a brief stall between 10s prints is still
-            # surfaced. tick_heartbeat() reads & resets _hb_max_gap_window.
             _gap_since_last = _now - self._last_rx_byte_at
             if _gap_since_last > self._hb_max_gap_window:
                 self._hb_max_gap_window = _gap_since_last
             self._last_rx_byte_at = _now
-        # Limit buffer size to prevent memory exhaustion. Keep the tail so an
-        # in-progress frame can still resync from its start-of-frame byte.
-        if len(self._rx) > self._rx_max:
-            keep = 256  # Larger than any plausible single frame
+
+        rx = self._rx
+        head = self._rx_head
+        active = len(rx) - head
+        if active > self._rx_max:
+            keep = 256
             dprint("[BM83] buffer overflow, trimming head, keeping", keep, "bytes")
-            # CircuitPython bytearray doesn't support slice deletion — reassign.
-            self._rx = self._rx[-keep:]
-    # While loop execution
+            self._rx = bytearray(rx[-keep:])
+            rx = self._rx
+            head = 0
+
         while len(out) < max_events:
-    # Conditional check
-            if len(self._rx) < 4:
+            if (len(rx) - head) < 4:
                 break
-            sof = self._rx.find(b"\xAA")
-    # Conditional check
+            sof = rx.find(b"\xAA", head)
             if sof < 0:
-                self._rx.clear()
+                head = len(rx)
                 break
-    # Conditional check
-            if sof > 0:
-                # CircuitPython bytearray doesn't support slice deletion.
-                self._rx = self._rx[sof:]
-    # Conditional check
-            if len(self._rx) < 4:
+            if sof > head:
+                head = sof
+            if (len(rx) - head) < 4:
                 break
-            hi, lo = self._rx[1], self._rx[2]
+            hi, lo = rx[head + 1], rx[head + 2]
             ln = (hi << 8) | lo
             total = 3 + ln + 1
-    # Conditional check
-            if len(self._rx) < total:
+            if (len(rx) - head) < total:
                 break
-            body = bytes(self._rx[3 : 3 + ln])
-            chk = self._rx[3 + ln]
-    # Conditional check
-            if chk != self._checksum(hi, lo, body):
-                # CircuitPython bytearray doesn't support slice deletion.
-                self._rx = self._rx[1:]
+            body_start = head + 3
+            body_end = body_start + ln
+            chk = rx[body_end]
+            if chk != self._checksum_range(hi, lo, rx, body_start, body_end):
+                head += 1
                 continue
-            op = body[0]
-            params = body[1:]
-            # Avoid hex formatting when DEBUG is off (hot path, allocates)
+            op = rx[body_start]
+            params = bytes(rx[body_start + 1 : body_end])
             if _utils_common.DEBUG:
-                dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)), " ".join("%02X" % b for b in params))
+                dprint("[BM83 EVT] op=0x%02X len=%d data=" % (op, len(params)),
+                       " ".join("%02X" % b for b in params))
             out.append((op, params))
-            # Any successful inbound frame proves the BM83 is alive. Refresh
-            # the connection-watchdog timestamp so the silence watchdog only
-            # trips on an actually-silent radio. Exclude BTM_Status itself —
-            # otherwise note_btm_state's _disconnect_hold_s check (2.0 s) is
-            # always-false because we just stamped 'now', and a real
-            # disconnect-state BTM_Status would never demote self.connected.
             if self.connected and op != self.EVT_BTM_STATUS:
                 self._last_connected_seen = time.monotonic()
-            # CircuitPython bytearray doesn't support slice deletion.
-            self._rx = self._rx[total:]
+            head = body_end + 1
+
+        # Compact lazily once head has consumed enough to be worth shifting.
+        if head >= 256 and head >= (len(rx) - head):
+            rx[:head] = b""
+            head = 0
+        self._rx_head = head
     # Return the result
         return out
 # endregion
@@ -395,21 +385,26 @@ class Bm83:
         # produce a misleading "SILENT" line while bytes are actively
         # flowing now. window_max is still included in the message for
         # context when it exceeds the instantaneous reading.
+        # SILENT/DEGRADED only meaningful when connected. Otherwise idle
+        # silence is normal — demote to dprint so DEBUG=True still shows it.
         if instantaneous_gap >= self._hb_silence_warn_s:
-            if window_max > instantaneous_gap:
-                print("[BM83 RX] SILENT for %.1fs (window max %.2fs) | free=%d"
-                      % (instantaneous_gap, window_max, free))
+            if self.connected:
+                if window_max > instantaneous_gap:
+                    print("[BM83 RX] SILENT for %.1fs (window max %.2fs) | free=%d"
+                          % (instantaneous_gap, window_max, free))
+                else:
+                    print("[BM83 RX] SILENT for %.1fs | free=%d"
+                          % (instantaneous_gap, free))
             else:
-                print("[BM83 RX] SILENT for %.1fs | free=%d"
-                      % (instantaneous_gap, free))
+                dprint("[BM83 RX] idle silence %.1fs | free=%d"
+                       % (instantaneous_gap, free))
         elif effective_gap >= self._hb_degraded_warn_s:
-            # DEGRADED — BT link is throttling or briefly stalled but the
-            # radio is alive. Observed as the earliest warning (0.2-0.5s)
-            # before a full 0x08 link-back fail cascade. Show both max-in
-            # -window and instantaneous so it's obvious whether the stall
-            # is current or a historical blip we already recovered from.
-            print("[BM83 RX] DEGRADED: max %.2fs in last %.0fs window (now %.2fs) | free=%d"
-                  % (effective_gap, self._hb_period_s, instantaneous_gap, free))
+            if self.connected:
+                print("[BM83 RX] DEGRADED: max %.2fs in last %.0fs window (now %.2fs) | free=%d"
+                      % (effective_gap, self._hb_period_s, instantaneous_gap, free))
+            else:
+                dprint("[BM83 RX] idle (max %.2fs in last %.0fs window) | free=%d"
+                       % (effective_gap, self._hb_period_s, free))
         else:
             # Also print during healthy operation so "log went silent" is
             # itself a diagnostic signal (serial CDC dropped, not radio).
