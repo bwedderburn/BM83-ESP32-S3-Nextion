@@ -38,8 +38,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Detect scan inputs
+        id: scan_inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          has_files=false
+          if find . -type f \( -name "*.tf" -o -name "*.tfvars" -o -name "Dockerfile" -o -name "dockerfile" -o -name "*.yaml" -o -name "*.yml" -o -name "requirements*.txt" -o -name "pyproject.toml" \) | grep -q .; then
+            has_files=true
+          fi
+          echo "has_scan_inputs=$has_files" >> "$GITHUB_OUTPUT"
+
       # Execute Codacy Analysis CLI and generate a SARIF output with the security issues identified during the analysis
       - name: Run Codacy Analysis CLI
+        if: steps.scan_inputs.outputs.has_scan_inputs == 'true'
         uses: codacy/codacy-analysis-cli-action@562ee3e92b8e92df8b67e0a5ff8aa8e261919c08
         with:
           # Check https://github.com/codacy/codacy-analysis-cli#project-token to get your project token from your Codacy repository
@@ -56,6 +68,8 @@ jobs:
 
       # Upload the SARIF file generated in the previous step
       - name: Upload SARIF results file
+        if: steps.scan_inputs.outputs.has_scan_inputs == 'true'
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: results.sarif
+          category: codacy-security-scan
