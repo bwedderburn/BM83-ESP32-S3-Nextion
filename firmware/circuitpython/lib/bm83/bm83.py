@@ -344,7 +344,8 @@ class Bm83:
 
         # Compact lazily once head has consumed enough to be worth shifting.
         if head >= 256 and head >= (len(rx) - head):
-            rx[:head] = b""
+            self._rx = bytearray(rx[head:])
+            rx = self._rx
             head = 0
         self._rx_head = head
     # Return the result

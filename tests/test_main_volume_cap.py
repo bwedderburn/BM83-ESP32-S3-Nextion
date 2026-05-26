@@ -54,12 +54,13 @@ def test_volume_hold_caps_are_consistent():
     assert cap is not None, "VOL_REPEAT_MAX must be defined"
     assert hold_max is not None, "VOL_HOLD_MAX_S must be defined"
 
-    # Compute the time the count cap would take to reach.
+    # Compute the time the count cap would take to reach. The cap counts the
+    # initial press, so only (cap - 1) intervals follow the initial delay.
     # Use the canonical initial delay + interval values from main if exposed,
     # otherwise fall back to the documented defaults (0.85s + 0.20s).
     initial = 0.85
     interval = 0.20
-    count_cap_time = initial + cap * interval
+    count_cap_time = initial + max(cap - 1, 0) * interval
 
     # Caps should be within ~1.5s of each other.
     assert abs(count_cap_time - hold_max) <= 1.5, (

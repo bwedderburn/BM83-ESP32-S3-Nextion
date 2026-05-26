@@ -22,11 +22,12 @@ BM83_BAUD = 115200
 NX_TX, NX_RX = board.IO15, board.IO16
 BM83_TX, BM83_RX = board.IO17, board.IO18
 # Hold-and-repeat caps. The count cap and the time cap below must agree —
-# at 0.20s interval + 0.85s initial delay, 30 repeats covers ~6.85s of hold
-# (matches VOL_HOLD_MAX_S). Picking these from one end without the other was
+# VOL_REPEAT_MAX counts the initial press, so 30 = initial + 29 repeats ×
+# 0.20s = 0.85s + 5.80s = 6.65s (matches VOL_HOLD_MAX_S). Picking these from
+# one end without the other was
 # the bug that made the button "stop working" mid-hold pre-2026-05.
 VOL_REPEAT_MAX = 30
-VOL_HOLD_MAX_S = 6.85
+VOL_HOLD_MAX_S = 6.65
 
 # BLE HID Consumer Control. The phone sees this as a media remote and
 # moves its OS volume slider in response to VOLUME_INCREMENT/DECREMENT.
