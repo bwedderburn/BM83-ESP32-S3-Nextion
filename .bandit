@@ -1,0 +1,6 @@
+[bandit]
+# Legacy bandit config (INI-style). Mirrors the [tool.bandit] section in
+# pyproject.toml for compatibility with bandit versions or Codacy CLI
+# revisions that don't read pyproject.toml.
+exclude_dirs = tests,.venv,recovered_src
+skips = B101
