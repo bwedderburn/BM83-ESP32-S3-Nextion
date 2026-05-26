@@ -292,6 +292,11 @@ def test_tick_heartbeat_throttles_until_next_deadline(capsys, monkeypatch):
 
 def test_tick_heartbeat_degraded_uses_instantaneous_gap(capsys, monkeypatch):
     bm = Bm83(None)
+    # DEGRADED is only printed when self.connected is True. When not
+    # connected, idle silence is normal and is suppressed (or demoted
+    # to dprint, which is gated by DEBUG). See P0 #3 in
+    # docs/code-review-2026-05-26.md.
+    bm.connected = True
     monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
     now = time.monotonic()
     silence_margin_s = 1.0
@@ -305,8 +310,30 @@ def test_tick_heartbeat_degraded_uses_instantaneous_gap(capsys, monkeypatch):
     assert bm._hb_max_gap_window == 0.0
 
 
+def test_tick_heartbeat_degraded_suppressed_when_not_connected(capsys, monkeypatch):
+    """When not connected, DEGRADED must NOT be printed.
+
+    The BM83 legitimately stays silent for many seconds between boot
+    and the first BTM_Status, or while BT is off. The old behaviour
+    printed DEGRADED in those cases, swamping the log with noise that
+    didn't indicate a real degradation.
+    """
+    bm = Bm83(None)
+    assert bm.connected is False
+    monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
+    now = time.monotonic()
+    bm._hb_next_at = now
+    bm._last_rx_byte_at = now - 0.05
+    bm._hb_max_gap_window = bm._hb_silence_warn_s + 1.0
+    bm.tick_heartbeat(now)
+    out = capsys.readouterr().out
+    assert "DEGRADED" not in out
+    assert "SILENT" not in out
+
+
 def test_tick_heartbeat_window_max_resets_each_period(capsys, monkeypatch):
     bm = Bm83(None)
+    bm.connected = True  # DEGRADED is gated on connected; see test above.
     monkeypatch.setattr("bm83.bm83.gc.mem_free", lambda: 1234, raising=False)
     bm._hb_period_s = 1.0
     now = time.monotonic()

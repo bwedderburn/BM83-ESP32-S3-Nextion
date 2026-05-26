@@ -156,7 +156,14 @@ class BleHid:
         self._last_pair_try_at = 0.0
         self._pair_retry_s = 2.0
         self._pair_attempts = 0
-        self._pair_attempt_limit = 4
+        # 12 attempts × 2s = 24s of polling window. Covers a slow human
+        # clicking "Allow" on the Windows pairing dialog — observed up to
+        # ~15s in practice. The old 4-attempt (8s) budget would stop
+        # polling before pairing completed, suppressing the
+        # "[BLE] Paired/encrypted" log line on success. Sends still
+        # worked (the BLE stack negotiated underneath) but the log was
+        # misleading. See P1 #7 in docs/code-review-2026-05-26.md.
+        self._pair_attempt_limit = 12
 
         # Bond-wipe request flag. Set by request_erase_bonds() (typically
         # from the Nextion BT_EBIND button) and serviced by tick() while
@@ -333,13 +340,21 @@ class BleHid:
         # Peer address is logged from _ensure_paired one tick later,
         # because NimBLE's connections list is frequently still empty
         # at the moment this callback fires.
-        # Re-init ConsumerControl on the new device to avoid a stale
-        # binding if adafruit_ble swapped the HID device out.
-        try:
-            from adafruit_hid.consumer_control import ConsumerControl
-            self._cc = ConsumerControl(self._hid.devices)
-        except Exception as e:
-            print("[BLE] ConsumerControl init fail:", e)
+        #
+        # ConsumerControl is intentionally NOT reinstantiated on every
+        # connect anymore. The HID device pipe (self._hid.devices) is
+        # stable across reconnects in practice on adafruit_ble; the
+        # previous reinit was a defensive hedge against a theoretical
+        # device swap that doesn't actually happen. If _cc is missing
+        # (setup() failed earlier) we still create it once here as a
+        # late-bound fallback. See P2 #14 in
+        # docs/code-review-2026-05-26.md.
+        if self._cc is None:
+            try:
+                from adafruit_hid.consumer_control import ConsumerControl
+                self._cc = ConsumerControl(self._hid.devices)
+            except Exception as e:
+                print("[BLE] ConsumerControl init fail:", e)
         self._need_pairing_check = True
         self._pair_attempts = 0
         self._last_pair_try_at = 0.0

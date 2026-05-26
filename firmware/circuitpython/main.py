@@ -21,7 +21,13 @@ NX_BAUD = 9600
 BM83_BAUD = 115200
 NX_TX, NX_RX = board.IO15, board.IO16
 BM83_TX, BM83_RX = board.IO17, board.IO18
-VOL_REPEAT_MAX = 2
+# Hold-and-repeat caps. The count cap and the time cap below must agree —
+# VOL_REPEAT_MAX counts the initial press, so 30 = initial + 29 repeats ×
+# 0.20s = 0.85s + 5.80s = 6.65s (matches VOL_HOLD_MAX_S). Picking these from
+# one end without the other was
+# the bug that made the button "stop working" mid-hold pre-2026-05.
+VOL_REPEAT_MAX = 30
+VOL_HOLD_MAX_S = 6.65
 
 # BLE HID Consumer Control. The phone sees this as a media remote and
 # moves its OS volume slider in response to VOLUME_INCREMENT/DECREMENT.
@@ -126,8 +132,8 @@ def main():
     vol_hold_start_at = 0.0       # When the button was first pressed
     vol_last_repeat_at = 0.0      # When we last sent a repeat
     vol_repeat_count = 0          # How many steps have been sent in this hold
-    vol_initial_delay_s = 0.85     # 850ms before repeat starts
-    vol_repeat_interval_s = 0.35  # 350ms between repeats
+    vol_initial_delay_s = 0.85    # 850ms before repeat starts
+    vol_repeat_interval_s = 0.20  # 200ms between repeats (snappier than 350ms)
 
 # endregion
     META_UPDATE_ORDER = ("title", "artist", "album", "genre", "track_num", "total_tracks", "time_cur", "time")
@@ -537,9 +543,10 @@ def main():
             hold_elapsed = now - vol_hold_start_at
             # Only start repeating after the initial delay has passed
             if hold_elapsed >= vol_initial_delay_s:
-                # Safety cap: stop repeating after a maximum hold duration
-                # This prevents a missed release token from causing unbounded repeats.
-                if hold_elapsed > 2.0 or vol_repeat_count >= VOL_REPEAT_MAX:
+                # Safety cap: stop repeating after a maximum hold duration.
+                # VOL_HOLD_MAX_S and VOL_REPEAT_MAX are tuned to expire at
+                # roughly the same moment — see top of file.
+                if hold_elapsed > VOL_HOLD_MAX_S or vol_repeat_count >= VOL_REPEAT_MAX:
                     vol_hold_active = None
                     vol_repeat_count = 0
                 else:

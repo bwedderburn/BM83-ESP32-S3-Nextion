@@ -1,20 +1,11 @@
-# endregion
 DEBUG = False
 TIME_UNKNOWN = "--:--"
 _MAX_TRACK_TIME_MS = 24 * 60 * 60 * 1000
 
-# endregion
-# Function: dprint - Defines the behavior for `dprint`.
 def dprint(*a):
-# region dprint
-# dprint handles dprint logic. #
-    # Conditional check
     if DEBUG:
         print(*a)
 
-# endregion
-    # Loop through items
-# Function: _sanitize_text - Defines the behavior for `_sanitize_text`.
 def _sanitize_impl(txt, max_len, ellipsis):
     if txt is None:
         return "—"
@@ -37,50 +28,26 @@ def _sanitize_impl(txt, max_len, ellipsis):
         s = s[:trim] + ellipsis
     return s
 
-
 def _sanitize_text(txt, max_len=48):
-# region _sanitize_text
-# _sanitize_text handles  sanitize text logic. #
     return _sanitize_impl(txt, max_len, "…")
-# endregion
 
-# endregion
-    # Loop through items
-# Function: _fmt_ms - Defines the behavior for `_fmt_ms`.
 def _fmt_ms(ms):
-# region _fmt_ms
-# _fmt_ms handles  fmt ms logic. #
-    # Conditional check
     if ms is None:
-    # Return the result
         return "—"
-# endregion
-    # Try block to catch exceptions
     try:
         ms = int(ms)
-    # Handle exceptions
     except Exception:
-    # Return the result
         return _sanitize_text(ms, max_len=16)
-# endregion
-    # Conditional check
     if ms < 0:
         ms = 0
     total = ms // 1000
     h = total // 3600
     m = (total % 3600) // 60
     s = total % 60
-    # Conditional check
     if h > 0:
-    # Return the result
         return "%d:%02d:%02d" % (h, m, s)
-# endregion
-    # Return the result
     return "%d:%02d" % (m, s)
-# endregion
 
-
-# Function: _parse_uint - Parse unsigned decimal text/bytes without regex
 def _parse_uint(raw):
     if raw is None:
         return None
@@ -116,8 +83,6 @@ def _parse_uint(raw):
         return None
     return val
 
-
-# Function: _normalize_track_time_ms - Normalize media times to canonical milliseconds
 def _normalize_track_time_ms(raw, ref_ms=None, from_attr=False):
     if ref_ms is not None:
         ref_ms = _parse_uint(ref_ms)
@@ -146,16 +111,12 @@ def _normalize_track_time_ms(raw, ref_ms=None, from_attr=False):
         return None
     return val
 
-
-# Function: _fmt_track_time_ms - Format canonical or attr-derived media times
 def _fmt_track_time_ms(raw, ref_ms=None, from_attr=False):
     val = _normalize_track_time_ms(raw, ref_ms=ref_ms, from_attr=from_attr)
     if val is None:
         return TIME_UNKNOWN
     return _fmt_ms(val)
 
-
-# Function: hexdump - Hex dump utility for debugging
 def hexdump(data, width=16):
     if not data:
         return "<empty>"
@@ -167,12 +128,10 @@ def hexdump(data, width=16):
         return "\n".join(lines)
     return " ".join(hex_strs)
 
-
 # Public wrapper for sanitize_text with test-compatible defaults
 def sanitize_text(txt, max_len=100):
     # Use "..." instead of "…" for test compatibility
     return _sanitize_impl(txt, max_len, "...")
-
 
 # Public wrapper for fmt_ms with test-compatible formatting
 def fmt_ms(ms):
