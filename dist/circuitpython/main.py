@@ -13,17 +13,27 @@ from utils.common import (
     _sanitize_text,
 )
 from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
-from blehid.ble import BleHid
 from bm83.bm83 import Bm83
+from blehid.ble import BleHid
 
 # endregion
 NX_BAUD = 9600
 BM83_BAUD = 115200
 NX_TX, NX_RX = board.IO15, board.IO16
 BM83_TX, BM83_RX = board.IO17, board.IO18
-VOL_REPEAT_MAX = 2
+# Hold-and-repeat caps. The count cap and the time cap below must agree —
+# VOL_REPEAT_MAX counts the initial press, so 30 = initial + 29 repeats ×
+# 0.20s = 0.85s + 5.80s = 6.65s (matches VOL_HOLD_MAX_S). Picking these from
+# one end without the other was
+# the bug that made the button "stop working" mid-hold pre-2026-05.
+VOL_REPEAT_MAX = 30
+VOL_HOLD_MAX_S = 6.65
 
-# endregion
+# BLE HID Consumer Control. The phone sees this as a media remote and
+# moves its OS volume slider in response to VOLUME_INCREMENT/DECREMENT.
+# Used for the BT-streaming case; AUX-mode volume goes via BM83 MMI
+# Line-In gain commands (0x82/0x83) since the phone isn't in the AUX
+# signal path.
 BLE_ENABLED = True
 BLE_NAME = "B's Groovy BT CTRL"
 
@@ -58,16 +68,37 @@ def main():
     bm_tick_power = bm.tick_power
     bm_tick_avrcp = bm.tick_avrcp
     bm_tick_avrcp_attrs = bm.tick_avrcp_attrs
+    bm_tick_heartbeat = bm.tick_heartbeat
     bm_avrcp_get_play_status = bm.avrcp_get_play_status
+    bm_volume_up = bm.volume_up
+    bm_volume_down = bm.volume_down
     ble_tick = ble.tick
     ble_volume = ble.volume
-    ble_mute = ble.mute
-    ble_request_erase_bonds = ble.request_erase_bonds
-    ble_is_connected = ble.is_connected
     eq_labels = bm.EQ_L
 
+    def volume_step(up):
+        """Route a volume button press to the right backend.
+
+        When the UI is in AUX mode, the phone is not in the signal
+        path — only the BM83's Line_In gain matters.  Otherwise (A2DP
+        streaming, or before we've seen a source event), send a BLE
+        HID Consumer Control code so the phone's OS volume slider
+        moves, matching the Flipper-Zero-style media-remote UX.
+
+        Uses the same ``aux_mode`` flag that drives the Nextion AUX
+        indicator so the volume backend always matches what the user
+        sees on screen.
+        """
+        if aux_mode:
+            if up:
+                bm_volume_up()
+            else:
+                bm_volume_down()
+        else:
+            ble_volume(up)
+
 # endregion
-    print("=== ESP32-S3 BM83 + Nextion + BLE HID (VOLUME ONLY) ===")
+    print("=== ESP32-S3 BM83 + Nextion + BLE HID (smart-routed volume) ===")
 
 # endregion
     nx.boot_sync(0.9)
@@ -84,25 +115,33 @@ def main():
     avrcp_notifs_registered = False
 
 # endregion
-    AVRCP_SILENCE_TO_AUX_S = 4.0
+    # AVRCP polling cadence while in AUX mode (no BT link). Probes GetPlayStatus
+    # every few seconds to detect BT reconnecting without spamming the BM83.
     AVRCP_PROBE_PERIOD_S = 3.0
     next_avrcp_probe_at = 0.0
+    # Retained for potential future features (e.g., UI "BT silent" indicator);
+    # no longer gates aux_mode because an AVRCP-silence heuristic produces too
+    # many false AUX flips during paused playback or play/pause transitions.
     last_avrcp_rx_at = 0.0
     last_pos_ms = None
     last_total_ms = None
     last_play_status = None
-    last_voldn_at = 0.0
-    mute_window_s = 0.25
-    ebind_min_interval_s = 2.0
-    last_ebind_at = 0.0
 
     # Hold-and-repeat state for volume controls
     vol_hold_active = None        # None, "up", or "down"
     vol_hold_start_at = 0.0       # When the button was first pressed
     vol_last_repeat_at = 0.0      # When we last sent a repeat
     vol_repeat_count = 0          # How many steps have been sent in this hold
-    vol_initial_delay_s = 0.85     # 850ms before repeat starts
-    vol_repeat_interval_s = 0.35  # 350ms between repeats
+    vol_initial_delay_s = 0.85    # 850ms before repeat starts
+    vol_repeat_interval_s = 0.20  # 200ms between repeats (snappier than 350ms)
+
+    # EBIND (bond-wipe) UI debounce. The Nextion touch panel can repeat
+    # the BT_EBIND token if the user mashes the button or sits on it,
+    # and request_erase_bonds() itself has only a 30s cooldown — too
+    # coarse to swallow accidental double-taps cleanly. 2s here keeps
+    # the human-intended single press while filtering touch chatter.
+    ebind_min_interval_s = 2.0
+    last_ebind_at = 0.0
 
 # endregion
     META_UPDATE_ORDER = ("title", "artist", "album", "genre", "track_num", "total_tracks", "time_cur", "time")
@@ -206,7 +245,7 @@ def main():
     # exit_aux_mode handles exit aux mode logic. #
         nonlocal desired_aux
         desired_aux = ""
-        bm._next_playstatus_at = monotonic() + 0.05
+        bm.schedule_play_status(0.05)
         bm.schedule_attrs(0.3)
 
 # endregion
@@ -236,12 +275,24 @@ def main():
         ble_tick()
 
 # endregion
+        # UART RX heartbeat — self-throttled (~10s), surfaces BM83 freezes
+        # and USB CDC drops in the log. Pass `now` so every ticker shares
+        # the same time base and we don't pay an extra time.monotonic()
+        # per main-loop iteration.
+        bm_tick_heartbeat(now)
+
+# endregion
         # Tick non-blocking power state machine
         bm_tick_power()
 
 # endregion
-        streaming_seems_active = bm.connected and last_avrcp_rx_at > 0.0 and (now - last_avrcp_rx_at) < AVRCP_SILENCE_TO_AUX_S
-        aux_mode = bm.power_on and (not bm.connected or not streaming_seems_active)
+        # aux_mode is driven by the BM83's own audio-source reporting.
+        # Datasheet "AudioUARTCommandSet v2.09" 7.2 BTM_Status describes
+        # states 0x80/0x81/0x82 = current audio source is (none / AUX / A2DP).
+        # bm.should_show_aux() returns True iff the chip says AUX is active,
+        # with a fall-back to the old "powered on and not linked" heuristic
+        # for the window between boot and the first source event.
+        aux_mode = bm.should_show_aux()
 
 # endregion
     # Conditional check
@@ -251,6 +302,11 @@ def main():
             if aux_mode:
                 print("[AUX] inferred -> gating AVRCP polling, showing AUX indicators")
                 enter_aux_mode()
+                # Kick the BM83 audio routing only when a definite AUX source
+                # transition was observed (audio_source == 0x81), not when
+                # aux_mode was inferred from the fallback heuristic at boot.
+                if bm.audio_source == bm.AUDIO_SRC_AUX:
+                    bm.kick_aux_routing()
             else:
                 print("[AUX] cleared -> enabling AVRCP polling, hiding AUX indicators")
                 exit_aux_mode()
@@ -269,6 +325,13 @@ def main():
             if bm.connected:
                 bm_tick_avrcp_attrs()
 
+        # Watchdog: if the BM83 has gone silent for a long time while we still
+        # think we're connected, fall back to disconnected so the UI follows.
+        if bm.check_connection_watchdog(now) == "DISCONNECTED":
+            print("[BTM] watchdog timeout -> marking DISCONNECTED")
+            avrcp_notifs_registered = False
+            last_play_status = None
+
 # endregion
     # Loop through items
         for op, params in bm_poll():
@@ -284,7 +347,7 @@ def main():
                     bm.avrcp_register_notification(0x01, interval_s=0)
                     bm.avrcp_register_notification(0x02, interval_s=0)
                     bm.avrcp_register_notification(0x05, interval_s=1)
-                    bm._next_playstatus_at = now + 0.05
+                    bm.schedule_play_status(0.05)
                     bm.schedule_attrs(0.8)
                     avrcp_notifs_registered = True
                 elif change == "DISCONNECTED":
@@ -335,8 +398,8 @@ def main():
                         # between GetPlayStatus polling intervals.
                         prev_status = last_play_status
                         last_play_status = avp[1]
-                        bm.avrcp_register_notification(0x01, interval_s=0)
-                        bm._next_playstatus_at = now + 0.05
+                        bm.avrcp_reregister_status_changed()
+                        bm.schedule_play_status(0.05)
                         if last_play_status in PLAYING_STATES and (
                             primary_metadata_missing()
                             or (prev_status != last_play_status and desired_meta.get("time") == TIME_UNKNOWN)
@@ -360,7 +423,7 @@ def main():
                             changed = []
                             meta_set("time_cur", _fmt_ms(pos), changed)
                             push_meta_updates(changed)
-                        bm.avrcp_register_notification(0x05, interval_s=1)
+                        bm.avrcp_reregister_position_changed()
     # Conditional check
             elif op == bm.EVT_AVRCP_VENDOR_DEP_RSP:
                 gea = bm.parse_gea_0x5d(params)
@@ -441,8 +504,9 @@ def main():
                         flush_page(nx.current_page)
     # Conditional check
             elif tok == b"BT_VOLUP_P":
-                # Volume up pressed - send immediate volume up and start hold tracking
-                ble_volume(True)
+                # Volume up pressed - smart-route to BLE HID (BT streaming)
+                # or BM83 Line_In gain (AUX mode), then start hold tracking.
+                volume_step(True)
                 vol_hold_active = "up"
                 vol_hold_start_at = now
                 vol_last_repeat_at = now
@@ -454,39 +518,41 @@ def main():
                     vol_repeat_count = 0
     # Conditional check
             elif tok == b"BT_VOLDN_P":
-                # Volume down pressed - check for double-tap mute, then start hold tracking
-    # Conditional check
-                if (now - last_voldn_at) <= mute_window_s:
-                    ble_mute()
-                    last_voldn_at = 0.0
-                    vol_hold_active = None  # Don't repeat after mute
-                    vol_repeat_count = 0
-                else:
-                    ble_volume(False)
-                    last_voldn_at = now
-                    vol_hold_active = "down"
-                    vol_hold_start_at = now
-                    vol_last_repeat_at = now
-                    vol_repeat_count = 1
+                # Volume down pressed - smart-route and start hold tracking
+                volume_step(False)
+                vol_hold_active = "down"
+                vol_hold_start_at = now
+                vol_last_repeat_at = now
+                vol_repeat_count = 1
             elif tok == b"BT_VOLDN_R":
                 # Volume down released - stop hold-and-repeat
                 if vol_hold_active == "down":
                     vol_hold_active = None
                     vol_repeat_count = 0
-    # Conditional check
+            elif tok == b"BT_VOLUP":
+                # Legacy single-shot volume up (no press/release pair).
+                volume_step(True)
+            elif tok == b"BT_VOLDN":
+                # Legacy single-shot volume down (no press/release pair).
+                volume_step(False)
             elif tok == b"BT_EBIND":
+                # Bond-store wipe. The heavy lifting (stop adv, GC,
+                # settle, erase via adafruit_ble OR _bleio.adapter,
+                # name-cycle to defeat Windows' cached-handle reconnect
+                # loop, restart adv) lives in BleHid.request_erase_bonds
+                # which defers execution to the disconnected window.
+                # We refuse while a central is still connected because
+                # erase_bonding under an active link is what destabilised
+                # NimBLE in earlier hardware runs; the right flow is
+                # Forget-Device-then-EBIND, not EBIND-then-disconnect.
                 if (now - last_ebind_at) >= ebind_min_interval_s:
                     last_ebind_at = now
-                    if ble_is_connected():
-                        print("[BLE] erase-bonds denied while BLE connection is active")
+                    if ble.is_connected():
+                        print("[BLE] EBIND denied: disconnect the central first "
+                              "(Forget Device on phone / PC / Pi), then press EBIND.")
                     else:
-                        requested = ble_request_erase_bonds()
-                        if requested:
-                            print("[BLE] erase-bonds requested")
-                        else:
-                            print("[BLE] erase-bonds request ignored (busy/cooldown)")
-                else:
-                    print("[BLE] erase-bonds request ignored (ui cooldown)")
+                        ble.request_erase_bonds()
+                # else: swallow Nextion touch chatter silently
 
 # endregion
         # Handle volume hold-and-repeat
@@ -495,39 +561,34 @@ def main():
             hold_elapsed = now - vol_hold_start_at
             # Only start repeating after the initial delay has passed
             if hold_elapsed >= vol_initial_delay_s:
-                # Safety cap: stop repeating after a maximum hold duration
-                # This prevents a missed release token from causing unbounded repeats.
-                if hold_elapsed > 2.0 or vol_repeat_count >= VOL_REPEAT_MAX:
+                # Safety cap: stop repeating after a maximum hold duration.
+                # VOL_HOLD_MAX_S and VOL_REPEAT_MAX are tuned to expire at
+                # roughly the same moment — see top of file.
+                if hold_elapsed > VOL_HOLD_MAX_S or vol_repeat_count >= VOL_REPEAT_MAX:
                     vol_hold_active = None
                     vol_repeat_count = 0
                 else:
                     # Check if it's time for another repeat step
                     if (now - vol_last_repeat_at) >= vol_repeat_interval_s:
                         if vol_hold_active == "up":
-                            ble_volume(True)
+                            volume_step(True)
                         elif vol_hold_active == "down":
-                            ble_volume(False)
+                            volume_step(False)
                         vol_last_repeat_at = now
                         vol_repeat_count += 1
 
         sleep(0.005)
 
-# endregion
-    # Conditional check
+
 if __name__ == "__main__":
-    # Try block to catch exceptions
     try:
         main()
-    # Handle exceptions
     except Exception as e:
-    # Try block to catch exceptions
         try:
             import traceback
             print("[FATAL]", e)
             traceback.print_exception(e)
-    # Handle exceptions
         except Exception:
             print("[FATAL]", e)
-    # While loop execution
         while True:
             time.sleep(1)
