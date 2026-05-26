@@ -1,35 +1,38 @@
 """Minimal BLE HID Consumer Control shim for volume/mute.
 
-This is a deliberately slimmed-down rewrite of the previous BleHid module.
-The bonding/erase_bonds/name-cycling machinery was removed because the
-soft-reload path it relied on was fragile under Thonny and because
-bonds can be cleared cleanly from the phone side (Forget Device)
-followed by an ESP32 power-cycle.
+This is a slimmed-down rewrite of the previous BleHid module. The
+soft-reload dance was dropped (fragile under Thonny), but the
+bond-wipe pipeline was kept and rebuilt to be NimBLE-safe: erase is
+deferred to the disconnected/quiet window, GC + settle delays around
+the call, name-cycling after success so Windows treats us as a new
+device instead of looping on a cached handle.
 
 Responsibilities kept:
     * Stand up a BLE HID service with a ConsumerControl device
     * Auto-advertise when not connected, back off on Nimble OOM
     * Re-pair on (re)connect when the central didn't auto-encrypt
     * Send VOLUME_INCREMENT / VOLUME_DECREMENT / MUTE on demand
+    * Deferred erase_bonds (via request_erase_bonds, serviced in tick)
+    * BLE name counter cycling on successful bond wipe
+    * NVM/filesystem persistence of the bond counter
 
 Responsibilities dropped:
-    * erase_bonds / request_erase_bonds / soft-reload dance
-    * BLE name counter cycling
-    * NVM/filesystem persistence of bond counter
+    * Soft-reload dance after erase_bonds
 
 The public surface used by main.py is:
-    setup()           -- initialise BLE radio, HID service, start advertising
-    tick()            -- call every loop to service connect/disconnect edges
-    volume(up: bool)  -- send VOLUME_INCREMENT (True) or DECREMENT (False)
-    mute()            -- send the HID MUTE code
-    is_connected()    -- bool: True when a central is connected
+    setup()                -- initialise BLE radio, HID service, start advertising
+    tick()                 -- call every loop to service connect/disconnect edges
+    volume(up: bool)       -- send VOLUME_INCREMENT (True) or DECREMENT (False)
+    mute()                 -- send the HID MUTE code
+    is_connected()         -- bool: True when a central is connected
+    request_erase_bonds()  -- queue a bond-store wipe (runs while disconnected)
 """
 import time
 import gc
 from utils.common import dprint
 
 
-# Nimble on ESP32-S3 can hard-crash if heavy BLE operations run back to
+# NimBLE on ESP32-S3 can hard-crash if heavy BLE operations run back to
 # back without letting the stack settle. A short sleep between stop_adv,
 # disconnect, erase_bonding, and start_adv avoids "out of memory" and
 # "stack busy" failures observed during bond-wipe.
@@ -381,9 +384,9 @@ class BleHid:
               % (uptime, self._ever_paired_this_conn))
         if (uptime < self._fast_disconnect_s) and (not self._ever_paired_this_conn):
             print("[BLE] Fast disconnect without pairing — likely stale bond on")
-            print("      central side. Fix: Forget Device on the phone/PC, then")
-            print("      press EBIND on the device, then reconnect from the")
-            print("      central's OTHER DEVICES list.")
+            print("      the central (phone / PC / Pi). Fix on the central:")
+            print("      Forget Device. Then on this unit: press EBIND. Then")
+            print("      reconnect from the central's OTHER DEVICES list.")
         self._need_pairing_check = False
         self._pair_attempts = 0
         self._pair_drive_tried = False
@@ -493,6 +496,23 @@ class BleHid:
                         self._ever_paired_this_conn = True
                         print("[BLE] Paired/encrypted")
                         continue
+                    # c.pair() returned but encryption never came up —
+                    # this is the stale-bond / SMP-mismatch case. Don't
+                    # sit in the poll loop for the remaining ~22s; the
+                    # blocking c.pair() call already stalled the main
+                    # loop long enough to surface as BM83 RX SILENT in
+                    # the heartbeat log. Drop the link so the central
+                    # is forced to reconnect cleanly (and so EBIND is
+                    # eligible to run, since it gates on disconnected).
+                    print("[BLE] pair() did not encrypt — dropping link "
+                          "(likely stale bond; press EBIND on this unit)")
+                    try:
+                        c.disconnect()
+                    except Exception as e:
+                        dprint("[BLE] disconnect after failed pair err:", e)
+                    self._need_pairing_check = False
+                    self._pair_attempts = 0
+                    return
                 # Still not paired — bump counter so we eventually
                 # stop polling if this connection never encrypts.
                 self._pair_attempts += 1

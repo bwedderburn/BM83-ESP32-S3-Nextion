@@ -135,6 +135,14 @@ def main():
     vol_initial_delay_s = 0.85    # 850ms before repeat starts
     vol_repeat_interval_s = 0.20  # 200ms between repeats (snappier than 350ms)
 
+    # EBIND (bond-wipe) UI debounce. The Nextion touch panel can repeat
+    # the BT_EBIND token if the user mashes the button or sits on it,
+    # and request_erase_bonds() itself has only a 30s cooldown — too
+    # coarse to swallow accidental double-taps cleanly. 2s here keeps
+    # the human-intended single press while filtering touch chatter.
+    ebind_min_interval_s = 2.0
+    last_ebind_at = 0.0
+
 # endregion
     META_UPDATE_ORDER = ("title", "artist", "album", "genre", "track_num", "total_tracks", "time_cur", "time")
     TRACK_STALE_KEYS = ("album", "genre", "track_num", "total_tracks", "time_cur", "time")
@@ -528,13 +536,23 @@ def main():
                 # Legacy single-shot volume down (no press/release pair).
                 volume_step(False)
             elif tok == b"BT_EBIND":
-                # Bond wipe requires manual intervention on this CP build:
-                # adapter.erase_bonding() destabilized NimBLE in testing,
-                # so the reliable workflow is: Forget Device on the
-                # central, then power-cycle the unit. Keep the button
-                # alive as a reminder rather than letting it crash or
-                # silently no-op.
-                print("[NX] BT_EBIND manual flow: Forget Device on phone, then power-cycle unit")
+                # Bond-store wipe. The heavy lifting (stop adv, GC,
+                # settle, erase via adafruit_ble OR _bleio.adapter,
+                # name-cycle to defeat Windows' cached-handle reconnect
+                # loop, restart adv) lives in BleHid.request_erase_bonds
+                # which defers execution to the disconnected window.
+                # We refuse while a central is still connected because
+                # erase_bonding under an active link is what destabilised
+                # NimBLE in earlier hardware runs; the right flow is
+                # Forget-Device-then-EBIND, not EBIND-then-disconnect.
+                if (now - last_ebind_at) >= ebind_min_interval_s:
+                    last_ebind_at = now
+                    if ble.is_connected():
+                        print("[BLE] EBIND denied: disconnect the central first "
+                              "(Forget Device on phone / PC / Pi), then press EBIND.")
+                    else:
+                        ble.request_erase_bonds()
+                # else: swallow Nextion touch chatter silently
 
 # endregion
         # Handle volume hold-and-repeat
@@ -561,22 +579,16 @@ def main():
 
         sleep(0.005)
 
-# endregion
-    # Conditional check
+
 if __name__ == "__main__":
-    # Try block to catch exceptions
     try:
         main()
-    # Handle exceptions
     except Exception as e:
-    # Try block to catch exceptions
         try:
             import traceback
             print("[FATAL]", e)
             traceback.print_exception(e)
-    # Handle exceptions
         except Exception:
             print("[FATAL]", e)
-    # While loop execution
         while True:
             time.sleep(1)
