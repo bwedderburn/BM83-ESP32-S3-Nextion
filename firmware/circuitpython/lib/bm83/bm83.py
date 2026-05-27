@@ -197,6 +197,19 @@ class Bm83:
         self._hb_max_gap_window = 0.0   # Max inter-byte gap in current window
 
 # endregion
+
+    @property
+    def last_rx_at(self):
+        """Timestamp (time.monotonic) of the most recent BM83 UART RX byte.
+
+        Used by BleHid to gate c.pair() on a BM83-quiet window. Calling
+        c.pair() while the BM83 UART is mid-AVRCP-handshake has been
+        observed to hard-crash NimBLE on ESP32-S3, so the BLE module
+        waits for `now - bm.last_rx_at` to exceed a small threshold
+        before driving pairing from the peripheral side.
+        """
+        return self._last_rx_byte_at
+
     @staticmethod
     # Loop through items
 # Function: _checksum - Defines the behavior for `_checksum`.

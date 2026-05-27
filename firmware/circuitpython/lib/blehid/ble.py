@@ -7,10 +7,18 @@ deferred to the disconnected/quiet window, GC + settle delays around
 the call, name-cycling after success so Windows treats us as a new
 device instead of looping on a cached handle.
 
+Pairing is **passive-only**: this module never calls c.pair() from
+the peripheral side. Every previous attempt to drive pairing (timed
+grace period, BM83-quiet-window gate) reliably hard-crashed NimBLE
+on ESP32-S3 when the BM83 UART was active. iOS / Android auto-pair
+within ~1-2s on their own; Windows / Linux users must initiate pair
+from the central's Bluetooth settings. The module logs a one-shot
+hint after a few unpaired seconds explaining the manual step.
+
 Responsibilities kept:
     * Stand up a BLE HID service with a ConsumerControl device
     * Auto-advertise when not connected, back off on Nimble OOM
-    * Re-pair on (re)connect when the central didn't auto-encrypt
+    * Passively observe c.paired and log encryption when it lands
     * Send VOLUME_INCREMENT / VOLUME_DECREMENT / MUTE on demand
     * Deferred erase_bonds (via request_erase_bonds, serviced in tick)
     * BLE name counter cycling on successful bond wipe
@@ -18,6 +26,7 @@ Responsibilities kept:
 
 Responsibilities dropped:
     * Soft-reload dance after erase_bonds
+    * Peripheral-driven c.pair() (NimBLE crash on ESP32-S3 + BM83)
 
 The public surface used by main.py is:
     setup()                -- initialise BLE radio, HID service, start advertising
@@ -110,6 +119,8 @@ class BleHid:
         "_ever_paired_this_conn",
         "_fast_disconnect_s",
         "_peer_logged",
+        "_manual_pair_hint_after_s",
+        "_manual_pair_hint_logged",
     )
 
     def __init__(self, enabled, name):
@@ -183,35 +194,27 @@ class BleHid:
         self._erase_cooldown_s = 30.0
         self._last_erase_at = -self._erase_cooldown_s - 1.0
 
-        # Cross-platform pairing driver.
+        # Passive-only pairing model.
         #
-        # iOS auto-initiates pairing within ~1-2s of connect when it
-        # sees an encrypted HID characteristic, so we stay passive
-        # long enough for that path to complete on its own (which keeps
-        # us from redundantly calling c.pair() and starving the main
-        # loop while iOS is already halfway through the handshake).
-        #
-        # Windows does NOT auto-initiate pairing — a BLE-only device
-        # advertising HID lands under "Other devices" until something
-        # on either side drives the Security Request. If we're still
-        # unpaired _pair_auto_after_s seconds after connect, we call
-        # c.pair() once (not in a loop) as a fallback nudge. With a
-        # clean NVS bond store (i.e. after EBIND), this call returns
-        # quickly on both sides — the 30-40s blocks we saw in earlier
-        # hardware logs were the stale-bond mismatch case, not normal.
+        # We watch getattr(c, "paired") and log when the central
+        # establishes encryption on its own. iOS / Android auto-initiate
+        # pairing within ~1-2s of connecting to a BLE HID peripheral,
+        # so phones complete here without intervention. Windows / Linux
+        # centrals must initiate pairing from their own settings UI
+        # (Bluetooth -> Other devices -> Pair). The peripheral does
+        # NOT drive c.pair() — earlier revs of this module did, and
+        # the call reliably hard-crashed NimBLE on ESP32-S3 when run
+        # while the BM83 UART was mid-AVRCP-handshake. Two mitigation
+        # attempts (timed grace, BM83-quiet-window gate) both still
+        # crashed; passive-only is the durable fix.
         self._connected_at = 0.0
-        # Windows' "Add device -> Pair device? Allow" flow takes a
-        # human 3-6s to click through. If we drive c.pair() at 1.0s
-        # (as we did originally for the "Other device" rescue), our
-        # Security Request lands while Windows is still waiting for
-        # the user to click Allow on its own pairing dialog, and the
-        # two pair requests collide -> "Connection failed". 6.0s is
-        # long enough for a typical slow human click to finish Just
-        # Works pairing on its own (which is what we want), while
-        # still being short enough to rescue the truly-stuck
-        # "Other device" case where the central never initiates.
-        self._pair_auto_after_s = 6.0
-        self._pair_drive_tried = False
+        # If a central is still unpaired after this long, print a
+        # one-shot hint explaining the manual-pair step. Tuned long
+        # enough that iOS auto-pair (~1-2s) and a slow Windows user
+        # clicking through the pair dialog (3-6s) both complete first
+        # without spamming the log.
+        self._manual_pair_hint_after_s = 8.0
+        self._manual_pair_hint_logged = False
 
         # Stale-bond diagnostics. When a central with a stale bond
         # (we wiped our NVS with EBIND but it still thinks it's
@@ -362,9 +365,9 @@ class BleHid:
         self._pair_attempts = 0
         self._last_pair_try_at = 0.0
         self._connected_at = time.monotonic()
-        self._pair_drive_tried = False
         self._ever_paired_this_conn = False
         self._peer_logged = False
+        self._manual_pair_hint_logged = False
 
     def _on_disconnect(self):
         # Measure how long we stayed up and whether pairing ever
@@ -389,30 +392,27 @@ class BleHid:
             print("      reconnect from the central's OTHER DEVICES list.")
         self._need_pairing_check = False
         self._pair_attempts = 0
-        self._pair_drive_tried = False
         self._ever_paired_this_conn = False
+        self._manual_pair_hint_logged = False
         # Kick advertising immediately so the phone can re-find us.
         self._start_adv(force=True)
 
     def _ensure_paired(self):
-        # Hybrid pairing driver.
+        # Passive-only pairing observer.
         #
-        # Phase 1 (passive observer, first few seconds after connect):
-        #   We watch getattr(c, "paired") and log when the central
-        #   establishes encryption on its own. iOS auto-initiates
-        #   pairing within ~1-2s of connecting to a BLE HID device,
-        #   so most iPhone handshakes complete here without us ever
-        #   sending a Security Request from our side.
+        # We watch getattr(c, "paired") on each poll and log when the
+        # central completes encryption on its own. iOS and Android
+        # auto-initiate pairing within ~1-2s of connecting to a BLE
+        # HID peripheral, so phones complete here without intervention.
+        # Windows and Linux centrals must initiate pairing from their
+        # own settings UI — if the central is still unpaired after
+        # _manual_pair_hint_after_s seconds we print a one-shot hint
+        # explaining the manual step.
         #
-        # Phase 2 (one-shot drive, if still unpaired after _pair_auto_after_s):
-        #   Windows does NOT auto-initiate pairing for BLE devices
-        #   advertising HID — they show up under "Other devices" and
-        #   never pair unless something drives it. After the grace
-        #   period, if the central has not encrypted on its own, we
-        #   call c.pair() exactly once. With a clean NVS bond store
-        #   (after EBIND) this returns quickly; the 30-40s blocks
-        #   observed in earlier hardware logs were the stale-bond
-        #   mismatch case, not normal operation.
+        # The peripheral does NOT call c.pair() — every prior attempt
+        # to drive pairing from this side has hard-crashed NimBLE on
+        # ESP32-S3 when the BM83 UART was active. Passive-only is the
+        # durable fix; see the constructor comment for history.
         if not self._ble or not getattr(self._ble, "connected", False):
             return
         if self._pair_attempts >= self._pair_attempt_limit:
@@ -477,44 +477,25 @@ class BleHid:
                     self._ever_paired_this_conn = True
                     print("[BLE] Paired/encrypted")
                     continue
-                # Not paired yet.
-                if (not self._pair_drive_tried) and since_connect >= self._pair_auto_after_s:
-                    # One-shot drive — the central has had its chance
-                    # to auto-pair and didn't. This is the Windows
-                    # path (and a few stubborn Linux BT stacks).
-                    self._pair_drive_tried = True
-                    print("[BLE] Pairing... (driving from peripheral)")
-                    try:
-                        c.pair()
-                    except Exception as e:
-                        dprint("[BLE] pair() err:", e)
-                    # Re-check after the call returns.
-                    paired = getattr(c, "paired", None)
-                    if paired:
-                        self._need_pairing_check = False
-                        self._pair_attempts = 0
-                        self._ever_paired_this_conn = True
-                        print("[BLE] Paired/encrypted")
-                        continue
-                    # c.pair() returned but encryption never came up —
-                    # this is the stale-bond / SMP-mismatch case. Don't
-                    # sit in the poll loop for the remaining ~22s; the
-                    # blocking c.pair() call already stalled the main
-                    # loop long enough to surface as BM83 RX SILENT in
-                    # the heartbeat log. Drop the link so the central
-                    # is forced to reconnect cleanly (and so EBIND is
-                    # eligible to run, since it gates on disconnected).
-                    print("[BLE] pair() did not encrypt — dropping link "
-                          "(likely stale bond; press EBIND on this unit)")
-                    try:
-                        c.disconnect()
-                    except Exception as e:
-                        dprint("[BLE] disconnect after failed pair err:", e)
-                    self._need_pairing_check = False
-                    self._pair_attempts = 0
-                    return
-                # Still not paired — bump counter so we eventually
-                # stop polling if this connection never encrypts.
+                # Not paired yet. After the hint deadline, print a
+                # one-shot message telling the user how to pair from
+                # the central's side. iOS/Android auto-pair in 1-2s
+                # so the hint fires only for Windows/Linux/stuck flows.
+                if (not self._manual_pair_hint_logged) and since_connect >= self._manual_pair_hint_after_s:
+                    self._manual_pair_hint_logged = True
+                    print("[BLE] Not paired after %.0fs. iOS/Android auto-pair;"
+                          % since_connect)
+                    print("      for Windows: Settings -> Bluetooth & devices ->")
+                    print("      Other devices -> '%s' -> Pair." % self.name)
+                    print("      For Linux: bluetoothctl pair <mac>.")
+                    print("      If the central still won't pair: Forget Device on")
+                    print("      the central, then press EBIND on this unit, then")
+                    print("      retry from the central's settings.")
+                # Bump counter so we eventually stop polling if this
+                # connection never encrypts. With _pair_attempt_limit=12
+                # and _pair_retry_s=2.0 that's ~24s of polling — long
+                # enough for a human to click through the Windows pair
+                # dialog after seeing the hint above.
                 self._pair_attempts += 1
                 dprint("[BLE] pair poll %d/%d: paired=%r since_connect=%.1fs"
                        % (self._pair_attempts, self._pair_attempt_limit,
@@ -664,6 +645,20 @@ class BleHid:
         "<base>_1", second "<base>_2", etc. ConsumerControl bonds
         from the central's perspective are keyed on device name, so
         this is sufficient to look like a new device.
+
+        Known limitation — iPhone re-pair after rename:
+            Once the advertised name has cycled to "<base>_N", iPhones
+            do not re-pair until the ESP32 is power-cycled. The iOS
+            BLE stack seems to cache the new name as "seen, paired
+            before" against the unit's MAC after the first successful
+            pair in that boot session, and subsequent EBIND -> rename
+            cycles in the same boot session don't shake it loose. A
+            power-cycle clears whatever in-memory state iOS is holding
+            and the next pair works cleanly. Android and Windows do
+            not show this behaviour. Documented rather than fixed
+            because the workaround (power-cycle) is one button press
+            and the alternative is to chase iOS-specific bond/cache
+            quirks that we have limited visibility into.
         """
         self.name = "%s_%d" % (self.base_name, counter)
         try:

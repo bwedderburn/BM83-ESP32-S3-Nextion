@@ -222,8 +222,14 @@ def test_ensure_paired_stops_after_limit():
     assert hid._need_pairing_check is False  # gave up
 
 
-def test_ensure_paired_pairs_connection():
-    """_ensure_paired should call pair() on an unpaired connection."""
+def test_ensure_paired_does_not_drive_pair():
+    """Passive-only contract: _ensure_paired must NOT call c.pair().
+
+    Earlier revs drove pairing from the peripheral side; that reliably
+    hard-crashed NimBLE on ESP32-S3 when the BM83 UART was active. The
+    fix is to stay passive — let the central initiate. This test pins
+    that contract so it can't silently regress.
+    """
     hid = BleHid(True, "test")
     ble, _ = _make_ready(hid)
     ble.connected = True
@@ -231,12 +237,63 @@ def test_ensure_paired_pairs_connection():
     ble._connections = [conn]
 
     hid._need_pairing_check = True
-    hid._last_pair_try_at = 0.0  # long ago
-    hid._ensure_paired()
+    hid._connected_at = time.monotonic()  # just connected
+    hid._last_pair_try_at = 0.0  # long ago, throttle won't block us
 
-    assert conn.pair_called
-    assert conn.paired
-    assert hid._need_pairing_check is False
+    # Run several polls past the throttle to make sure pair() is never
+    # called even when we have plenty of opportunities.
+    for _ in range(5):
+        hid._last_pair_try_at = 0.0
+        hid._ensure_paired()
+
+    assert not conn.pair_called
+    assert not conn.paired
+    # Polling continues until the central pairs on its own or the
+    # attempt limit is reached.
+    assert hid._need_pairing_check is True
+
+
+def test_ensure_paired_logs_manual_pair_hint(capsys):
+    """After _manual_pair_hint_after_s seconds unpaired, log a one-shot hint."""
+    hid = BleHid(True, "groovy-bt")
+    ble, _ = _make_ready(hid)
+    ble.connected = True
+    conn = FakeConnection(paired=False)
+    ble._connections = [conn]
+
+    hid._need_pairing_check = True
+    # Pretend we connected long enough ago to trip the hint deadline.
+    hid._connected_at = time.monotonic() - (hid._manual_pair_hint_after_s + 1)
+    hid._last_pair_try_at = 0.0
+
+    hid._ensure_paired()
+    out = capsys.readouterr().out
+
+    assert "Not paired" in out
+    assert "groovy-bt" in out  # uses the actual advertised name
+    assert hid._manual_pair_hint_logged is True
+
+    # Second call should not re-log (one-shot).
+    hid._last_pair_try_at = 0.0
+    hid._ensure_paired()
+    out2 = capsys.readouterr().out
+    assert "Not paired" not in out2
+
+
+def test_ensure_paired_skips_hint_before_deadline():
+    """Hint must not fire before _manual_pair_hint_after_s seconds."""
+    hid = BleHid(True, "test")
+    ble, _ = _make_ready(hid)
+    ble.connected = True
+    conn = FakeConnection(paired=False)
+    ble._connections = [conn]
+
+    hid._need_pairing_check = True
+    hid._connected_at = time.monotonic()  # just connected, 0s elapsed
+    hid._last_pair_try_at = 0.0
+
+    hid._ensure_paired()
+    assert hid._manual_pair_hint_logged is False
 
 
 def test_ensure_paired_skips_already_paired():
