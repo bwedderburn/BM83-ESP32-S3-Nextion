@@ -29,7 +29,11 @@ def _sanitize_impl(txt, max_len, ellipsis):
     return s
 
 def _sanitize_text(txt, max_len=48):
-    return _sanitize_impl(txt, max_len, "…")
+    # ASCII "..." on purpose: _sanitize_impl guarantees chars 32-126, and the
+    # Nextion TX path encodes with encode("ascii", "replace") — a Unicode
+    # ellipsis (U+2026) would survive to that encode and render as "?" on the
+    # display. Three dots keep the whole pipeline inside the ASCII invariant.
+    return _sanitize_impl(txt, max_len, "...")
 
 def _fmt_ms(ms):
     if ms is None:
@@ -128,9 +132,8 @@ def hexdump(data, width=16):
         return "\n".join(lines)
     return " ".join(hex_strs)
 
-# Public wrapper for sanitize_text with test-compatible defaults
+# Public wrapper for sanitize_text with a wider default max_len.
 def sanitize_text(txt, max_len=100):
-    # Use "..." instead of "…" for test compatibility
     return _sanitize_impl(txt, max_len, "...")
 
 # Public wrapper for fmt_ms with test-compatible formatting

@@ -3,6 +3,15 @@ from utils.common import dprint, _sanitize_text
 
 TERM = b"\xFF\xFF\xFF"
 
+# RX buffer cap. Valid Nextion frames are tiny (<32 bytes), so the buffer
+# only grows past this when the line is feeding TERM-less garbage (display
+# disconnected, floating RX pin, wrong baud). Without a cap that garbage
+# accumulates forever (~960 B/s at 9600 baud) and eventually starves the
+# CircuitPython heap. Keep a tail on trim so a legitimate partial frame
+# that straddles the cut can still resync on its terminator.
+_RX_MAX = 512
+_RX_KEEP = 128
+
 # EQ mapping for test compatibility
 EQ_MAP = {
     b"EQ_OFF": 0,
@@ -148,6 +157,9 @@ class Nextion:
             return
         if chunk:
             self._rx.extend(chunk)
+            if len(self._rx) > _RX_MAX:
+                dprint("[NX] rx overflow, trimming to", _RX_KEEP)
+                self._rx = self._rx[-_RX_KEEP:]
 
     def _pop_frame(self):
         i = self._rx.find(TERM)

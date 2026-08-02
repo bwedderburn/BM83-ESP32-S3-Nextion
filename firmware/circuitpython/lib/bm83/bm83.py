@@ -4,8 +4,6 @@ from utils.common import dprint
 from utils import common as _utils_common
 from utils.compat import const
 
-# endregion
-# endregion
 _AVRCP_ATTR_IDS = (1, 2, 3, 6, 4, 5, 7)
 _AVRCP_ATTR_PAYLOAD = bytes([len(_AVRCP_ATTR_IDS)]) + b"".join(
     int(a).to_bytes(4, "big") for a in _AVRCP_ATTR_IDS
@@ -18,10 +16,7 @@ _AVRCP_ATTR_NAMES = {
     5: "total_tracks",
     6: "genre",
 }
-# Class: Bm83 - Represents the Bm83 class.
 class Bm83:
-# region Bm83
-# Bm83 class encapsulates functionality related to bm83. #
     __slots__ = (
         "uart",
         "_rx",
@@ -51,6 +46,13 @@ class Bm83:
         "_status_reg_throttle_s",
         "_last_pos_changed_reg_at",
         "_pos_reg_throttle_s",
+        "_pending_notif_regs",
+        "_avrcp_suspended",
+        "stream_kick_enabled",
+        "_kick_armed",
+        "_kick_state",
+        "_kick_next_at",
+        "_kick_gap_s",
         "_btm_silence_timeout_s",
         "audio_source",
         # UART RX heartbeat — used by tick_heartbeat() to surface freezes that
@@ -62,9 +64,8 @@ class Bm83:
         "_hb_period_s",
         "_hb_silence_warn_s",
         # DEGRADED tier — gap is short enough that the radio is alive, but
-        # long enough that A2DP framing is at risk. Observed pre-freeze gaps
-        # were 0.31-0.43s while healthy gaps stayed 0.01-0.07s, so anything
-        # >= _hb_degraded_warn_s is the earliest visible warning. We also
+        # long enough that traffic is later than the steady-state cadence
+        # explains (see the threshold comment in __init__). We also
         # track the *max* gap seen during each heartbeat window so a brief
         # stall between 10s prints isn't lost to instantaneous sampling.
         "_hb_degraded_warn_s",
@@ -87,13 +88,11 @@ class Bm83:
     OP_EQ_MODE_SETTING = const(0x1C)
     OP_AVRCP_VENDOR_DEP_CMD = const(0x4A)
 
-# endregion
     EVT_BTM_STATUS = const(0x01)
     EVT_EQ_MODE_IND = const(0x10)
     EVT_AVC_VENDOR_RSP = const(0x1A)
     EVT_AVRCP_VENDOR_DEP_RSP = const(0x5D)
 
-# endregion
     MMI_POWER_ON_PRESS = const(0x51)
     MMI_POWER_ON_RELEASE = const(0x52)
     MMI_POWER_OFF_PRESS = const(0x53)
@@ -107,12 +106,12 @@ class Bm83:
     MMI_LINE_IN_GAIN_UP = const(0x82)
     MMI_LINE_IN_GAIN_DOWN = const(0x83)
 
-# endregion
+    MC_PLAY = const(0x05)
+    MC_PAUSE = const(0x06)
     MC_PLAY_PAUSE = const(0x07)
     MC_NEXT = const(0x09)
     MC_PREV = const(0x0A)
 
-# endregion
     EQ_SEQ = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11)
     EQ_L = {
         0: "OFF", 1: "SOFT", 2: "BASS", 3: "TREBLE", 4: "CLASSICAL",
@@ -120,13 +119,16 @@ class Bm83:
     }
     EQ_LABELS = EQ_L  # Alias for test compatibility
     CONNECTED_STATES = (0x06, 0x0B, 0x82, 0x64, 0x65, 0x66)
+    # BTM_Status codes that mean the AVRCP session (or the whole link) is
+    # down: 0x00 Power OFF, 0x0C AVRCP link disconnected, 0x0F Standby,
+    # 0x11 ACL disconnected (datasheet v2.09 §7.2, p.169). Seeing one of
+    # these suspends AVRCP polling until a connected-state event arrives —
+    # commands sent into a half-torn-down or half-established AVRCP channel
+    # are the suspected trigger for the BM83 silently dropping A2DP
+    # (observed live on the b-intel reconnect capture, 2026-08-02).
+    AVRCP_DOWN_STATES = (0x00, 0x0C, 0x0F, 0x11)
 
-# endregion
-    # Loop through items
-# Function: __init__ - Defines the behavior for `__init__`.
     def __init__(self, uart=None):
-# region __init__
-    # __init__ handles   init   logic. #
         self.uart = uart
         # Head-index buffer: advance _rx_head past consumed bytes, compact
         # lazily. Avoids per-frame bytearray slice-reassignment on CP.
@@ -167,6 +169,49 @@ class Bm83:
         self._status_reg_throttle_s = 0.5
         self._last_pos_changed_reg_at = 0.0
         self._pos_reg_throttle_s = 0.5
+        # Deferred AVRCP register-notification queue, serviced by
+        # tick_notif_regs(). Filled by schedule_avrcp_notifications() at the
+        # CONNECTED edge so the initial registrations go out spaced apart
+        # instead of back-to-back — some BM83 firmware revs choke on rapid
+        # register-notification bursts during CT-side establishment and
+        # silently drop the A2DP profile while leaving the BT link up (the
+        # reregister throttles above exist for the same reason; this applies
+        # the same medicine to the *initial* burst on connect).
+        self._pending_notif_regs = []
+        # True while a teardown state (AVRCP_DOWN_STATES) has been seen and
+        # no connected state has arrived since. Gates tick_avrcp /
+        # tick_avrcp_attrs / tick_notif_regs so we stop sending AVRCP
+        # commands into a dead or re-establishing session — the quick
+        # BT off/on reconnect path where the disconnect debounce keeps
+        # self.connected True throughout. Cleared with a settle grace in
+        # note_btm_state when a connected state returns.
+        self._avrcp_suspended = False
+        # A2DP stream-restart kick. After a link bounce the BM83's audio
+        # path can come back MUTED while it still reports source=A2DP and
+        # AVRCP works fine — observed live 2026-08-02 on b-intel: app
+        # playing, metadata/track time updating on the display, zero sound,
+        # chip pinned at 0x82 the whole time. The only recovery that works
+        # is a clean source-side stream restart with a real gap (manual
+        # pause → ~2s → play; a QUICK pause/play does NOT recover it — the
+        # gap is the active ingredient). This one-shot state machine
+        # automates that: armed when AVRCP resumes after a suspension,
+        # fired at the first "playing" status via maybe_stream_kick():
+        # AVRCP PAUSE, wait _kick_gap_s, AVRCP PLAY (datasheet §5.2.4
+        # Music_Control actions 0x06/0x05).
+        #
+        # DISABLED BY DEFAULT after the 2026-08-02 hardware trial: the kick
+        # executed exactly as designed (serial log: pause sent at first
+        # playing, play sent 2.5s later) but did NOT un-mute the audio
+        # path — sink-initiated AVRCP pause/play is evidently not
+        # equivalent to the manual app-side pause → 2s → play that does
+        # recover it. Until a working chip-side re-engage is found, the
+        # uninvited pause at every reconnect isn't worth it. main.py can
+        # opt back in via STREAM_KICK_ENABLED.
+        self.stream_kick_enabled = False
+        self._kick_armed = False
+        self._kick_state = None     # None, or "paused" while waiting to send PLAY
+        self._kick_next_at = 0.0
+        self._kick_gap_s = 2.5
         # If no BTM_Status (or other connection-refreshing event) arrives for this
         # many seconds while we think we're connected, assume the radio went silent
         # and flip to disconnected. The AVRCP-silence heuristic in main.py alone
@@ -193,10 +238,21 @@ class Bm83:
         self._hb_next_at = now + 10.0   # First heartbeat 10s after boot
         self._hb_period_s = 10.0        # Print state at most every 10s
         self._hb_silence_warn_s = 3.0   # Mark RX as SILENT after this gap
-        self._hb_degraded_warn_s = 0.2  # Mark RX as DEGRADED after this gap
+        # DEGRADED threshold. Must sit ABOVE the steady-state traffic
+        # cadence: while connected we poll GetPlayStatus once per second
+        # (_playstatus_period_s), so a healthy window's max inter-byte gap
+        # is ~1.0s by construction. The original 0.2s threshold predated
+        # the 1 Hz poll and flagged every healthy playback window as
+        # DEGRADED (observed on hardware 2026-08-02). 1.4s = poll period
+        # + 0.4s grace; a genuinely late response still trips this well
+        # before the 3.0s SILENT tier.
+        self._hb_degraded_warn_s = 1.4  # Mark RX as DEGRADED after this gap
         self._hb_max_gap_window = 0.0   # Max inter-byte gap in current window
 
-# endregion
+    @property
+    def avrcp_suspended(self):
+        """True while AVRCP traffic is paused during a link teardown/re-establish window."""
+        return self._avrcp_suspended
 
     @property
     def last_rx_at(self):
@@ -211,47 +267,27 @@ class Bm83:
         return self._last_rx_byte_at
 
     @staticmethod
-    # Loop through items
-# Function: _checksum - Defines the behavior for `_checksum`.
     def _checksum(hi, lo, body):
-# region _checksum
-    # _checksum handles  checksum logic. #
-    # Return the result
         return (-((hi + lo + sum(body)) & 0xFF)) & 0xFF
-# endregion
 
-# endregion
     @staticmethod
     def _checksum_range(hi, lo, buf, start, end):
         """Checksum buf[start:end] via memoryview (no allocation on CP)."""
         view = memoryview(buf)[start:end]
         return (-((hi + lo + sum(view)) & 0xFF)) & 0xFF
 
-# endregion
-    # Loop through items
-# Function: _frame - Defines the behavior for `_frame`.
     def _frame(self, op, params=b""):
-# region _frame
-    # _frame handles  frame logic. #
         body = bytes([op]) + params
         ln = len(body)
         hi, lo = (ln >> 8) & 0xFF, ln & 0xFF
         chk = self._checksum(hi, lo, body)
-    # Return the result
         return bytes([0xAA, hi, lo]) + body + bytes([chk])
-# endregion
 
-# endregion
     # Public alias for testing
     def frame(self, op, params=b""):
         return self._frame(op, params)
 
-# endregion
-    # Loop through items
-# Function: _checksum_valid - Validates a checksum
     def _checksum_valid(self, body_with_checksum):
-# region _checksum_valid
-    # _checksum_valid handles checksum validation logic. #
         if len(body_with_checksum) < 2:
             return False
         body = body_with_checksum[:-1]
@@ -260,39 +296,22 @@ class Bm83:
         hi, lo = (ln >> 8) & 0xFF, ln & 0xFF
         expected = self._checksum(hi, lo, body)
         return chk == expected
-# endregion
 
-# endregion
-    # Loop through items
-# Function: send - Defines the behavior for `send`.
     def send(self, op, params=b""):
-# region send
-    # send handles send logic. #
         pkt = self._frame(op, params)
         # Avoid hex formatting when DEBUG is off (hot path, allocates)
         if _utils_common.DEBUG:
             dprint("[BM83 TX]", " ".join("%02X" % b for b in pkt))
-    # Try block to catch exceptions
         try:
             self.uart.write(pkt)
-    # Handle exceptions
         except Exception as e:
             print("[BM83] write err:", e)
 
-# endregion
-    # Loop through items
-# Function: ack_event - Defines the behavior for `ack_event`.
     def ack_event(self, event_op):
-# region ack_event
-    # ack_event handles ack event logic. #
-    # Conditional check
         if event_op == 0x00:
             return
         self.send(self.OP_EVENT_ACK, bytes([event_op & 0xFF]))
 
-# endregion
-    # Loop through items
-# Function: poll - Defines the behavior for `poll`.
     def poll(self, max_read=768, max_events=8):
         """Drain UART, return up to max_events parsed (op, params) tuples.
 
@@ -361,15 +380,9 @@ class Bm83:
             rx = self._rx
             head = 0
         self._rx_head = head
-    # Return the result
         return out
-# endregion
 
-# endregion
-    # Loop through items
-# Function: tick_heartbeat - Periodic UART RX liveness log.
     def tick_heartbeat(self, now=None):
-# region tick_heartbeat
     # tick_heartbeat prints a periodic line so a wedged BM83 UART RX shows
     # up in the log within a few seconds, instead of being inferred silently
     # from missing BTM_Status events. Safe to call every loop iteration —
@@ -423,25 +436,15 @@ class Bm83:
             # Also print during healthy operation so "log went silent" is
             # itself a diagnostic signal (serial CDC dropped, not radio).
             print("[BM83 RX] alive: %.2fs since last byte | free=%d" % (instantaneous_gap, free))
-# endregion
 
-# endregion
-    # Loop through items
-# Function: init_link - Defines the behavior for `init_link`.
     def init_link(self):
-# region init_link
-    # init_link handles init link logic. #
         self.send(self.OP_READ_BD_ADDR)
         self.send(self.OP_EVENT_FILTER, b"\x00\x00\x00\x00")
         self.send(self.OP_BTM_UTILITY_FUNC, b"\x03\x01")
         print("[BM83] Link initialized")
 
-# endregion
-    # Loop through items
-# Function: power_on_cmd - Defines the behavior for `power_on_cmd`.
     def power_on_cmd(self):
-# region power_on_cmd
-    # power_on_cmd handles power on cmd logic (non-blocking state machine). #
+        """Begin the non-blocking power-on sequence (press now, release via tick_power())."""
         # Ignore if state machine already in progress to prevent inconsistent state
         if self._power_state is not None:
             return
@@ -450,12 +453,8 @@ class Bm83:
         self._power_next_at = now + 0.2  # Wait 0.2s before sending release
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_PRESS]))
 
-# endregion
-    # Loop through items
-# Function: power_off_cmd - Defines the behavior for `power_off_cmd`.
     def power_off_cmd(self):
-# region power_off_cmd
-    # power_off_cmd handles power off cmd logic (non-blocking state machine). #
+        """Begin the non-blocking power-off sequence (press now, release via tick_power())."""
         # Ignore if state machine already in progress to prevent inconsistent state
         if self._power_state is not None:
             return
@@ -464,12 +463,8 @@ class Bm83:
         self._power_next_at = now + 1.5  # Wait 1.5s before sending release
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_PRESS]))
 
-# endregion
-    # Loop through items
-# Function: tick_power - Defines the behavior for `tick_power`.
     def tick_power(self):
-# region tick_power
-    # tick_power handles non-blocking power state machine. #
+        """Advance the non-blocking power press/release state machine."""
         if self._power_state is None:
             return
         now = time.monotonic()
@@ -492,31 +487,15 @@ class Bm83:
             self.connected = False
             self._power_state = None
             print("[POWER] OFF (UART)")
-# endregion
 
-# endregion
-    # Loop through items
-# Function: power_toggle - Defines the behavior for `power_toggle`.
     def power_toggle(self):
-# region power_toggle
-    # power_toggle handles power toggle logic. #
         self.power_off_cmd() if self.power_on else self.power_on_cmd()
 
-# endregion
-    # Loop through items
-# Function: pair - Defines the behavior for `pair`.
     def pair(self):
-# region pair
-    # pair handles pair logic. #
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_ENTER_PAIRING]))
         print("[PAIR] Enter pairing")
 
-# endregion
-    # Loop through items
-# Function: play_pause - Defines the behavior for `play_pause`.
     def play_pause(self):
-# region play_pause
-    # play_pause handles play pause logic. #
         # Guard: MC_PLAY_PAUSE is an AVRCP transport command. Sending it
         # while the BM83 is routing AUX IN (audio_source == 0x81) nudges
         # the chip's source state machine toward A2DP and interrupts
@@ -534,30 +513,53 @@ class Bm83:
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PLAY_PAUSE]))
         print("[PLAY/PAUSE] toggled")
 
-# endregion
-    # Loop through items
-# Function: prev - Defines the behavior for `prev`.
     def prev(self):
-# region prev
-    # prev handles prev logic. #
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PREV]))
         print("[PREV] triggered")
 
-# endregion
-    # Loop through items
-# Function: next - Defines the behavior for `next`.
     def next(self):
-# region next
-    # next handles next logic. #
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_NEXT]))
         print("[NEXT] triggered")
 
-# endregion
-    # Loop through items
-# Function: next_eq - Defines the behavior for `next_eq`.
+    def maybe_stream_kick(self):
+        """Fire the one-shot A2DP stream-restart kick if armed.
+
+        Call whenever a "playing" play-status is observed. No-op unless the
+        kick was armed by an AVRCP resume (see note_btm_state). Sends AVRCP
+        PAUSE now; tick_stream_kick() sends PLAY after _kick_gap_s. The gap
+        matters: a quick pause/play does not re-engage the BM83's muted
+        audio path, a ~2s+ gap does (hardware-observed 2026-08-02).
+        """
+        if (not self._kick_armed) or (self._kick_state is not None):
+            return False
+        if self.audio_source == self.AUDIO_SRC_AUX:
+            # AUX routing active — never inject AVRCP transport commands
+            # (same rationale as the play_pause() guard).
+            return False
+        self._kick_armed = False
+        self._kick_state = "paused"
+        self._kick_next_at = time.monotonic() + self._kick_gap_s
+        self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PAUSE]))
+        print("[KICK] stream restart: pause sent, play in %.1fs" % self._kick_gap_s)
+        return True
+
+    def tick_stream_kick(self, now=None):
+        """Send the deferred PLAY half of the stream kick when due."""
+        if self._kick_state is None:
+            return
+        if now is None:
+            now = time.monotonic()
+        if now < self._kick_next_at:
+            return
+        self._kick_state = None
+        if (not self.connected) or self._avrcp_suspended:
+            print("[KICK] aborted (link state changed)")
+            return
+        self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PLAY]))
+        print("[KICK] stream restart: play sent")
+
     def next_eq(self):
-# region next_eq
-    # next_eq handles next eq logic with throttling to prevent UART flood. #
+        """Advance to the next EQ preset; throttled to avoid UART command floods."""
         now = time.monotonic()
         if (now - self._last_eq_cmd_at) < self._eq_throttle_s:
             # Return current mode without sending command (throttled)
@@ -566,9 +568,7 @@ class Bm83:
         self.eq_index = (self.eq_index + 1) % len(self.EQ_SEQ)
         mode = self.EQ_SEQ[self.eq_index]
         self.send(self.OP_EQ_MODE_SETTING, bytes([mode, 0x00]))
-    # Return the result
         return mode
-# endregion
 
     def volume_up(self):
         """Step Line-In input gain up via MMI 0x82.
@@ -606,12 +606,7 @@ class Bm83:
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_LINE_IN_GAIN_UP]))
         print("[AUX] routing kick sent (MMI Line-In gain up)")
 
-# endregion
-    # Loop through items
-# Function: note_btm_state - Defines the behavior for `note_btm_state`.
     def note_btm_state(self, state):
-# region note_btm_state
-    # note_btm_state handles note btm state logic. #
         now = time.monotonic()
         # Audio-source tracking. States 0x80/0x81/0x82 report which audio
         # source the BM83 is currently routing (none / AUX / A2DP). They are
@@ -625,19 +620,43 @@ class Bm83:
             self.audio_source = state
             if state not in self.CONNECTED_STATES:
                 return None
-    # Conditional check
+        # AVRCP session suspend/resume. A quick BT off/on on the central
+        # tears the session down and back up faster than the disconnect
+        # debounce below flips self.connected, so without this gate the
+        # 1 Hz GetPlayStatus polling keeps firing straight through AVRCP
+        # re-establishment — commands landing on a half-established channel
+        # are the suspected trigger for the BM83 silently dropping A2DP at
+        # the first play after reconnect (b-intel capture, 2026-08-02:
+        # 0x0C 0x08 0x11 0x0F 0x01 then 0x15 0x06 0x0B).
+        if state in self.AVRCP_DOWN_STATES:
+            if not self._avrcp_suspended:
+                self._avrcp_suspended = True
+                # Registrations queued for the old session are meaningless
+                # now; main.py re-arms a fresh staggered set on 0x0B. An
+                # in-flight stream kick is aborted too — never send its
+                # PLAY into a dead link.
+                self._pending_notif_regs = []
+                self._kick_state = None
+                print("[BTM] AVRCP down (0x%02X) -> pausing AVRCP polling" % state)
         if state in self.CONNECTED_STATES:
             self._last_connected_seen = now
-    # Conditional check
+            if self._avrcp_suspended:
+                self._avrcp_suspended = False
+                # Resume only after the link settles; polling the instant
+                # the channel reappears is the burst we're avoiding. If the
+                # experimental stream kick is enabled, arm it: the first
+                # play after a link bounce is where the muted-path wedge
+                # lives.
+                self._next_playstatus_at = now + 1.5
+                if self.stream_kick_enabled:
+                    self._kick_armed = True
+                    print("[BTM] AVRCP link back -> resume polling in 1.5s, stream kick armed")
+                else:
+                    print("[BTM] AVRCP link back -> resume polling in 1.5s")
             if not self.connected:
                 self.connected = True
-    # Return the result
                 return "CONNECTED"
-# endregion
-    # Return the result
             return None
-# endregion
-    # Conditional check
         if self.connected and (now - self._last_connected_seen) > self._disconnect_hold_s:
             self.connected = False
             # Clear cached audio_source so should_show_aux() falls back to
@@ -647,12 +666,10 @@ class Bm83:
             # last A2DP session, the UI will wrongly stay in "A2DP" mode
             # while the user is actually listening to Line-In.
             self.audio_source = None
-    # Return the result
+            self._kick_armed = False
+            self._kick_state = None
             return "DISCONNECTED"
-# endregion
-    # Return the result
         return None
-# endregion
 
     def should_show_aux(self):
         """Return True when the UI should show AUX IN indicators.
@@ -694,52 +711,72 @@ class Bm83:
             self.connected = False
             # See note in note_btm_state(): clear so AUX fallback re-engages.
             self.audio_source = None
+            self._kick_armed = False
+            self._kick_state = None
             return "DISCONNECTED"
         return None
 
-# endregion
     @staticmethod
-    # Loop through items
-# Function: _avc_payload - Defines the behavior for `_avc_payload`.
     def _avc_payload(pdu, params):
-# region _avc_payload
-    # _avc_payload handles  avc payload logic. #
-    # Return the result
         return bytes([pdu, 0x00]) + len(params).to_bytes(2, "big") + params
-# endregion
 
-# endregion
-    # Loop through items
-# Function: avrcp_get_play_status - Defines the behavior for `avrcp_get_play_status`.
     def avrcp_get_play_status(self, db=0):
-# region avrcp_get_play_status
-    # avrcp_get_play_status handles avrcp get play status logic. #
         self.send(self.OP_AVC_VENDOR_CMD, bytes([db]) + self._avc_payload(0x30, b""))
 
-# endregion
-    # Loop through items
-# Function: avrcp_register_notification - Defines the behavior for `avrcp_register_notification`.
     def avrcp_register_notification(self, event_id, interval_s=0, db=0):
-# region avrcp_register_notification
-    # avrcp_register_notification handles avrcp register notification logic. #
         params = bytes([event_id]) + int(interval_s).to_bytes(4, "big")
         self.send(self.OP_AVC_VENDOR_CMD, bytes([db]) + self._avc_payload(0x31, params))
 
-# endregion
-    # Loop through items
-# Function: avrcp_reregister_track_changed - Re-register TrackChanged with throttle
+    def schedule_avrcp_notifications(self, specs):
+        """Queue register-notification calls to go out later, spaced apart.
+
+        ``specs`` is an iterable of ``(delay_s, event_id, interval_s)``.
+        Replaces any previously queued registrations. Serviced by
+        tick_notif_regs() from the main loop; self-clears if the link drops
+        so a pending registration is never fired into a dead link.
+        """
+        now = time.monotonic()
+        self._pending_notif_regs = [
+            (now + d, event_id, interval_s) for (d, event_id, interval_s) in specs
+        ]
+
+    def tick_notif_regs(self, now=None):
+        """Send any due deferred notification registrations.
+
+        Cheap no-op while the queue is empty (the common case). Call every
+        main-loop iteration, like the other tick_* methods.
+        """
+        pending = self._pending_notif_regs
+        if not pending:
+            return
+        if not self.connected:
+            # Link went away while registrations were queued — drop them.
+            # The next CONNECTED edge schedules a fresh set.
+            self._pending_notif_regs = []
+            return
+        if self._avrcp_suspended:
+            # AVRCP session is down/re-establishing; the suspend path in
+            # note_btm_state already dropped the queue, but guard anyway.
+            return
+        if now is None:
+            now = time.monotonic()
+        remaining = []
+        for item in pending:
+            if now >= item[0]:
+                self.avrcp_register_notification(item[1], interval_s=item[2])
+            else:
+                remaining.append(item)
+        self._pending_notif_regs = remaining
+
     def avrcp_reregister_track_changed(self, db=0):
-# region avrcp_reregister_track_changed
-    # Throttled re-registration for TrackChanged to prevent feedback loops. #
+        """Throttled re-registration for TrackChanged to prevent feedback loops."""
         now = time.monotonic()
         if (now - self._last_track_changed_reg_at) < self._track_changed_reg_throttle_s:
             return False  # Throttled
         self._last_track_changed_reg_at = now
         self.avrcp_register_notification(0x02, interval_s=0, db=db)
         return True
-# endregion
 
-# Function: avrcp_reregister_status_changed - Throttled re-register PlaybackStatusChanged
     def avrcp_reregister_status_changed(self, db=0):
         """Throttled re-registration for PlaybackStatusChanged.
 
@@ -754,7 +791,6 @@ class Bm83:
         self.avrcp_register_notification(0x01, interval_s=0, db=db)
         return True
 
-# Function: avrcp_reregister_position_changed - Throttled re-register PlaybackPositionChanged
     def avrcp_reregister_position_changed(self, interval_s=1, db=0):
         """Throttled re-registration for PlaybackPositionChanged. See above."""
         now = time.monotonic()
@@ -764,15 +800,9 @@ class Bm83:
         self.avrcp_register_notification(0x05, interval_s=interval_s, db=db)
         return True
 
-# endregion
-    # Loop through items
-# Function: avrcp_get_element_attributes - Defines the behavior for `avrcp_get_element_attributes`.
     def avrcp_get_element_attributes(self, db=0):
-# region avrcp_get_element_attributes
-    # avrcp_get_element_attributes handles avrcp get element attributes logic. #
         self.send(self.OP_AVRCP_VENDOR_DEP_CMD, bytes([db, 0x20]) + _AVRCP_ATTR_PAYLOAD)
 
-# endregion
     def schedule_play_status(self, delay_s=0.05):
         """Request the next AVRCP GetPlayStatus poll after ``delay_s`` seconds.
 
@@ -781,41 +811,27 @@ class Bm83:
         """
         self._next_playstatus_at = time.monotonic() + delay_s
 
-    # Loop through items
-# Function: schedule_attrs - Defines the behavior for `schedule_attrs`.
     def schedule_attrs(self, delay_s=0.35, force=False):
-# region schedule_attrs
-    # schedule_attrs handles schedule attrs logic. #
         now = time.monotonic()
-    # Conditional check
         if (not force) and (now - self._last_attrs_req_at) < self._attrs_throttle_s:
             return False
         t = now + delay_s
-    # Conditional check
         if self._next_attrs_at == 0.0 or t < self._next_attrs_at:
             self._next_attrs_at = t
             return True
         return False
 
-# endregion
-    # Loop through items
-# Function: tick_avrcp - Defines the behavior for `tick_avrcp`.
     def tick_avrcp(self):
-# region tick_avrcp
-    # tick_avrcp handles tick avrcp logic. #
-    # Conditional check
-        if not self.connected:
+        if (not self.connected) or self._avrcp_suspended:
             return
         now = time.monotonic()
-    # Conditional check
         if now >= self._next_playstatus_at:
             self.avrcp_get_play_status(0)
             self._next_playstatus_at = now + self._playstatus_period_s
         self.tick_avrcp_attrs(now)
 
-# endregion
     def tick_avrcp_attrs(self, now=None):
-        if (not self.connected) or (self._next_attrs_at == 0.0):
+        if (not self.connected) or self._avrcp_suspended or (self._next_attrs_at == 0.0):
             return False
         if now is None:
             now = time.monotonic()
@@ -826,56 +842,31 @@ class Bm83:
             return True
         return False
 
-# endregion
     @staticmethod
-    # Loop through items
-# Function: parse_avc_vendor_rsp - Defines the behavior for `parse_avc_vendor_rsp`.
     def parse_avc_vendor_rsp(params):
-# region parse_avc_vendor_rsp
-    # parse_avc_vendor_rsp handles parse avc vendor rsp logic. #
-    # Conditional check
         if len(params) < 1 + 10:
-    # Return the result
             return None
-# endregion
         db = params[0]
         p = params[1:]
         pdu = p[6]
         pkt_type = p[7]
         plen = int.from_bytes(p[8:10], "big")
-    # Conditional check
         if len(p) < 10 + plen:
-    # Return the result
             return None
-# endregion
-    # Return the result
         return db, pdu, pkt_type, p[10 : 10 + plen]
-# endregion
 
-# endregion
-    # Loop through items
-# Function: parse_gea_0x5d - Defines the behavior for `parse_gea_0x5d`.
     def parse_gea_0x5d(self, params):
-# region parse_gea_0x5d
-    # parse_gea_0x5d handles parse gea 0x5d logic. #
-    # Conditional check
         if len(params) < 2:
-    # Return the result
             return None
-# endregion
         pdu_id = params[0]
         payload = params[2:]
-    # Conditional check
         if pdu_id != 0x20 or len(payload) < 5:
-    # Return the result
             return None
-# endregion
         resp = payload[0]
         is_end = payload[1]
         attr_num = payload[2]
         total_len = int.from_bytes(payload[3:5], "big")
         part = payload[5:]
-    # Conditional check
         if total_len <= 0:
             self._gea_frag = bytearray()
             self._gea_expect_len = None
@@ -904,11 +895,8 @@ class Bm83:
         if len(self._gea_frag) > self._gea_expect_len:
             dprint("[META] trim oversized GEA frag %d>%d" % (len(self._gea_frag), self._gea_expect_len))
             self._gea_frag = self._gea_frag[: self._gea_expect_len]
-    # Conditional check
         if is_end != 0x01:
-    # Return the result
             return None
-# endregion
         if len(self._gea_frag) < self._gea_expect_len:
             dprint("[META] drop short final GEA %d<%d" % (len(self._gea_frag), self._gea_expect_len))
             self._gea_frag = bytearray()
@@ -921,9 +909,7 @@ class Bm83:
         self._gea_frag_at = 0.0
         attrs = {}
         idx = 0
-    # Loop through items
         for _ in range(attr_num):
-    # Conditional check
             if idx + 8 > len(full):
                 dprint("[META] truncated GEA header at", idx)
                 break
@@ -934,23 +920,16 @@ class Bm83:
                 break
             val = full[idx + 8 : idx + 8 + vlen]
             idx += 8 + vlen
-    # Try block to catch exceptions
             try:
                 s = val.decode("utf-8", "replace").strip()
-    # Handle exceptions
             except UnicodeError:
                 s = "".join(chr(b) if 32 <= b <= 126 else " " for b in val).strip()
             attrs[aid] = s
-    # Return the result
         return resp, attrs
-# endregion
 
-# endregion
     @staticmethod
-# Function: parse_avrcp_metadata - Parses simple AVRCP metadata for tests
     def parse_avrcp_metadata(data):
-# region parse_avrcp_metadata
-    # parse_avrcp_metadata handles simple parsing logic for tests. #
+        """Simplified single-attribute AVRCP parser used only by host tests."""
         if len(data) < 3:
             return {}
 
@@ -968,4 +947,3 @@ class Bm83:
         if attr_id in _AVRCP_ATTR_NAMES:
             result[_AVRCP_ATTR_NAMES[attr_id]] = text
         return result
-    # endregion

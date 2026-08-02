@@ -222,3 +222,36 @@ def test_nextion_token_with_leading_garbage():
     # Should extract clean token without the leading bytes
     assert len(tokens) == 1
     assert tokens[0] == b"BT_PLAY"
+
+
+def test_nextion_rx_buffer_capped_on_termless_garbage():
+    """A line feeding TERM-less garbage must not grow the RX buffer forever.
+
+    Regression for the unbounded-buffer finding in the 2026-08 review: a
+    disconnected display / floating RX pin / wrong baud can stream bytes
+    that never contain the 0xFF 0xFF 0xFF terminator; without a cap the
+    buffer grows ~960 B/s at 9600 baud until the heap starves.
+    """
+    uart = DummyUART()
+    nx = Nextion(uart)
+    for _ in range(200):
+        uart.to_read += b"\x00" * 200
+        uart.in_waiting = len(uart.to_read)
+        nx.read()
+    assert len(nx.rx_buffer) <= 512
+
+
+def test_nextion_rx_cap_still_parses_tokens_after_trim():
+    """After a garbage flood triggers the trim, real frames must still parse."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read += b"\x00" * 2000  # flood with TERM-less noise
+    uart.in_waiting = len(uart.to_read)
+    nx.read()
+    uart.to_read += b"BT_PLAY\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+    tokens = []
+    for _ in range(20):  # read() pulls <=256 bytes per call
+        got, _ = nx.read()
+        tokens.extend(got)
+    assert b"BT_PLAY" in tokens

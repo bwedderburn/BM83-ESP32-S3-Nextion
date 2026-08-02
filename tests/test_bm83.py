@@ -511,3 +511,207 @@ def test_btm_silence_timeout_default_is_90s():
     """The watchdog default tolerates idle pauses (>=90s)."""
     bm = Bm83(None)
     assert bm._btm_silence_timeout_s >= 90.0
+
+
+def _sent_ops(uart):
+    """Extract (op, params) for frames written to a MockUART."""
+    out = []
+    for pkt in uart.writes:
+        # AA hi lo op params... chk
+        out.append((pkt[3], bytes(pkt[4:-1])))
+    return out
+
+
+def test_schedule_avrcp_notifications_staggers_registrations(monkeypatch):
+    """Initial notification registrations go out spaced apart, not as a burst.
+
+    Some BM83 firmware revs choke on rapid register-notification bursts
+    during CT-side establishment and silently drop the A2DP profile
+    (see the reregister throttles); the CONNECTED edge therefore queues
+    the initial registrations and tick_notif_regs() releases them on
+    schedule instead of sending all three back-to-back.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+
+    t = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.schedule_avrcp_notifications(((0.25, 0x01, 0), (0.75, 0x02, 0), (1.25, 0x05, 1)))
+    bm.tick_notif_regs()
+    assert uart.writes == []  # nothing due yet
+
+    t[0] = 1000.3
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 1  # only the 0x01 registration
+
+    t[0] = 1000.8
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 2
+
+    t[0] = 1001.3
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 3
+    assert bm._pending_notif_regs == []
+
+    # RegisterNotification PDU 0x31 with the right event ids, in order
+    events = []
+    for op, params in _sent_ops(uart):
+        assert op == Bm83.OP_AVC_VENDOR_CMD
+        assert params[1] == 0x31  # pdu id after the db byte
+        events.append(params[5])  # event id: db, pdu, 0x00, len_hi, len_lo, event
+    assert events == [0x01, 0x02, 0x05]
+
+
+def test_tick_notif_regs_drops_queue_when_link_lost(monkeypatch):
+    """Pending registrations must never fire into a dead link."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+
+    t = [2000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.schedule_avrcp_notifications(((0.25, 0x01, 0),))
+    bm.connected = False  # link drops before anything is due
+    t[0] = 2005.0
+    bm.tick_notif_regs()
+    assert uart.writes == []
+    assert bm._pending_notif_regs == []
+
+
+def test_avrcp_suspends_polling_through_reconnect(monkeypatch):
+    """Quick BT off/on: polling pauses at teardown, resumes with settle grace.
+
+    Live b-intel capture 2026-08-02: teardown states (0x0C 0x08 0x11 0x0F)
+    arrive faster than the disconnect debounce flips connected, so without
+    the suspend gate the 1 Hz GetPlayStatus polling fires straight through
+    AVRCP re-establishment — the suspected first-play-after-reconnect
+    A2DP killer.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [3000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    assert bm.note_btm_state(0x06) == "CONNECTED"
+    bm._next_playstatus_at = t[0]  # a poll is due right now
+    baseline = len(uart.writes)
+
+    # AVRCP teardown arrives while the debounce still holds connected=True
+    assert bm.note_btm_state(0x0C) is None
+    assert bm.connected is True
+    assert bm.avrcp_suspended is True
+    bm.tick_avrcp()
+    assert len(uart.writes) == baseline  # no poll into the dead session
+
+    # Link re-established -> resume, but only after the 1.5s settle grace
+    t[0] += 5.0
+    bm.note_btm_state(0x0B)
+    assert bm.avrcp_suspended is False
+    bm.tick_avrcp()
+    assert len(uart.writes) == baseline  # still inside the grace window
+    t[0] += 1.6
+    bm.tick_avrcp()
+    assert len(uart.writes) == baseline + 1  # polling resumed
+
+
+def test_teardown_drops_pending_notif_regs(monkeypatch):
+    """Registrations queued for a session that died must not fire later."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [4000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.note_btm_state(0x06)
+    bm.schedule_avrcp_notifications(((0.25, 0x01, 0), (0.75, 0x02, 0)))
+    bm.note_btm_state(0x11)  # ACL disconnected mid-stagger
+    assert bm._pending_notif_regs == []
+    t[0] += 10.0
+    bm.tick_notif_regs()
+    assert uart.writes == []
+
+
+def test_stream_kick_fires_once_after_resume(monkeypatch):
+    """Reconnect -> resume arms the kick; first 'playing' sends PAUSE then PLAY.
+
+    Live b-intel evidence 2026-08-02: after a link bounce the BM83 reports
+    source=A2DP and AVRCP works, but audio stays muted until the source
+    does a stream restart with a real gap. The kick automates the manual
+    pause -> ~2s -> play recovery.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.stream_kick_enabled = True
+    t = [5000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.note_btm_state(0x06)            # connected
+    bm.note_btm_state(0x0C)            # teardown -> suspended
+    t[0] += 5.0
+    bm.note_btm_state(0x0B)            # resume -> kick armed
+    baseline = len(uart.writes)
+
+    assert bm.maybe_stream_kick() is True
+    pkt = uart.writes[baseline]
+    assert pkt[3] == Bm83.OP_MUSIC_CONTROL and pkt[4:6] == bytes([0x00, Bm83.MC_PAUSE])
+
+    bm.tick_stream_kick()              # gap not elapsed yet
+    assert len(uart.writes) == baseline + 1
+    t[0] += 2.6
+    bm.tick_stream_kick()
+    pkt = uart.writes[baseline + 1]
+    assert pkt[3] == Bm83.OP_MUSIC_CONTROL and pkt[4:6] == bytes([0x00, Bm83.MC_PLAY])
+
+    assert bm.maybe_stream_kick() is False  # strictly one-shot
+
+
+def test_stream_kick_not_armed_on_cold_connect(monkeypatch):
+    """A fresh connect (no prior suspension) must not trigger the kick."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [6000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.note_btm_state(0x06)
+    assert bm.maybe_stream_kick() is False
+    assert uart.writes == []
+
+
+def test_stream_kick_aborts_if_link_drops_mid_gap(monkeypatch):
+    """The deferred PLAY must never be sent into a dead/suspended link."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.stream_kick_enabled = True
+    t = [7000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.note_btm_state(0x06)
+    bm.note_btm_state(0x0C)
+    t[0] += 5.0
+    bm.note_btm_state(0x0B)
+    bm.maybe_stream_kick()
+    sent_before = len(uart.writes)
+    bm.note_btm_state(0x11)            # ACL drops during the gap
+    t[0] += 3.0
+    bm.tick_stream_kick()
+    assert len(uart.writes) == sent_before  # no PLAY into the dead link
+
+
+def test_stream_kick_disabled_by_default(monkeypatch):
+    """Ships OFF: a resume must not arm the kick unless explicitly enabled.
+
+    2026-08-02 hardware trial: the kick executed correctly but did not
+    recover the muted audio path, so it is opt-in via main.py's
+    STREAM_KICK_ENABLED until a working chip-side re-engage is found.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [8000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.note_btm_state(0x06)
+    bm.note_btm_state(0x0C)
+    t[0] += 5.0
+    bm.note_btm_state(0x0B)
+    assert bm._kick_armed is False
+    assert bm.maybe_stream_kick() is False
+    assert uart.writes == []

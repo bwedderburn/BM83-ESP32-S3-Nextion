@@ -3,7 +3,6 @@ import time
 import board
 import busio
 
-# endregion
 from utils.common import (
     TIME_UNKNOWN,
     dprint,
@@ -16,7 +15,6 @@ from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
 
-# endregion
 NX_BAUD = 9600
 BM83_BAUD = 115200
 NX_TX, NX_RX = board.IO15, board.IO16
@@ -37,26 +35,27 @@ VOL_HOLD_MAX_S = 6.65
 BLE_ENABLED = True
 BLE_NAME = "B's Groovy BT CTRL"
 
-# endregion
-# Function: main - Defines the behavior for `main`.
+# Experimental: automatic A2DP stream-restart kick after a BT reconnect
+# (AVRCP pause -> 2.5s -> play at the first "playing" status). Hardware
+# trial 2026-08-02: fired exactly as designed but did NOT un-mute the
+# BM83's audio path, and the uninvited pause at every reconnect is a real
+# UX cost — so it ships OFF. The muted-path wedge workaround remains
+# manual for now: in the source app, pause, wait ~2s, play.
+STREAM_KICK_ENABLED = False
+
 def main():
-# region main
-## main handles main logic. #
     gc.collect()
 
-# endregion
     nx_uart = busio.UART(NX_TX, NX_RX, baudrate=NX_BAUD, timeout=0.0, receiver_buffer_size=1024)
     bm_uart = busio.UART(BM83_TX, BM83_RX, baudrate=BM83_BAUD, timeout=0.0, receiver_buffer_size=8192)
 
-# endregion
     nx = Nextion(nx_uart)
     bm = Bm83(bm_uart)
+    bm.stream_kick_enabled = STREAM_KICK_ENABLED
 
-# endregion
     ble = BleHid(BLE_ENABLED, BLE_NAME)
     ble.setup()
 
-# endregion
     # Local bindings for speed/low allocation on mpy
     monotonic = time.monotonic
     sleep = time.sleep
@@ -66,6 +65,8 @@ def main():
     bm_poll = bm.poll
     bm_ack = bm.ack_event
     bm_tick_power = bm.tick_power
+    bm_tick_notif_regs = bm.tick_notif_regs
+    bm_tick_stream_kick = bm.tick_stream_kick
     bm_tick_avrcp = bm.tick_avrcp
     bm_tick_avrcp_attrs = bm.tick_avrcp_attrs
     bm_tick_heartbeat = bm.tick_heartbeat
@@ -97,15 +98,11 @@ def main():
         else:
             ble_volume(up)
 
-# endregion
     print("=== ESP32-S3 BM83 + Nextion + BLE HID (smart-routed volume) ===")
 
-# endregion
     nx.boot_sync(0.9)
 
-# endregion
     desired_eq = "OFF"
-    # Loop through items
     desired_meta = {}
     for k in NX_RUNTIME.keys():
         desired_meta[k] = TIME_UNKNOWN if k in ("time_cur", "time") else "—"
@@ -114,7 +111,6 @@ def main():
     aux_mode_prev = False
     avrcp_notifs_registered = False
 
-# endregion
     # AVRCP polling cadence while in AUX mode (no BT link). Probes GetPlayStatus
     # every few seconds to detect BT reconnecting without spamming the BM83.
     AVRCP_PROBE_PERIOD_S = 3.0
@@ -143,29 +139,26 @@ def main():
     ebind_min_interval_s = 2.0
     last_ebind_at = 0.0
 
-# endregion
     META_UPDATE_ORDER = ("title", "artist", "album", "genre", "track_num", "total_tracks", "time_cur", "time")
     TRACK_STALE_KEYS = ("album", "genre", "track_num", "total_tracks", "time_cur", "time")
     PLAYING_STATES = (0x01, 0x03, 0x04)
+    # BTM_Status codes for link teardown / AVRCP re-establishment.
+    # Datasheet AudioUARTCommandSet v2.09 §7.2 (p.169): 0x00 Power OFF,
+    # 0x08 A2DP link disconnected, 0x0C AVRCP link disconnected,
+    # 0x0F Standby, 0x11 ACL disconnected, 0x0B AVRCP link established.
+    BTM_TEARDOWN_STATES = (0x00, 0x08, 0x0C, 0x0F, 0x11)
+    BTM_AVRCP_LINK_UP = 0x0B
 
-    # Loop through items
-# Function: flush_page - Defines the behavior for `flush_page`.
     def flush_page(pageid):
-# region flush_page
-    # flush_page handles flush page logic. #
-    # Conditional check
         if pageid == 0:
             nx_set_text(EQ_OBJ_PAGE0, desired_eq)
             nx_set_text(AUX_OBJ_PAGE0, desired_aux)
-    # Conditional check
         elif pageid == 1:
             nx_set_text(EQ_OBJ_PAGE1, desired_eq)
             nx_set_text(AUX_OBJ_PAGE1, desired_aux)
-    # Loop through items
             for k, obj in NX_RUNTIME.items():
                 nx_set_text(obj, desired_meta.get(k, "—"))
 
-# endregion
     def push_meta_updates(keys):
         if nx.current_page != 1 or aux_mode or not keys:
             return
@@ -173,13 +166,11 @@ def main():
             if key in keys:
                 nx_set_text(NX_RUNTIME[key], desired_meta[key])
 
-
     def meta_set(key, value, changed):
         if value is None or desired_meta.get(key) == value:
             return
         desired_meta[key] = value
         changed.append(key)
-
 
     def invalidate_track_meta(clear_primary=False):
         changed = []
@@ -190,29 +181,19 @@ def main():
             meta_set(key, TIME_UNKNOWN if key in ("time_cur", "time") else "—", changed)
         return changed
 
-
     def primary_metadata_missing():
         return desired_meta.get("title") == "—" or desired_meta.get("artist") == "—"
 
-    # Loop through items
-# Function: maybe_track_changed - Defines the behavior for `maybe_track_changed`.
     def maybe_track_changed(pos_ms, total_ms):
-# region maybe_track_changed
-    # maybe_track_changed handles maybe track changed logic. #
         nonlocal last_pos_ms, last_total_ms
-    # Conditional check
         if pos_ms is None:
             last_pos_ms = pos_ms
             if total_ms is not None and total_ms > 0:
                 last_total_ms = total_ms
-    # Return the result
             return False
-# endregion
         changed = False
-    # Conditional check
         if total_ms is not None and total_ms > 0 and last_total_ms and last_total_ms > 0 and total_ms != last_total_ms:
             changed = True
-    # Conditional check
         if last_pos_ms is not None and (pos_ms + 2500) < last_pos_ms and pos_ms < 3000:
             changed = True
         last_pos_ms = pos_ms
@@ -220,16 +201,9 @@ def main():
             last_total_ms = total_ms if total_ms is not None and total_ms > 0 else None
         elif total_ms is not None and total_ms > 0:
             last_total_ms = total_ms
-    # Return the result
         return changed
-# endregion
 
-# endregion
-    # Loop through items
-# Function: enter_aux_mode - Defines the behavior for `enter_aux_mode`.
     def enter_aux_mode():
-# region enter_aux_mode
-    # enter_aux_mode handles enter aux mode logic. #
         nonlocal desired_aux, last_play_status, last_pos_ms, last_total_ms
         desired_aux = "AUX IN"
         invalidate_track_meta(clear_primary=True)
@@ -237,55 +211,46 @@ def main():
         last_pos_ms = None
         last_total_ms = None
 
-# endregion
-    # Loop through items
-# Function: exit_aux_mode - Defines the behavior for `exit_aux_mode`.
     def exit_aux_mode():
-# region exit_aux_mode
-    # exit_aux_mode handles exit aux mode logic. #
         nonlocal desired_aux
         desired_aux = ""
         bm.schedule_play_status(0.05)
         bm.schedule_attrs(0.3)
 
-# endregion
     last_gc = monotonic()
     gc_interval_s = 4.0  # Empirically chosen: 4s strikes a balance between GC overhead and memory pressure
     # On this workload (BM83 + Nextion event floods), 8s GC caused occasional alloc failures,
     # while <=2s GC increased pause time without reducing peak usage further. Tweak if patterns change.
 
-# endregion
-    # While loop execution
     while True:
         now = monotonic()
-    # Conditional check
         if now - last_gc > gc_interval_s:
             gc.collect()
             last_gc = now
 
-# endregion
         nx_tick()
         tokens, page_changed = nx_read()
-    # Conditional check
         if page_changed and nx.current_page is not None:
             dprint("[NX] page=", nx.current_page)
             flush_page(nx.current_page)
 
-# endregion
         ble_tick()
 
-# endregion
         # UART RX heartbeat — self-throttled (~10s), surfaces BM83 freezes
         # and USB CDC drops in the log. Pass `now` so every ticker shares
         # the same time base and we don't pay an extra time.monotonic()
         # per main-loop iteration.
         bm_tick_heartbeat(now)
 
-# endregion
         # Tick non-blocking power state machine
         bm_tick_power()
 
-# endregion
+        # Service deferred AVRCP notification registrations (see the
+        # CONNECTED handler below for why these are staggered), and the
+        # deferred PLAY half of the stream-restart kick.
+        bm_tick_notif_regs(now)
+        bm_tick_stream_kick(now)
+
         # aux_mode is driven by the BM83's own audio-source reporting.
         # Datasheet "AudioUARTCommandSet v2.09" 7.2 BTM_Status describes
         # states 0x80/0x81/0x82 = current audio source is (none / AUX / A2DP).
@@ -294,11 +259,8 @@ def main():
         # for the window between boot and the first source event.
         aux_mode = bm.should_show_aux()
 
-# endregion
-    # Conditional check
         if aux_mode != aux_mode_prev:
             aux_mode_prev = aux_mode
-    # Conditional check
             if aux_mode:
                 print("[AUX] inferred -> gating AVRCP polling, showing AUX indicators")
                 enter_aux_mode()
@@ -310,19 +272,20 @@ def main():
             else:
                 print("[AUX] cleared -> enabling AVRCP polling, hiding AUX indicators")
                 exit_aux_mode()
-    # Refresh current page to update AUX indicator
+            # Refresh current page to update AUX indicator
             flush_page(nx.current_page)
 
-# endregion
-    # Conditional check
         if not aux_mode:
             bm_tick_avrcp()
         else:
-    # Conditional check
-            if bm.connected and now >= next_avrcp_probe_at:
-                next_avrcp_probe_at = now + AVRCP_PROBE_PERIOD_S
-                bm_avrcp_get_play_status(0)
-            if bm.connected:
+            # Probe/attrs only when the AVRCP session is actually up —
+            # avrcp_suspended covers the teardown/re-establish window where
+            # bm.connected is still True but commands would land on a dead
+            # or half-established channel.
+            if bm.connected and not bm.avrcp_suspended:
+                if now >= next_avrcp_probe_at:
+                    next_avrcp_probe_at = now + AVRCP_PROBE_PERIOD_S
+                    bm_avrcp_get_play_status(0)
                 bm_tick_avrcp_attrs()
 
         # Watchdog: if the BM83 has gone silent for a long time while we still
@@ -332,51 +295,70 @@ def main():
             avrcp_notifs_registered = False
             last_play_status = None
 
-# endregion
-    # Loop through items
         for op, params in bm_poll():
             bm_ack(op)
-    # Conditional check
             if op == bm.EVT_BTM_STATUS and params:
                 state = params[0]
                 print("[BTM_Status] state=0x%02X" % state)
                 change = bm.note_btm_state(state)
-    # Conditional check
-                if change == "CONNECTED" and not avrcp_notifs_registered:
+                # AVRCP notification registrations live on the AVRCP session,
+                # not the BT bond: a quick BT off/on on the central tears the
+                # session down and back up faster than the disconnect debounce
+                # flips bm.connected, so `change` stays None and the old code
+                # never re-registered — the new session then delivered no
+                # PlaybackStatusChanged / TrackChanged events. Observed live
+                # on b-intel 2026-08-02 (0x0C 0x08 0x11 0x0F 0x01 → 0x15 0x06
+                # 0x0B with no re-registration). Clear the flag on teardown
+                # states and re-arm when the AVRCP channel comes (back) up;
+                # re-registering on a live session is harmless (TG replies
+                # INTERIM again).
+                if state in BTM_TEARDOWN_STATES and avrcp_notifs_registered:
+                    print("[BTM] link teardown (0x%02X) -> will re-register on next AVRCP link" % state)
+                    avrcp_notifs_registered = False
+                if (change == "CONNECTED" or state == BTM_AVRCP_LINK_UP) and not avrcp_notifs_registered:
                     print("[BTM] Connected -> register notifications + request metadata")
-                    bm.avrcp_register_notification(0x01, interval_s=0)
-                    bm.avrcp_register_notification(0x02, interval_s=0)
-                    bm.avrcp_register_notification(0x05, interval_s=1)
-                    bm.schedule_play_status(0.05)
-                    bm.schedule_attrs(0.8)
+                    # Stagger the initial registrations instead of sending all
+                    # three back-to-back. Some BM83 firmware revs choke on
+                    # rapid register-notification bursts during CT-side
+                    # establishment and silently drop the A2DP profile while
+                    # leaving the BT link up (same failure mode the
+                    # reregister throttles in bm83.py guard against; this is
+                    # the initial-burst counterpart). Suspected trigger for
+                    # "first play after a fresh (re)connect stalls after a
+                    # few seconds" on the Windows / Apple Music central.
+                    bm.schedule_avrcp_notifications((
+                        (0.25, 0x01, 0),   # PlaybackStatusChanged
+                        (0.75, 0x02, 0),   # TrackChanged
+                        (1.25, 0x05, 1),   # PlaybackPositionChanged, 1s interval
+                    ))
+                    bm.schedule_play_status(1.6)
+                    bm.schedule_attrs(2.0)
                     avrcp_notifs_registered = True
                 elif change == "DISCONNECTED":
                     avrcp_notifs_registered = False
                     last_play_status = None
-    # Conditional check
             elif op == bm.EVT_EQ_MODE_IND and params:
                 mode = params[0]
                 desired_eq = eq_labels.get(mode, "OFF")
                 dprint("[EQ_IND] mode=%d label=%s" % (mode, desired_eq))
-    # Conditional check
                 if nx.current_page is not None:
                     flush_page(nx.current_page)
-    # Conditional check
             elif op == bm.EVT_AVC_VENDOR_RSP:
                 parsed = bm.parse_avc_vendor_rsp(params)
-    # Conditional check
                 if not parsed:
                     continue
                 _db, pdu, pkt_type, avp = parsed
-    # Conditional check
                 if pkt_type != 0x00:
                     continue
                 last_avrcp_rx_at = time.monotonic()
-    # Conditional check
                 if pdu == 0x30 and len(avp) >= 9:
                     total_ms = _normalize_track_time_ms(int.from_bytes(avp[0:4], "big"))
                     pos_ms = _normalize_track_time_ms(int.from_bytes(avp[4:8], "big"))
                     last_play_status = avp[8]
+                    if last_play_status in PLAYING_STATES:
+                        # First "playing" after an AVRCP resume fires the
+                        # one-shot muted-path stream kick (no-op otherwise).
+                        bm.maybe_stream_kick()
                     changed = []
                     if maybe_track_changed(pos_ms, total_ms):
                         changed.extend(invalidate_track_meta())
@@ -389,15 +371,15 @@ def main():
                     if total_ms is not None and total_ms > 0:
                         meta_set("time", _fmt_ms(total_ms), changed)
                     push_meta_updates(changed)
-    # Conditional check
                 elif pdu == 0x31 and len(avp) >= 1:
                     event_id = avp[0]
-    # Conditional check
                     if event_id == 0x01 and len(avp) >= 2:
                         # PlaybackStatusChanged: keep local status cache fresh
                         # between GetPlayStatus polling intervals.
                         prev_status = last_play_status
                         last_play_status = avp[1]
+                        if last_play_status in PLAYING_STATES:
+                            bm.maybe_stream_kick()
                         bm.avrcp_reregister_status_changed()
                         bm.schedule_play_status(0.05)
                         if last_play_status in PLAYING_STATES and (
@@ -405,8 +387,13 @@ def main():
                             or (prev_status != last_play_status and desired_meta.get("time") == TIME_UNKNOWN)
                         ):
                             dprint("[META] playback start -> request metadata")
-                            bm.schedule_attrs(0.15, force=True)
-    # Conditional check
+                            # 1.0s (was 0.15s): keep the heavyweight, often
+                            # fragmented GetElementAttributes exchange out of
+                            # the A2DP stream-start window. AVRCP churn right
+                            # at stream start is the other suspected trigger
+                            # for the first-play stall — the title just shows
+                            # ~1s later, which the eye barely notices.
+                            bm.schedule_attrs(1.0, force=True)
                     elif event_id == 0x02:
                         last_pos_ms = None
                         last_total_ms = None
@@ -424,34 +411,25 @@ def main():
                             meta_set("time_cur", _fmt_ms(pos), changed)
                             push_meta_updates(changed)
                         bm.avrcp_reregister_position_changed()
-    # Conditional check
             elif op == bm.EVT_AVRCP_VENDOR_DEP_RSP:
                 gea = bm.parse_gea_0x5d(params)
-    # Conditional check
                 if gea:
                     last_avrcp_rx_at = time.monotonic()
                     _resp, attrs = gea
                     print("[META] GetElementAttributes received:", sorted(attrs.keys()))
                     changed = []
-    # Conditional check
                     if 1 in attrs:
                         meta_set("title", _sanitize_text(attrs[1]), changed)
-    # Conditional check
                     if 2 in attrs:
                         meta_set("artist", _sanitize_text(attrs[2]), changed)
-    # Conditional check
                     if 3 in attrs:
                         meta_set("album", _sanitize_text(attrs[3]), changed)
-    # Conditional check
                     if 6 in attrs:
                         meta_set("genre", _sanitize_text(attrs[6]), changed)
-    # Conditional check
                     if 4 in attrs:
                         meta_set("track_num", _sanitize_text(attrs[4], max_len=8), changed)
-    # Conditional check
                     if 5 in attrs:
                         meta_set("total_tracks", _sanitize_text(attrs[5], max_len=8), changed)
-    # Conditional check
                     if 7 in attrs:
                         ref_total_ms = last_total_ms if last_total_ms and last_total_ms > 0 else None
                         attr_time = _normalize_track_time_ms(attrs[7], ref_ms=ref_total_ms, from_attr=True)
@@ -463,46 +441,35 @@ def main():
                                 dprint("[META] ignore duration attr", attrs[7], "baseline=", last_total_ms)
                     push_meta_updates(changed)
 
-# endregion
-    # Loop through items
         for tok in tokens:
             dprint("[NX] Token:", tok)
-    # Conditional check
             if tok == b"BT_POWER":
                 bm.power_toggle()
-    # Conditional check
             elif tok == b"BT_PAIR":
                 bm.pair()
-    # Conditional check
             elif tok == b"BT_PLAY":
                 if aux_mode:
                     print("[AUX] Ignoring BT_PLAY while AUX IN is active")
                 else:
                     bm.play_pause()
-    # Conditional check
             elif tok == b"BT_PREV":
                 if aux_mode:
                     print("[AUX] Ignoring BT_PREV while AUX IN is active")
                 else:
                     bm.prev()
-    # Conditional check
             elif tok == b"BT_NEXT":
                 if aux_mode:
                     print("[AUX] Ignoring BT_NEXT while AUX IN is active")
                 else:
                     bm.next()
-    # Conditional check
             elif tok == b"BT_EQ":
                 mode = bm.next_eq()
                 next_label = bm.EQ_L.get(mode, "OFF")
-    # Conditional check
                 if next_label != desired_eq:
                     desired_eq = next_label
                     print("[EQ] set to", desired_eq)
-    # Conditional check
                     if nx.current_page is not None:
                         flush_page(nx.current_page)
-    # Conditional check
             elif tok == b"BT_VOLUP_P":
                 # Volume up pressed - smart-route to BLE HID (BT streaming)
                 # or BM83 Line_In gain (AUX mode), then start hold tracking.
@@ -516,7 +483,6 @@ def main():
                 if vol_hold_active == "up":
                     vol_hold_active = None
                     vol_repeat_count = 0
-    # Conditional check
             elif tok == b"BT_VOLDN_P":
                 # Volume down pressed - smart-route and start hold tracking
                 volume_step(False)
@@ -554,7 +520,6 @@ def main():
                         ble.request_erase_bonds()
                 # else: swallow Nextion touch chatter silently
 
-# endregion
         # Handle volume hold-and-repeat
         if vol_hold_active is not None:
             # How long this button has been considered "held"

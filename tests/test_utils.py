@@ -37,3 +37,17 @@ def test_public_sanitize_text_ellipsis():
 
 def test_public_fmt_ms_zero_pad():
     assert fmt_ms(5000) == "00:05"
+
+
+def test_internal_sanitize_text_truncation_stays_ascii():
+    """Truncated text must survive the Nextion TX path's ascii encode.
+
+    Regression for the 2026-08 review finding: the old ellipsis was
+    U+2026, which _sanitize_impl's 32..126 guarantee never covered and
+    which encode("ascii", "replace") in Nextion.tick() rendered as "?"
+    on the display. All output chars must stay in the ASCII range.
+    """
+    out = _sanitize_text("A" * 60, max_len=48)
+    assert out.endswith("...")
+    assert all(32 <= ord(ch) <= 126 for ch in out)
+    assert out.encode("ascii") == out.encode("ascii", "replace")
