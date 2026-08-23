@@ -715,3 +715,170 @@ def test_stream_kick_disabled_by_default(monkeypatch):
     assert bm._kick_armed is False
     assert bm.maybe_stream_kick() is False
     assert uart.writes == []
+
+def test_schedule_attrs_quiet_window_cannot_be_undercut(monkeypatch):
+    """A shorter metadata scheduler cannot defeat the stream-start floor."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    t = [9000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    floor = bm.defer_attrs(1.0)
+    assert bm.schedule_attrs(1.0, force=True) is True
+    first_deadline = bm._next_attrs_at
+    assert first_deadline >= floor
+
+    t[0] += 0.05
+    bm.schedule_attrs(0.15)
+    assert bm._next_attrs_at == first_deadline
+
+    assert bm.tick_avrcp_attrs(first_deadline - 0.001) is False
+    assert uart.writes == []
+    assert bm.tick_avrcp_attrs(first_deadline + 0.001) is True
+    assert len(uart.writes) == 1
+
+
+def test_tick_notif_regs_never_catches_up_as_burst(monkeypatch):
+    """A stalled loop sends at most one overdue registration per spacing gap."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    t = [10000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.schedule_avrcp_notifications(
+        ((0.25, 0x01, 0), (0.75, 0x02, 0), (1.25, 0x05, 1))
+    )
+    t[0] = 10010.0
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 1
+
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 1
+    t[0] += bm._notif_reg_min_gap_s - 0.01
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 1
+
+    t[0] += 0.02
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 2
+
+
+def test_acl_disconnect_arms_and_finalizes_debounce(monkeypatch):
+    """ACL-level teardown (0x11) suspends AVRCP now and demotes the link in 2s."""
+    bm = Bm83(None)
+    t = [11000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    assert bm.note_btm_state(0x06) == "CONNECTED"
+    assert bm.note_btm_state(0x11) is None
+    assert bm.avrcp_suspended is True
+    assert bm.connected is True
+    deadline = bm._disconnect_deadline
+    assert deadline > t[0]
+
+    assert bm.check_connection_watchdog(deadline - 0.001) is None
+    assert bm.check_connection_watchdog(deadline + 0.001) == "DISCONNECTED"
+    assert bm.connected is False
+
+
+def test_a2dp_profile_drop_suspends_but_never_demotes_link(monkeypatch):
+    """0x08 with the ACL up must NOT arm the disconnect debounce.
+
+    Hardware regression 2026-08-23 (PR #128): sources drop the A2DP
+    profile routinely while staying connected — app idle release, or AUX
+    taking over as the active source. Treating 0x08 as link teardown
+    produced spurious firmware-side disconnects during AUX sessions,
+    which wiped audio_source and flapped aux_mode (each flap re-fired
+    kick_aux_routing -> Line-In gain stepped to max, audible beeps).
+    """
+    bm = Bm83(None)
+    t = [11500.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    assert bm.note_btm_state(0x06) == "CONNECTED"
+    assert bm.note_btm_state(0x08) is None
+    assert bm.avrcp_suspended is True       # polling pauses...
+    assert bm._disconnect_deadline == 0.0   # ...but no link-down verdict
+    assert bm.check_connection_watchdog(t[0] + 10.0) is None
+    assert bm.connected is True
+    # Next connected-state event resumes normally.
+    bm.note_btm_state(0x82)
+    assert bm.avrcp_suspended is False
+    assert bm.connected is True
+
+
+def test_aux_source_survives_firmware_disconnect(monkeypatch):
+    """A live AUX source must survive a link-down verdict.
+
+    The 2026-08-23 field failure: BT drops while AUX is the active
+    source; _mark_disconnected() cleared audio_source, so the moment any
+    connected-state event arrived, should_show_aux() fell back to the
+    link heuristic and the AUX UI vanished while the cable was still the
+    live source — and the chip never re-announces 0x81 unprompted.
+    """
+    bm = Bm83(None)
+    t = [11800.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on = True
+
+    bm.note_btm_state(0x06)
+    bm.note_btm_state(0x81)                 # AUX becomes the active source
+    assert bm.should_show_aux() is True
+
+    bm.note_btm_state(0x11)                 # real ACL teardown
+    deadline = bm._disconnect_deadline
+    assert bm.check_connection_watchdog(deadline + 0.001) == "DISCONNECTED"
+    assert bm.audio_source == Bm83.AUDIO_SRC_AUX
+    assert bm.should_show_aux() is True     # AUX UI must not vanish
+
+    bm.note_btm_state(0x06)                 # BT comes back while AUX plays
+    assert bm.should_show_aux() is True     # still AUX until 0x80/0x82
+
+    bm.note_btm_state(0x82)                 # stream actually takes over
+    assert bm.should_show_aux() is False
+
+
+def test_reconnect_cancels_pending_disconnect(monkeypatch):
+    """A reconnect inside the debounce window must cancel pending teardown."""
+    bm = Bm83(None)
+    t = [12000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.note_btm_state(0x06)
+    bm.note_btm_state(0x11)
+    deadline = bm._disconnect_deadline
+    t[0] += 0.5
+    bm.note_btm_state(0x0B)
+    assert bm._disconnect_deadline == 0.0
+    assert bm.connected is True
+    assert bm.check_connection_watchdog(deadline + 1.0) is None
+
+
+def test_poll_rejects_impossible_length_and_resyncs():
+    """A bogus 0xAA FFFF prefix must not hide a valid following frame."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    valid = frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x06")
+    uart.to_read = bytearray(b"\xAA\xFF\xFF" + valid)
+    uart.in_waiting = len(uart.to_read)
+
+    events = bm.poll()
+    assert events == [(Bm83.EVT_BTM_STATUS, b"\x06")]
+
+
+def test_set_eq_selects_explicit_mode_and_syncs_index():
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm._last_eq_cmd_at = time.monotonic() - 1.0
+
+    assert bm.set_eq(5) == 5
+    assert bm.EQ_SEQ[bm.eq_index] == 5
+    assert len(uart.writes) == 1
+    assert uart.writes[0][3] == Bm83.OP_EQ_MODE_SETTING
+    assert uart.writes[0][4:6] == bytes([5, 0x00])
+
+    assert bm.set_eq(2) is None
+    assert bm.EQ_SEQ[bm.eq_index] == 5
+    assert len(uart.writes) == 1

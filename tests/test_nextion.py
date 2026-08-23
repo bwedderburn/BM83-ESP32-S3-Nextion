@@ -210,18 +210,15 @@ def test_nextion_token_with_trailing_garbage():
 
 
 def test_nextion_token_with_leading_garbage():
-    """Test that tokens with leading garbage bytes are properly cleaned"""
+    """Multiple arbitrary leading bytes are rejected rather than normalized."""
     uart = DummyUART()
     nx = Nextion(uart)
 
-    # Simulate token with leading garbage
     uart.to_read = b"\x01\x02BT_PLAY\xFF\xFF\xFF"
     uart.in_waiting = len(uart.to_read)
     tokens, _ = nx.read()
 
-    # Should extract clean token without the leading bytes
-    assert len(tokens) == 1
-    assert tokens[0] == b"BT_PLAY"
+    assert tokens == []
 
 
 def test_nextion_rx_buffer_capped_on_termless_garbage():
@@ -255,3 +252,82 @@ def test_nextion_rx_cap_still_parses_tokens_after_trim():
         got, _ = nx.read()
         tokens.extend(got)
     assert b"BT_PLAY" in tokens
+
+def test_nextion_arbitrary_binary_wrapping_cannot_trigger_control():
+    """Unknown noise around a token must fail closed, not become BT_POWER."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read = b"\x99BT_POWER\x88\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+
+    tokens, page_changed = nx.read()
+    assert tokens == []
+    assert page_changed is False
+
+
+def test_nextion_single_known_status_wrapper_is_tolerated():
+    """Keep compatibility with the observed Nextion status-prefix pattern."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read = b"\x1A BT_PLAY \xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+
+    tokens, _ = nx.read()
+    assert tokens == [b"BT_PLAY"]
+
+
+def test_nextion_multi_byte_leading_garbage_is_rejected():
+    """Do not recursively strip arbitrary status/noise bytes."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read = b"\x01\x02BT_PLAY\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+
+    tokens, _ = nx.read()
+    assert tokens == []
+
+
+def test_nextion_page_response_requires_exact_standalone_shape():
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read = b"\x66\x01JUNK\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+
+    tokens, page_changed = nx.read()
+    assert tokens == []
+    assert page_changed is False
+    assert nx.current_page is None
+
+
+def test_nextion_coalesced_token_plus_page_is_structural():
+    """Historical TOKEN + 0x66 + pageid traffic still parses safely."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read = b"BT_VOLUP_P\x66\x00\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+
+    tokens, page_changed = nx.read()
+    assert tokens == [b"BT_VOLUP_P"]
+    assert page_changed is True
+    assert nx.current_page == 0
+
+def test_nextion_nul_boundary_recovers_token_after_noise():
+    """NUL-delimited garbage may resync to a recognized token at frame end."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read = b"noise\x00BT_PLAY\x00\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+
+    tokens, _ = nx.read()
+    assert tokens == [b"BT_PLAY"]
+
+
+def test_nextion_unknown_prefix_without_nul_cannot_trigger_control():
+    """An arbitrary binary prefix alone is not a valid resync boundary."""
+    uart = DummyUART()
+    nx = Nextion(uart)
+    uart.to_read = b"\x99BT_POWER\xFF\xFF\xFF"
+    uart.in_waiting = len(uart.to_read)
+
+    tokens, _ = nx.read()
+    assert tokens == []

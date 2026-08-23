@@ -27,9 +27,11 @@ class Bm83:
         "connected",
         "_last_connected_seen",
         "_disconnect_hold_s",
+        "_disconnect_deadline",
         "_next_playstatus_at",
         "_playstatus_period_s",
         "_next_attrs_at",
+        "_attrs_not_before",
         "_attrs_throttle_s",
         "_last_attrs_req_at",
         "_gea_frag",
@@ -47,6 +49,8 @@ class Bm83:
         "_last_pos_changed_reg_at",
         "_pos_reg_throttle_s",
         "_pending_notif_regs",
+        "_last_notif_reg_at",
+        "_notif_reg_min_gap_s",
         "_avrcp_suspended",
         "stream_kick_enabled",
         "_kick_armed",
@@ -120,13 +124,23 @@ class Bm83:
     EQ_LABELS = EQ_L  # Alias for test compatibility
     CONNECTED_STATES = (0x06, 0x0B, 0x82, 0x64, 0x65, 0x66)
     # BTM_Status codes that mean the AVRCP session (or the whole link) is
-    # down: 0x00 Power OFF, 0x0C AVRCP link disconnected, 0x0F Standby,
-    # 0x11 ACL disconnected (datasheet v2.09 §7.2, p.169). Seeing one of
+    # down: 0x00 Power OFF, 0x08 A2DP link disconnected,
+    # 0x0C AVRCP link disconnected, 0x0F Standby, 0x11 ACL disconnected
+    # (datasheet v2.09 §7.2, p.169). Seeing one of
     # these suspends AVRCP polling until a connected-state event arrives —
     # commands sent into a half-torn-down or half-established AVRCP channel
     # are the suspected trigger for the BM83 silently dropping A2DP
     # (observed live on the b-intel reconnect capture, 2026-08-02).
-    AVRCP_DOWN_STATES = (0x00, 0x0C, 0x0F, 0x11)
+    AVRCP_DOWN_STATES = (0x00, 0x08, 0x0C, 0x0F, 0x11)
+    # Hard link-down debounce is armed ONLY by ACL-level teardown codes.
+    # Profile-level drops (0x08 A2DP disconnected, 0x0C AVRCP disconnected)
+    # happen routinely while the ACL stays up — the source app releasing
+    # A2DP when idle, or AUX taking over as the active source — and must
+    # suspend AVRCP TX but never demote the link. Arming the debounce on
+    # 0x08 caused the 2026-08-23 hardware regression: spurious firmware-side
+    # disconnects during AUX sessions that wiped audio_source and flapped
+    # aux_mode (repeated Line-In gain kicks -> gain pegged at max, beeps).
+    LINK_DOWN_STATES = (0x00, 0x0F, 0x11)
 
     def __init__(self, uart=None):
         self.uart = uart
@@ -140,9 +154,16 @@ class Bm83:
         self.connected = False
         self._last_connected_seen = 0.0
         self._disconnect_hold_s = 2.0
+        # Explicit teardown events arm this deadline. Unlike
+        # _last_connected_seen it is not refreshed by unrelated AVRCP
+        # traffic, so a final link-down event cannot leave connected=True.
+        self._disconnect_deadline = 0.0
         self._next_playstatus_at = 0.0
         self._playstatus_period_s = 1.0
         self._next_attrs_at = 0.0
+        # Hard floor used to protect the A2DP stream-start quiet window.
+        # No metadata scheduler is allowed to pull a request before it.
+        self._attrs_not_before = 0.0
         self._attrs_throttle_s = 1.5
         self._last_attrs_req_at = 0.0
         self._gea_frag = bytearray()
@@ -178,6 +199,8 @@ class Bm83:
         # reregister throttles above exist for the same reason; this applies
         # the same medicine to the *initial* burst on connect).
         self._pending_notif_regs = []
+        self._last_notif_reg_at = 0.0
+        self._notif_reg_min_gap_s = 0.45
         # True while a teardown state (AVRCP_DOWN_STATES) has been seen and
         # no connected state has arrived since. Gates tick_avrcp /
         # tick_avrcp_attrs / tick_notif_regs so we stop sending AVRCP
@@ -355,6 +378,14 @@ class Bm83:
                 break
             hi, lo = rx[head + 1], rx[head + 2]
             ln = (hi << 8) | lo
+            # A valid BM83 body always contains at least the opcode, and
+            # cannot be larger than the active RX buffer we are willing to
+            # retain. Reject impossible lengths immediately so one noisy
+            # 0xAA FF FF prefix cannot wedge parsing until buffer overflow.
+            if ln < 1 or ln > self._rx_max:
+                dprint("[BM83] invalid frame length", ln, "-> resync")
+                head += 1
+                continue
             total = 3 + ln + 1
             if (len(rx) - head) < total:
                 break
@@ -484,7 +515,7 @@ class Bm83:
             # 1.5s elapsed since press, now send release
             self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_RELEASE]))
             self.power_on = False
-            self.connected = False
+            self._mark_disconnected()
             self._power_state = None
             print("[POWER] OFF (UART)")
 
@@ -558,17 +589,28 @@ class Bm83:
         self.send(self.OP_MUSIC_CONTROL, bytes([0x00, self.MC_PLAY]))
         print("[KICK] stream restart: play sent")
 
-    def next_eq(self):
-        """Advance to the next EQ preset; throttled to avoid UART command floods."""
+    def set_eq(self, mode):
+        """Set one explicit EQ preset; return None when invalid or throttled."""
+        if mode not in self.EQ_SEQ:
+            return None
         now = time.monotonic()
         if (now - self._last_eq_cmd_at) < self._eq_throttle_s:
-            # Return current mode without sending command (throttled)
-            return self.EQ_SEQ[self.eq_index]
+            return None
         self._last_eq_cmd_at = now
-        self.eq_index = (self.eq_index + 1) % len(self.EQ_SEQ)
-        mode = self.EQ_SEQ[self.eq_index]
+        for i, value in enumerate(self.EQ_SEQ):
+            if value == mode:
+                self.eq_index = i
+                break
         self.send(self.OP_EQ_MODE_SETTING, bytes([mode, 0x00]))
         return mode
+
+    def next_eq(self):
+        """Advance to the next EQ preset; throttled to avoid UART command floods."""
+        mode = self.EQ_SEQ[(self.eq_index + 1) % len(self.EQ_SEQ)]
+        sent = self.set_eq(mode)
+        # Preserve the existing API: a throttled next_eq() reports the actual
+        # current mode rather than pretending the requested step occurred.
+        return self.EQ_SEQ[self.eq_index] if sent is None else sent
 
     def volume_up(self):
         """Step Line-In input gain up via MMI 0x82.
@@ -606,6 +648,25 @@ class Bm83:
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_LINE_IN_GAIN_UP]))
         print("[AUX] routing kick sent (MMI Line-In gain up)")
 
+    def _mark_disconnected(self):
+        """Clear session-scoped state and return the public transition marker."""
+        self.connected = False
+        self._disconnect_deadline = 0.0
+        # Clear the cached source ONLY when it is not live AUX. The clear
+        # exists for the stale-0x82 case (should_show_aux() must fall back
+        # to the link-state heuristic after a BT drop); a live 0x81 must
+        # survive a firmware-side disconnect because the chip will not
+        # re-announce it — clearing it made the AUX indicator vanish and
+        # re-triggered kick_aux_routing()'s gain step on every flap.
+        if self.audio_source != self.AUDIO_SRC_AUX:
+            self.audio_source = None
+        self._kick_armed = False
+        self._kick_state = None
+        self._pending_notif_regs = []
+        self._next_attrs_at = 0.0
+        self._attrs_not_before = 0.0
+        return "DISCONNECTED"
+
     def note_btm_state(self, state):
         now = time.monotonic()
         # Audio-source tracking. States 0x80/0x81/0x82 report which audio
@@ -635,10 +696,25 @@ class Bm83:
                 # now; main.py re-arms a fresh staggered set on 0x0B. An
                 # in-flight stream kick is aborted too — never send its
                 # PLAY into a dead link.
-                self._pending_notif_regs = []
-                self._kick_state = None
                 print("[BTM] AVRCP down (0x%02X) -> pausing AVRCP polling" % state)
+            # Session-scoped work is invalid on every teardown indication,
+            # even when an earlier teardown code already set the suspend flag.
+            self._pending_notif_regs = []
+            self._next_attrs_at = 0.0
+            self._attrs_not_before = 0.0
+            self._kick_state = None
+            # Arm once at the first ACL-level teardown event. Later teardown
+            # chatter must not keep pushing the debounce window forward, and
+            # profile-level drops (0x08/0x0C) never arm it — see
+            # LINK_DOWN_STATES.
+            if (
+                self.connected
+                and self._disconnect_deadline == 0.0
+                and state in self.LINK_DOWN_STATES
+            ):
+                self._disconnect_deadline = now + self._disconnect_hold_s
         if state in self.CONNECTED_STATES:
+            self._disconnect_deadline = 0.0
             self._last_connected_seen = now
             if self._avrcp_suspended:
                 self._avrcp_suspended = False
@@ -658,17 +734,8 @@ class Bm83:
                 return "CONNECTED"
             return None
         if self.connected and (now - self._last_connected_seen) > self._disconnect_hold_s:
-            self.connected = False
-            # Clear cached audio_source so should_show_aux() falls back to
-            # the link-state heuristic ("not connected => show AUX"). The
-            # BM83 often does NOT emit a 0x80/0x81 follow-up after a BT
-            # drop, so if we leave audio_source pinned at 0x82 from the
-            # last A2DP session, the UI will wrongly stay in "A2DP" mode
-            # while the user is actually listening to Line-In.
-            self.audio_source = None
-            self._kick_armed = False
-            self._kick_state = None
-            return "DISCONNECTED"
+            # Preserve the legacy "stale then teardown event" fast path.
+            return self._mark_disconnected()
         return None
 
     def should_show_aux(self):
@@ -707,13 +774,13 @@ class Bm83:
             return None
         if now is None:
             now = time.monotonic()
+        # Explicit teardown debounce has priority over the long silence
+        # watchdog. It is intentionally independent of _last_connected_seen:
+        # inbound AVRCP traffic from a dying session cannot cancel link-down.
+        if self._disconnect_deadline and now >= self._disconnect_deadline:
+            return self._mark_disconnected()
         if (now - self._last_connected_seen) > self._btm_silence_timeout_s:
-            self.connected = False
-            # See note in note_btm_state(): clear so AUX fallback re-engages.
-            self.audio_source = None
-            self._kick_armed = False
-            self._kick_state = None
-            return "DISCONNECTED"
+            return self._mark_disconnected()
         return None
 
     @staticmethod
@@ -739,6 +806,9 @@ class Bm83:
         self._pending_notif_regs = [
             (now + d, event_id, interval_s) for (d, event_id, interval_s) in specs
         ]
+        # Allow the first due registration immediately; subsequent sends are
+        # paced from their actual transmit time, not only their planned time.
+        self._last_notif_reg_at = now - self._notif_reg_min_gap_s
 
     def tick_notif_regs(self, now=None):
         """Send any due deferred notification registrations.
@@ -760,13 +830,16 @@ class Bm83:
             return
         if now is None:
             now = time.monotonic()
-        remaining = []
-        for item in pending:
-            if now >= item[0]:
-                self.avrcp_register_notification(item[1], interval_s=item[2])
-            else:
-                remaining.append(item)
-        self._pending_notif_regs = remaining
+        # Never "catch up" several overdue registrations in one loop.
+        # A delayed main loop must preserve the spacing this queue exists for.
+        if (now - self._last_notif_reg_at) < self._notif_reg_min_gap_s:
+            return
+        item = pending[0]
+        if now < item[0]:
+            return
+        self.avrcp_register_notification(item[1], interval_s=item[2])
+        self._last_notif_reg_at = now
+        self._pending_notif_regs = pending[1:]
 
     def avrcp_reregister_track_changed(self, db=0):
         """Throttled re-registration for TrackChanged to prevent feedback loops."""
@@ -811,11 +884,22 @@ class Bm83:
         """
         self._next_playstatus_at = time.monotonic() + delay_s
 
+    def defer_attrs(self, delay_s):
+        """Protect a quiet window in which no metadata request may be sent."""
+        t = time.monotonic() + delay_s
+        if t > self._attrs_not_before:
+            self._attrs_not_before = t
+        if self._next_attrs_at and self._next_attrs_at < self._attrs_not_before:
+            self._next_attrs_at = self._attrs_not_before
+        return self._attrs_not_before
+
     def schedule_attrs(self, delay_s=0.35, force=False):
         now = time.monotonic()
         if (not force) and (now - self._last_attrs_req_at) < self._attrs_throttle_s:
             return False
         t = now + delay_s
+        if t < self._attrs_not_before:
+            t = self._attrs_not_before
         if self._next_attrs_at == 0.0 or t < self._next_attrs_at:
             self._next_attrs_at = t
             return True
@@ -838,6 +922,7 @@ class Bm83:
         if now >= self._next_attrs_at:
             self._last_attrs_req_at = now
             self._next_attrs_at = 0.0
+            self._attrs_not_before = 0.0
             self.avrcp_get_element_attributes(0)
             return True
         return False

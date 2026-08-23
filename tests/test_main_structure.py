@@ -53,3 +53,15 @@ def test_main_has_single_main_guard():
 
     main_guards = [node for node in tree.body if is_main_guard(node)]
     assert len(main_guards) == 1
+
+def test_main_dispatches_nextion_poweroff_and_direct_eq_tokens():
+    source = MAIN_PATH.read_text(encoding="utf-8")
+    assert 'elif tok == b"BT_POWEROFF":' in source
+    assert "elif tok in EQ_MAP:" in source
+    assert "bm.set_eq(EQ_MAP[tok])" in source
+
+
+def test_main_protects_playback_start_metadata_quiet_window():
+    source = MAIN_PATH.read_text(encoding="utf-8")
+    assert "bm.defer_attrs(1.0)" in source
+    assert "bm.schedule_attrs(1.0, force=True)" in source

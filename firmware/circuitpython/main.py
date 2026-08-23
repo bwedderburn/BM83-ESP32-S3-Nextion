@@ -11,7 +11,7 @@ from utils.common import (
     _normalize_track_time_ms,
     _sanitize_text,
 )
-from nextion.display import Nextion, NX_RUNTIME, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
+from nextion.display import Nextion, NX_RUNTIME, EQ_MAP, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
 
@@ -291,7 +291,7 @@ def main():
         # Watchdog: if the BM83 has gone silent for a long time while we still
         # think we're connected, fall back to disconnected so the UI follows.
         if bm.check_connection_watchdog(now) == "DISCONNECTED":
-            print("[BTM] watchdog timeout -> marking DISCONNECTED")
+            print("[BTM] disconnect debounce/watchdog -> marking DISCONNECTED")
             avrcp_notifs_registered = False
             last_play_status = None
 
@@ -339,6 +339,11 @@ def main():
                     last_play_status = None
             elif op == bm.EVT_EQ_MODE_IND and params:
                 mode = params[0]
+                if mode in bm.EQ_SEQ:
+                    for i, value in enumerate(bm.EQ_SEQ):
+                        if value == mode:
+                            bm.eq_index = i
+                            break
                 desired_eq = eq_labels.get(mode, "OFF")
                 dprint("[EQ_IND] mode=%d label=%s" % (mode, desired_eq))
                 if nx.current_page is not None:
@@ -393,6 +398,10 @@ def main():
                             # at stream start is the other suspected trigger
                             # for the first-play stall — the title just shows
                             # ~1s later, which the eye barely notices.
+                            # Protect this as a hard floor: GetPlayStatus and
+                            # TrackChanged handlers may also schedule metadata,
+                            # but must not pull it back into stream startup.
+                            bm.defer_attrs(1.0)
                             bm.schedule_attrs(1.0, force=True)
                     elif event_id == 0x02:
                         last_pos_ms = None
@@ -445,6 +454,8 @@ def main():
             dprint("[NX] Token:", tok)
             if tok == b"BT_POWER":
                 bm.power_toggle()
+            elif tok == b"BT_POWEROFF":
+                bm.power_off_cmd()
             elif tok == b"BT_PAIR":
                 bm.pair()
             elif tok == b"BT_PLAY":
@@ -470,6 +481,17 @@ def main():
                     print("[EQ] set to", desired_eq)
                     if nx.current_page is not None:
                         flush_page(nx.current_page)
+            elif tok in EQ_MAP:
+                # Direct EQ_* buttons are part of Nextion's accepted token
+                # contract; dispatch them instead of silently swallowing them.
+                mode = bm.set_eq(EQ_MAP[tok])
+                if mode is not None:
+                    next_label = bm.EQ_L.get(mode, "OFF")
+                    if next_label != desired_eq:
+                        desired_eq = next_label
+                        print("[EQ] set to", desired_eq)
+                        if nx.current_page is not None:
+                            flush_page(nx.current_page)
             elif tok == b"BT_VOLUP_P":
                 # Volume up pressed - smart-route to BLE HID (BT streaming)
                 # or BM83 Line_In gain (AUX mode), then start hold tracking.
