@@ -132,6 +132,15 @@ class Bm83:
     # are the suspected trigger for the BM83 silently dropping A2DP
     # (observed live on the b-intel reconnect capture, 2026-08-02).
     AVRCP_DOWN_STATES = (0x00, 0x08, 0x0C, 0x0F, 0x11)
+    # Hard link-down debounce is armed ONLY by ACL-level teardown codes.
+    # Profile-level drops (0x08 A2DP disconnected, 0x0C AVRCP disconnected)
+    # happen routinely while the ACL stays up — the source app releasing
+    # A2DP when idle, or AUX taking over as the active source — and must
+    # suspend AVRCP TX but never demote the link. Arming the debounce on
+    # 0x08 caused the 2026-08-23 hardware regression: spurious firmware-side
+    # disconnects during AUX sessions that wiped audio_source and flapped
+    # aux_mode (repeated Line-In gain kicks -> gain pegged at max, beeps).
+    LINK_DOWN_STATES = (0x00, 0x0F, 0x11)
 
     def __init__(self, uart=None):
         self.uart = uart
@@ -643,7 +652,14 @@ class Bm83:
         """Clear session-scoped state and return the public transition marker."""
         self.connected = False
         self._disconnect_deadline = 0.0
-        self.audio_source = None
+        # Clear the cached source ONLY when it is not live AUX. The clear
+        # exists for the stale-0x82 case (should_show_aux() must fall back
+        # to the link-state heuristic after a BT drop); a live 0x81 must
+        # survive a firmware-side disconnect because the chip will not
+        # re-announce it — clearing it made the AUX indicator vanish and
+        # re-triggered kick_aux_routing()'s gain step on every flap.
+        if self.audio_source != self.AUDIO_SRC_AUX:
+            self.audio_source = None
         self._kick_armed = False
         self._kick_state = None
         self._pending_notif_regs = []
@@ -687,9 +703,15 @@ class Bm83:
             self._next_attrs_at = 0.0
             self._attrs_not_before = 0.0
             self._kick_state = None
-            # Arm once at the first teardown event. Later teardown chatter must
-            # not keep pushing the debounce window forward.
-            if self.connected and self._disconnect_deadline == 0.0:
+            # Arm once at the first ACL-level teardown event. Later teardown
+            # chatter must not keep pushing the debounce window forward, and
+            # profile-level drops (0x08/0x0C) never arm it — see
+            # LINK_DOWN_STATES.
+            if (
+                self.connected
+                and self._disconnect_deadline == 0.0
+                and state in self.LINK_DOWN_STATES
+            ):
                 self._disconnect_deadline = now + self._disconnect_hold_s
         if state in self.CONNECTED_STATES:
             self._disconnect_deadline = 0.0

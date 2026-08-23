@@ -765,14 +765,14 @@ def test_tick_notif_regs_never_catches_up_as_burst(monkeypatch):
     assert len(uart.writes) == 2
 
 
-def test_a2dp_disconnect_arms_and_finalizes_debounce(monkeypatch):
-    """0x08 must suspend AVRCP now and eventually demote the link."""
+def test_acl_disconnect_arms_and_finalizes_debounce(monkeypatch):
+    """ACL-level teardown (0x11) suspends AVRCP now and demotes the link in 2s."""
     bm = Bm83(None)
     t = [11000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
 
     assert bm.note_btm_state(0x06) == "CONNECTED"
-    assert bm.note_btm_state(0x08) is None
+    assert bm.note_btm_state(0x11) is None
     assert bm.avrcp_suspended is True
     assert bm.connected is True
     deadline = bm._disconnect_deadline
@@ -783,6 +783,63 @@ def test_a2dp_disconnect_arms_and_finalizes_debounce(monkeypatch):
     assert bm.connected is False
 
 
+def test_a2dp_profile_drop_suspends_but_never_demotes_link(monkeypatch):
+    """0x08 with the ACL up must NOT arm the disconnect debounce.
+
+    Hardware regression 2026-08-23 (PR #128): sources drop the A2DP
+    profile routinely while staying connected — app idle release, or AUX
+    taking over as the active source. Treating 0x08 as link teardown
+    produced spurious firmware-side disconnects during AUX sessions,
+    which wiped audio_source and flapped aux_mode (each flap re-fired
+    kick_aux_routing -> Line-In gain stepped to max, audible beeps).
+    """
+    bm = Bm83(None)
+    t = [11500.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    assert bm.note_btm_state(0x06) == "CONNECTED"
+    assert bm.note_btm_state(0x08) is None
+    assert bm.avrcp_suspended is True       # polling pauses...
+    assert bm._disconnect_deadline == 0.0   # ...but no link-down verdict
+    assert bm.check_connection_watchdog(t[0] + 10.0) is None
+    assert bm.connected is True
+    # Next connected-state event resumes normally.
+    bm.note_btm_state(0x82)
+    assert bm.avrcp_suspended is False
+    assert bm.connected is True
+
+
+def test_aux_source_survives_firmware_disconnect(monkeypatch):
+    """A live AUX source must survive a link-down verdict.
+
+    The 2026-08-23 field failure: BT drops while AUX is the active
+    source; _mark_disconnected() cleared audio_source, so the moment any
+    connected-state event arrived, should_show_aux() fell back to the
+    link heuristic and the AUX UI vanished while the cable was still the
+    live source — and the chip never re-announces 0x81 unprompted.
+    """
+    bm = Bm83(None)
+    t = [11800.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on = True
+
+    bm.note_btm_state(0x06)
+    bm.note_btm_state(0x81)                 # AUX becomes the active source
+    assert bm.should_show_aux() is True
+
+    bm.note_btm_state(0x11)                 # real ACL teardown
+    deadline = bm._disconnect_deadline
+    assert bm.check_connection_watchdog(deadline + 0.001) == "DISCONNECTED"
+    assert bm.audio_source == Bm83.AUDIO_SRC_AUX
+    assert bm.should_show_aux() is True     # AUX UI must not vanish
+
+    bm.note_btm_state(0x06)                 # BT comes back while AUX plays
+    assert bm.should_show_aux() is True     # still AUX until 0x80/0x82
+
+    bm.note_btm_state(0x82)                 # stream actually takes over
+    assert bm.should_show_aux() is False
+
+
 def test_reconnect_cancels_pending_disconnect(monkeypatch):
     """A reconnect inside the debounce window must cancel pending teardown."""
     bm = Bm83(None)
@@ -790,7 +847,7 @@ def test_reconnect_cancels_pending_disconnect(monkeypatch):
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
 
     bm.note_btm_state(0x06)
-    bm.note_btm_state(0x08)
+    bm.note_btm_state(0x11)
     deadline = bm._disconnect_deadline
     t[0] += 0.5
     bm.note_btm_state(0x0B)
