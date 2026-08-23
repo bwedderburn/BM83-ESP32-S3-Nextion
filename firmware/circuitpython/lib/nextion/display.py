@@ -40,6 +40,11 @@ TOK_EQ = set(EQ_MAP.keys())  # Populated from EQ_MAP keys
 
 TOKENS = TOK_BT | TOK_EQ  # Combined token set
 
+# Deliberately narrow compatibility wrappers. These are status/error bytes
+# already observed by this project/tests. Allow at most one at each edge;
+# arbitrary binary noise must never be normalized into a control token.
+_NX_TOKEN_EDGE_STATUS = (0x00, 0x01, 0x1A)
+
 def ascii_upper_uscore(token):
     if not token:
         return False
@@ -176,29 +181,41 @@ class Nextion:
         if not f:
             return None
 
-        # Remove leading and trailing non-token bytes (filter noise)
-        # Valid token bytes: A-Z (65-90), 0-9 (48-57), _ (95)
-        start = 0
-        while start < len(f) and not (48 <= f[start] <= 57 or 65 <= f[start] <= 90 or f[start] == 95):
-            start += 1
+        # Preserve compatibility with the small set of status/error wrappers
+        # observed from the HMI, but strip no more than one byte per edge.
+        if f and f[0] in _NX_TOKEN_EDGE_STATUS:
+            f = f[1:].strip()
+        if f and f[-1] in _NX_TOKEN_EDGE_STATUS:
+            f = f[:-1].strip()
+        if not f:
+            return None
 
-        end = len(f)
-        while end > start and not (48 <= f[end - 1] <= 57 or 65 <= f[end - 1] <= 90 or f[end - 1] == 95):
-            end -= 1
+        # Exact frames are the normal path.
+        if f in TOKENS:
+            return f
 
-        return f[start:end] if start < end else None
+        # RX overflow/noise recovery: when a real token follows NUL-delimited
+        # garbage, accept only a recognized token anchored at the END of the
+        # frame. Requiring a NUL boundary avoids turning arbitrary binary
+        # prefixes into commands while still recovering after _RX_KEEP trims.
+        nul = f.rfind(b"\x00")
+        if nul >= 0:
+            candidate = f[nul + 1:].strip()
+            if candidate in TOKENS:
+                return candidate
+
+        return None
 
     @staticmethod
     def _is_token_frame(frame):
-        # Extract clean token
+        # Historical HMI traffic can coalesce a printed token with a trailing
+        # Nextion page-return sequence: TOKEN + 0x66 + pageid.
+        if len(frame) >= 3 and frame[-2] == 0x66:
+            frame = frame[:-2]
+
         f = Nextion._extract_token(frame)
         if not f:
             return None
-        for b in f:
-            if 48 <= b <= 57 or 65 <= b <= 90 or b == 95:
-                continue
-            return None
-        # Return the cleaned token if it's recognized
         return f if f in TOKENS else None
 
     def read(self, max_tokens=6):
@@ -209,18 +226,33 @@ class Nextion:
             frame = self._pop_frame()
             if frame is None:
                 break
-            if len(frame) >= 2 and frame[0] == 0x66:
+
+            # A standalone page-return is exactly 0x66 + pageid. Reject longer
+            # binary frames that merely begin with 0x66.
+            if len(frame) == 2 and frame[0] == 0x66:
                 pageid = frame[1]
                 if self.current_page != pageid:
                     self.current_page = pageid
                     page_changed = True
                 continue
+
+            # Preserve the known TOKEN + 0x66 + pageid coalesced-frame case,
+            # but recognize it structurally instead of trimming arbitrary bytes.
+            if len(frame) >= 3 and frame[-2] == 0x66:
+                pageid = frame[-1]
+                if self.current_page != pageid:
+                    self.current_page = pageid
+                    page_changed = True
+
             clean_token = self._is_token_frame(frame)
             if clean_token:
                 now = time.monotonic()
-                # Throttle only duplicate tokens within the window; allow different tokens
-                if (now - self._last_token_at) < self._token_throttle_s and clean_token == self._last_token:
-                    continue  # Discard duplicate within throttle window
+                # Throttle only duplicate tokens within the window.
+                if (
+                    (now - self._last_token_at) < self._token_throttle_s
+                    and clean_token == self._last_token
+                ):
+                    continue
                 self._last_token_at = now
                 self._last_token = clean_token
                 tokens.append(clean_token)
