@@ -882,3 +882,174 @@ def test_set_eq_selects_explicit_mode_and_syncs_index():
     assert bm.set_eq(2) is None
     assert bm.EQ_SEQ[bm.eq_index] == 5
     assert len(uart.writes) == 1
+
+
+def test_no_phantom_aux_after_disconnect_during_a2dp(monkeypatch):
+    """A disconnect during A2DP must NOT flip the UI into AUX.
+
+    2026-08-26 field failure: during live BT playback the firmware demoted
+    the link, _mark_disconnected() cleared audio_source, and
+    should_show_aux()'s boot-window fallback ("no source seen -> not
+    connected means AUX") then asserted AUX. The user saw AUX IN appear,
+    metadata cleared, and every transport control dead while Windows kept
+    streaming audio normally.
+    """
+    bm = Bm83(None)
+    t = [20000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on = True
+
+    bm.note_btm_state(0x06)
+    bm.note_btm_state(0x82)                    # A2DP is the active source
+    assert bm.should_show_aux() is False
+
+    bm.note_btm_state(0x11)                    # link teardown
+    t[0] += 3.0
+    assert bm.check_connection_watchdog() == "DISCONNECTED"
+    assert bm.audio_source is None             # cleared, as designed
+    # ...but the fallback must not fire: we have had real source reporting,
+    # so AUX requires positive evidence (a 0x81), not merely "not connected".
+    assert bm.should_show_aux() is False
+
+
+def test_boot_window_aux_fallback_still_works(monkeypatch):
+    """Before any source event, the link-state heuristic is still allowed."""
+    bm = Bm83(None)
+    t = [21000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on = True
+    assert bm._source_ever_seen is False
+    assert bm.should_show_aux() is True         # powered, unlinked, never saw a source
+    bm.note_btm_state(0x82)
+    assert bm.should_show_aux() is False        # positive evidence takes over
+
+
+def test_avrcp_suspension_times_out(monkeypatch):
+    """A suspension must not last forever when no connected state returns."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [22000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.note_btm_state(0x06)
+    bm.note_btm_state(0x0C)                     # profile blip -> suspended
+    assert bm.avrcp_suspended is True
+    t[0] += 2.0
+    assert bm.tick_avrcp_resume() is False      # still inside the window
+    t[0] += 5.0
+    assert bm.tick_avrcp_resume() is True
+    assert bm.avrcp_suspended is False
+    n = len(uart.writes)
+    bm.tick_avrcp()                             # polling resumes immediately
+    assert len(uart.writes) > n
+
+
+def test_link_recovery_probe_and_relink_on_avrcp_evidence(monkeypatch):
+    """A false disconnect must heal itself instead of being terminal."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [23000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on = True
+    bm.connected = False
+
+    assert bm.tick_link_recovery() is True      # probes while unlinked
+    # Known-alive chip: liveness read (0x0F) plus an AVRCP nudge.
+    assert len(uart.writes) == 2
+    assert uart.writes[0][3] == Bm83.OP_READ_BD_ADDR
+    assert bm.tick_link_recovery() is False     # rate limited
+    t[0] += 6.0
+    assert bm.tick_link_recovery() is True
+
+    # The chip answers -> that is proof the AVRCP session is alive.
+    rsp = frame_to_bytes(Bm83.EVT_AVC_VENDOR_RSP, b"\x00" + b"\x00" * 10)
+    uart.to_read = bytearray(rsp)
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.connected is True
+
+
+def test_watchdog_tolerates_uncounted_but_live_traffic(monkeypatch):
+    """Bytes arriving from the chip must prevent the silence watchdog."""
+    bm = Bm83(None)
+    t = [24000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.connected = True
+    bm._last_connected_seen = t[0]
+
+    t[0] += 200.0                    # well past _btm_silence_timeout_s
+    bm._last_rx_byte_at = t[0] - 1.0  # ...but the radio is clearly talking
+    assert bm.check_connection_watchdog() is None
+    assert bm.connected is True
+
+    bm._last_rx_byte_at = t[0] - 200.0   # now genuinely silent
+    assert bm.check_connection_watchdog() == "DISCONNECTED"
+
+
+def test_boot_handshake_fires_once_after_settle(monkeypatch):
+    """The chip must be re-armed for event reporting after an ESP32-only reboot.
+
+    2026-08-26: the ESP32 reboots constantly (USB auto-reload) while the BM83
+    keeps running. init_link() only ran from the power-on state machine, so a
+    powered, linked, actively streaming module reported nothing at all to the
+    host — no metadata, no link state, every control a silent no-op.
+    """
+    uart = MockUART()
+    t = [30000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm = Bm83(uart)
+
+    assert bm.tick_boot_init() is False      # settle window not elapsed
+    assert uart.writes == []
+    t[0] += 1.6
+    assert bm.tick_boot_init() is True
+    assert len(uart.writes) >= 3             # BD addr + event filter + utility
+    n = len(uart.writes)
+    t[0] += 100.0
+    assert bm.tick_boot_init() is False      # strictly one-shot
+    assert len(uart.writes) == n
+
+
+def test_power_state_inferred_from_chip_reporting(monkeypatch):
+    """A chip that is talking is powered, whoever turned it on."""
+    bm = Bm83(None)
+    t = [31000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    assert bm.power_on is False              # fresh boot, no knowledge yet
+
+    bm.note_btm_state(0x06)                  # A2DP link established
+    assert bm.power_on is True               # ...so it is obviously powered
+    bm.note_btm_state(0x00)                  # explicit Power OFF state
+    assert bm.power_on is False
+
+
+def test_link_recovery_runs_even_when_power_state_unknown(monkeypatch):
+    """A silent module must still be probed, or it can never be rediscovered.
+
+    power_on is inferred from the chip's own reporting, so a module that has
+    gone quiet pins it False. Gating recovery on power_on therefore made the
+    dead-link state permanent (2026-08-26: BM83 answered nothing for minutes
+    while the firmware sat idle, never retrying).
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [40000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    assert bm.power_on is False
+
+    assert bm.tick_link_recovery() is True
+    assert uart.writes[0][3] == Bm83.OP_READ_BD_ADDR
+    assert len(uart.writes) == 1               # no AVRCP nudge while unknown
+
+    # Sustained silence raises a single actionable warning, not a spam loop.
+    for _ in range(6):
+        t[0] += 6.0
+        bm.tick_link_recovery()
+    assert bm._link_dead_warned is True
+
+    # Any inbound frame proves the module is back.
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x06"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is True
+    assert bm._link_probe_misses == 0

@@ -66,6 +66,9 @@ def main():
     bm_ack = bm.ack_event
     bm_tick_power = bm.tick_power
     bm_tick_notif_regs = bm.tick_notif_regs
+    bm_tick_boot_init = bm.tick_boot_init
+    bm_tick_avrcp_resume = bm.tick_avrcp_resume
+    bm_tick_link_recovery = bm.tick_link_recovery
     bm_tick_stream_kick = bm.tick_stream_kick
     bm_tick_avrcp = bm.tick_avrcp
     bm_tick_avrcp_attrs = bm.tick_avrcp_attrs
@@ -109,6 +112,7 @@ def main():
     desired_aux = ""
     aux_mode = False
     aux_mode_prev = False
+    pending_flush = False
     avrcp_notifs_registered = False
 
     # AVRCP polling cadence while in AUX mode (no BT link). Probes GetPlayStatus
@@ -150,6 +154,15 @@ def main():
     BTM_AVRCP_LINK_UP = 0x0B
 
     def flush_page(pageid):
+        nonlocal pending_flush
+        if pageid is None:
+            # Page identity is unknown right now (boot, or between `sendme`
+            # replies). Writing nothing here used to leave the panel showing
+            # stale text — notably an AUX label that disagreed with the real
+            # aux_mode. Remember to flush as soon as the page is known.
+            pending_flush = True
+            return
+        pending_flush = False
         if pageid == 0:
             nx_set_text(EQ_OBJ_PAGE0, desired_eq)
             nx_set_text(AUX_OBJ_PAGE0, desired_aux)
@@ -233,6 +246,10 @@ def main():
         if page_changed and nx.current_page is not None:
             dprint("[NX] page=", nx.current_page)
             flush_page(nx.current_page)
+        elif pending_flush and nx.current_page is not None:
+            # A flush was requested while the page was unknown — settle it now
+            # so the panel can never sit on stale AUX/EQ/metadata text.
+            flush_page(nx.current_page)
 
         ble_tick()
 
@@ -250,6 +267,14 @@ def main():
         # deferred PLAY half of the stream-restart kick.
         bm_tick_notif_regs(now)
         bm_tick_stream_kick(now)
+
+        # Self-healing: lift a stale AVRCP suspension, and probe the chip when
+        # we believe we are disconnected while still powered. Together these
+        # stop a transient blip from stranding the firmware in a permanently
+        # "disconnected" state with no way back (2026-08-26 field failure).
+        bm_tick_boot_init(now)
+        bm_tick_avrcp_resume(now)
+        bm_tick_link_recovery(now)
 
         # aux_mode is driven by the BM83's own audio-source reporting.
         # Datasheet "AudioUARTCommandSet v2.09" 7.2 BTM_Status describes

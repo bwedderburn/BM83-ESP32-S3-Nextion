@@ -52,6 +52,16 @@ class Bm83:
         "_last_notif_reg_at",
         "_notif_reg_min_gap_s",
         "_avrcp_suspended",
+        "_avrcp_suspend_at",
+        "_avrcp_suspend_max_s",
+        "_source_ever_seen",
+        "_link_probe_at",
+        "_link_probe_period_s",
+        "_link_probe_misses",
+        "_link_dead_warned",
+        "_hb_idle_next_at",
+        "_hb_idle_period_s",
+        "_boot_init_at",
         "stream_kick_enabled",
         "_kick_armed",
         "_kick_state",
@@ -209,6 +219,44 @@ class Bm83:
         # self.connected True throughout. Cleared with a settle grace in
         # note_btm_state when a connected state returns.
         self._avrcp_suspended = False
+        # Bound the suspension. A profile-level blip (0x08/0x0C) suspends AVRCP
+        # TX, but if the chip never emits another connected-state event the
+        # suspension used to last forever: polling stopped, metadata froze, and
+        # with no inbound traffic the silence watchdog eventually demoted a
+        # perfectly healthy link. Auto-resume after this long.
+        self._avrcp_suspend_at = 0.0
+        self._avrcp_suspend_max_s = 6.0
+        # True once ANY audio-source event (0x80/0x81/0x82) has been observed.
+        # should_show_aux()'s link-state fallback is a BOOT-WINDOW heuristic
+        # only; without this flag, _mark_disconnected() clearing audio_source
+        # re-created the "never seen a source" condition, and the fallback then
+        # asserted AUX in the middle of live A2DP playback (2026-08-26 field
+        # failure: phantom AUX IN, metadata cleared, transport controls dead).
+        self._source_ever_seen = False
+        # Recovery probe. Once `connected` is False nothing polls the chip, so
+        # a FALSE disconnect could never heal itself — the firmware sat in
+        # phantom-AUX until a reboot. Probe gently while powered but unlinked.
+        self._link_probe_at = 0.0
+        self._link_probe_period_s = 5.0
+        # Consecutive probes with no reply of any kind. The datasheet (§4.5.1)
+        # requires the BM83 to ACK every command within 200ms, so sustained
+        # silence means the module is off, asleep, or unwired — a condition
+        # the firmware previously could not distinguish from "idle".
+        self._link_probe_misses = 0
+        self._link_dead_warned = False
+        # Idle heartbeat cadence. Never go completely silent: a board printing
+        # nothing at all is indistinguishable from a crashed one (that cost
+        # ~20 min of misdiagnosis on 2026-08-26).
+        self._hb_idle_next_at = 0.0
+        self._hb_idle_period_s = 30.0
+        # One-shot boot handshake. The ESP32 reboots far more often than the
+        # BM83 does (USB auto-reload, code edits, resets) and the chip keeps
+        # running across those reboots. Without re-sending the event-mask
+        # setup, a chip that is powered, linked and streaming can sit there
+        # reporting NOTHING to the host MCU: the firmware then shows no
+        # metadata, no link state, and every transport control is a no-op
+        # while audio keeps playing. Fires ~1.5s after boot (settle first).
+        self._boot_init_at = time.monotonic() + 1.5
         # A2DP stream-restart kick. After a link bounce the BM83's audio
         # path can come back MUTED while it still reports source=A2DP and
         # AVRCP works fine — observed live 2026-08-02 on b-intel: app
@@ -402,7 +450,28 @@ class Bm83:
                        " ".join("%02X" % b for b in params))
             out.append((op, params))
             if self.connected and op != self.EVT_BTM_STATUS:
+                # NB: BTM_Status is deliberately excluded — stamping it here
+                # would make note_btm_state's _disconnect_hold_s check
+                # always-false and a real teardown event could never demote
+                # the link. Radio liveness for the silence watchdog comes from
+                # _last_rx_byte_at instead (see check_connection_watchdog).
                 self._last_connected_seen = time.monotonic()
+            if not self.connected:
+                # Any frame at all proves the module is powered and wired.
+                self.power_on = True
+                self._link_probe_misses = 0
+                if self._link_dead_warned:
+                    self._link_dead_warned = False
+                    print("[BM83] responding again")
+            if (not self.connected) and op in (
+                    self.EVT_AVC_VENDOR_RSP, self.EVT_AVRCP_VENDOR_DEP_RSP):
+                # Positive proof of a live AVRCP session while we believed the
+                # link was down: a false disconnect. Heal instead of waiting
+                # for a spontaneous BTM_Status that may never come.
+                self.connected = True
+                self._disconnect_deadline = 0.0
+                self._last_connected_seen = time.monotonic()
+                print("[BTM] AVRCP traffic while disconnected -> relinking")
             head = body_end + 1
 
         # Compact lazily once head has consumed enough to be worth shifting.
@@ -454,19 +523,48 @@ class Bm83:
                     print("[BM83 RX] SILENT for %.1fs | free=%d"
                           % (instantaneous_gap, free))
             else:
-                dprint("[BM83 RX] idle silence %.1fs | free=%d"
-                       % (instantaneous_gap, free))
+                self._print_idle_hb(now, "idle, RX silent %.1fs" % instantaneous_gap, free)
         elif effective_gap >= self._hb_degraded_warn_s:
             if self.connected:
                 print("[BM83 RX] DEGRADED: max %.2fs in last %.0fs window (now %.2fs) | free=%d"
                       % (effective_gap, self._hb_period_s, instantaneous_gap, free))
             else:
-                dprint("[BM83 RX] idle (max %.2fs in last %.0fs window) | free=%d"
-                       % (effective_gap, self._hb_period_s, free))
+                self._print_idle_hb(
+                    now, "idle, max gap %.2fs" % effective_gap, free)
         else:
             # Also print during healthy operation so "log went silent" is
             # itself a diagnostic signal (serial CDC dropped, not radio).
             print("[BM83 RX] alive: %.2fs since last byte | free=%d" % (instantaneous_gap, free))
+
+    def _print_idle_hb(self, now, detail, free):
+        """Low-rate liveness line for the disconnected/idle case.
+
+        Idle silence is normal and must not spam every 10s, but going
+        COMPLETELY quiet is worse: a board printing nothing is
+        indistinguishable from a crashed one over a serial console. Print a
+        compact line every _hb_idle_period_s so absence of output always
+        means something is actually wrong.
+        """
+        if now < self._hb_idle_next_at:
+            return
+        self._hb_idle_next_at = now + self._hb_idle_period_s
+        print("[BM83 RX] %s | power_on=%d src=%s aux=%d | free=%d"
+              % (detail, 1 if self.power_on else 0,
+                 "--" if self.audio_source is None else "%02X" % self.audio_source,
+                 1 if self.should_show_aux() else 0, free))
+
+    def tick_boot_init(self, now=None):
+        """Send the one-shot boot handshake once the radio has settled."""
+        if self._boot_init_at == 0.0:
+            return False
+        if now is None:
+            now = time.monotonic()
+        if now < self._boot_init_at:
+            return False
+        self._boot_init_at = 0.0
+        print("[BM83] boot handshake -> enabling event reporting")
+        self.init_link()
+        return True
 
     def init_link(self):
         self.send(self.OP_READ_BD_ADDR)
@@ -669,6 +767,15 @@ class Bm83:
 
     def note_btm_state(self, state):
         now = time.monotonic()
+        # The chip talking at all proves it is powered. `power_on` used to
+        # track only whether WE had powered it, so after an ESP32-only reboot
+        # it stayed False against a live, streaming module — and
+        # should_show_aux()/tick_link_recovery() both gate on it, leaving the
+        # UI inert. Trust the chip's own reporting instead.
+        if state == 0x00:
+            self.power_on = False
+        else:
+            self.power_on = True
         # Audio-source tracking. States 0x80/0x81/0x82 report which audio
         # source the BM83 is currently routing (none / AUX / A2DP). They are
         # orthogonal to link-state codes like 0x06 (A2DP link established),
@@ -679,6 +786,9 @@ class Bm83:
         is_audio_src_state = state in self.AUDIO_SRC_STATES
         if is_audio_src_state:
             self.audio_source = state
+            # Latch: the boot-window fallback in should_show_aux() must never
+            # re-engage after we have had real source reporting.
+            self._source_ever_seen = True
             if state not in self.CONNECTED_STATES:
                 return None
         # AVRCP session suspend/resume. A quick BT off/on on the central
@@ -696,6 +806,7 @@ class Bm83:
                 # now; main.py re-arms a fresh staggered set on 0x0B. An
                 # in-flight stream kick is aborted too — never send its
                 # PLAY into a dead link.
+                self._avrcp_suspend_at = now
                 print("[BTM] AVRCP down (0x%02X) -> pausing AVRCP polling" % state)
             # Session-scoped work is invalid on every teardown indication,
             # even when an earlier teardown code already set the suspend flag.
@@ -716,6 +827,7 @@ class Bm83:
         if state in self.CONNECTED_STATES:
             self._disconnect_deadline = 0.0
             self._last_connected_seen = now
+            self._hb_idle_next_at = 0.0
             if self._avrcp_suspended:
                 self._avrcp_suspended = False
                 # Resume only after the link settles; polling the instant
@@ -755,7 +867,21 @@ class Bm83:
             return True
         if self.audio_source in (self.AUDIO_SRC_NONE, self.AUDIO_SRC_A2DP):
             return False
-        # Haven't seen a source event yet — fall back to link state.
+        # audio_source is None here. That means one of two very different
+        # things, and conflating them was the 2026-08-26 field failure:
+        #
+        #   a) We have never seen a source event (fresh boot). The old
+        #      link-state heuristic is a reasonable guess: no BT link on a
+        #      powered unit usually does mean the user is on the AUX jack.
+        #   b) We HAD source reporting and _mark_disconnected() cleared it.
+        #      Here "not connected" is NOT evidence of AUX — and asserting
+        #      AUX mid-A2DP wipes the metadata and disables every transport
+        #      control while the phone/PC keeps happily streaming.
+        #
+        # Only (a) may use the heuristic. In (b) we require positive evidence
+        # (a real 0x81) before claiming AUX.
+        if self._source_ever_seen:
+            return False
         return not self.connected
 
     def check_connection_watchdog(self, now=None):
@@ -779,7 +905,13 @@ class Bm83:
         # inbound AVRCP traffic from a dying session cannot cancel link-down.
         if self._disconnect_deadline and now >= self._disconnect_deadline:
             return self._mark_disconnected()
-        if (now - self._last_connected_seen) > self._btm_silence_timeout_s:
+        # Demote only when BOTH clocks are stale: no "connected evidence" AND
+        # no bytes at all from the chip. A radio that is still sending frames
+        # we happen not to count as evidence (bare source events, acks) is
+        # alive, and demoting it stranded the UI in phantom AUX with every
+        # control dead while audio kept playing (2026-08-26).
+        if ((now - self._last_connected_seen) > self._btm_silence_timeout_s
+                and (now - self._last_rx_byte_at) > self._btm_silence_timeout_s):
             return self._mark_disconnected()
         return None
 
@@ -904,6 +1036,67 @@ class Bm83:
             self._next_attrs_at = t
             return True
         return False
+
+    def tick_avrcp_resume(self, now=None):
+        """Lift a stale AVRCP suspension so polling cannot stall forever.
+
+        The suspension is meant to cover a teardown/re-establish window of a
+        second or two. If the chip never sends another connected-state event
+        (routine after a profile-level 0x08/0x0C blip) the old code stayed
+        suspended indefinitely: no polling, frozen metadata, and no inbound
+        traffic to keep the silence watchdog fed.
+        """
+        if not self._avrcp_suspended:
+            return False
+        if now is None:
+            now = time.monotonic()
+        if (now - self._avrcp_suspend_at) < self._avrcp_suspend_max_s:
+            return False
+        self._avrcp_suspended = False
+        self._next_playstatus_at = now
+        print("[BTM] AVRCP suspension timed out -> resuming polling")
+        return True
+
+    def tick_link_recovery(self, now=None):
+        """Gently probe the chip while powered but believed disconnected.
+
+        Without this, a false disconnect is terminal: tick_avrcp() returns
+        early when not connected, so nothing is ever sent, so the chip never
+        replies, so `connected` can never come back on its own. One
+        GetPlayStatus every few seconds costs nothing and lets poll()'s
+        relink path (see above) recover the session.
+        """
+        if self.connected or self._avrcp_suspended:
+            return False
+        if now is None:
+            now = time.monotonic()
+        if now < self._link_probe_at:
+            return False
+        self._link_probe_at = now + self._link_probe_period_s
+        self._link_probe_misses += 1
+        # Read_Local_BD_Address is the ideal liveness probe: the chip must
+        # answer it in any link state, and it has no AVRCP side effects.
+        # NOTE: deliberately NOT gated on power_on. power_on is inferred from
+        # the chip's own reporting, so a silent module would otherwise pin it
+        # False forever and this recovery path could never run.
+        self.send(self.OP_READ_BD_ADDR)
+        if self.power_on:
+            # Chip is known alive: also nudge AVRCP so a false disconnect can
+            # be proven wrong by a real response (see poll()).
+            self.avrcp_get_play_status(0)
+        # Every ~6th probe, re-assert event reporting. The chip can come back
+        # (re-powered, woken) with its event mask stale after an MCU-only
+        # reboot; without this the link would look dead forever.
+        if (self._link_probe_misses % 6) == 0:
+            self.init_link()
+        if self._link_probe_misses == 4 and not self._link_dead_warned:
+            self._link_dead_warned = True
+            print("[BM83] NOT RESPONDING after %d probes — module unpowered,"
+                  % self._link_probe_misses)
+            print("       asleep, or UART unwired. Check BM83 power and the")
+            print("       IO17(TX)/IO18(RX) link; audio may still play since")
+            print("       the chip streams A2DP without the host MCU.")
+        return True
 
     def tick_avrcp(self):
         if (not self.connected) or self._avrcp_suspended:
