@@ -59,6 +59,8 @@ class Bm83:
         "_link_probe_period_s",
         "_link_probe_misses",
         "_link_dead_warned",
+        "_explicit_off",
+        "_relinked",
         "_hb_idle_next_at",
         "_hb_idle_period_s",
         "_boot_init_at",
@@ -244,6 +246,18 @@ class Bm83:
         # the firmware previously could not distinguish from "idle".
         self._link_probe_misses = 0
         self._link_dead_warned = False
+        # True from an explicit host-commanded power-off until the chip is seen
+        # running again. Without it, the recovery probe fires immediately after
+        # power_off_cmd() and a late ACK / shutdown-time reply is mistaken for
+        # "the module is powered", so power_on flips back to True and the next
+        # BT_POWER press sends OFF again instead of ON.
+        self._explicit_off = False
+        # Set when poll() proves a live AVRCP session while we believed the link
+        # was down. main.py consumes it and re-arms the session-scoped AVRCP
+        # registrations: this recovery path bypasses note_btm_state(), so
+        # without it a healed session would never register PlaybackStatus /
+        # TrackChanged / Position notifications and metadata would stay frozen.
+        self._relinked = False
         # Idle heartbeat cadence. Never go completely silent: a board printing
         # nothing at all is indistinguishable from a crashed one (that cost
         # ~20 min of misdiagnosis on 2026-08-26).
@@ -457,8 +471,11 @@ class Bm83:
                 # _last_rx_byte_at instead (see check_connection_watchdog).
                 self._last_connected_seen = time.monotonic()
             if not self.connected:
-                # Any frame at all proves the module is powered and wired.
-                self.power_on = True
+                # Any frame at all proves the module is powered and wired --
+                # unless we just commanded it off, in which case this is
+                # shutdown-time chatter and must not resurrect power_on.
+                if not self._explicit_off:
+                    self.power_on = True
                 self._link_probe_misses = 0
                 if self._link_dead_warned:
                     self._link_dead_warned = False
@@ -471,6 +488,11 @@ class Bm83:
                 self.connected = True
                 self._disconnect_deadline = 0.0
                 self._last_connected_seen = time.monotonic()
+                # Tell main.py to re-arm the session-scoped registrations: this
+                # path never produces note_btm_state()'s "CONNECTED" edge, and
+                # in the silent-BTM case it is meant to recover no later 0x0B
+                # may ever arrive.
+                self._relinked = True
                 print("[BTM] AVRCP traffic while disconnected -> relinking")
             head = body_end + 1
 
@@ -579,6 +601,7 @@ class Bm83:
             return
         now = time.monotonic()
         self._power_state = "on_press"
+        self._explicit_off = False
         self._power_next_at = now + 0.2  # Wait 0.2s before sending release
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_PRESS]))
 
@@ -613,6 +636,9 @@ class Bm83:
             # 1.5s elapsed since press, now send release
             self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_RELEASE]))
             self.power_on = False
+            # Latch the intent so neither the recovery probe nor frame-based
+            # power inference can resurrect power_on while the chip shuts down.
+            self._explicit_off = True
             self._mark_disconnected()
             self._power_state = None
             print("[POWER] OFF (UART)")
@@ -774,8 +800,12 @@ class Bm83:
         # UI inert. Trust the chip's own reporting instead.
         if state == 0x00:
             self.power_on = False
+            self._explicit_off = True
         else:
+            # Authoritative: the chip is demonstrably running (this also covers
+            # the user powering it back on with the module's own button).
             self.power_on = True
+            self._explicit_off = False
         # Audio-source tracking. States 0x80/0x81/0x82 report which audio
         # source the BM83 is currently routing (none / AUX / A2DP). They are
         # orthogonal to link-state codes like 0x06 (A2DP link established),
@@ -1037,6 +1067,13 @@ class Bm83:
             return True
         return False
 
+    def consume_relink(self):
+        """Return True once per self-healed relink, clearing the flag."""
+        if not self._relinked:
+            return False
+        self._relinked = False
+        return True
+
     def tick_avrcp_resume(self, now=None):
         """Lift a stale AVRCP suspension so polling cannot stall forever.
 
@@ -1058,15 +1095,23 @@ class Bm83:
         return True
 
     def tick_link_recovery(self, now=None):
-        """Gently probe the chip while powered but believed disconnected.
+        """Gently probe the chip whenever we believe the link is down.
+
+        Deliberately NOT gated on ``power_on``: that flag is inferred from the
+        chip's own reporting, so a silent module pins it False and gating here
+        would make the dead state permanent. It IS skipped after an explicit
+        host-commanded power-off, where silence is the intended outcome.
 
         Without this, a false disconnect is terminal: tick_avrcp() returns
         early when not connected, so nothing is ever sent, so the chip never
-        replies, so `connected` can never come back on its own. One
-        GetPlayStatus every few seconds costs nothing and lets poll()'s
-        relink path (see above) recover the session.
+        replies, so `connected` can never come back on its own.
+
+        Each probe sends ``Read_Local_BD_Address`` (answerable in any link
+        state, no AVRCP side effects), plus a GetPlayStatus only when the chip
+        is already known alive, and re-asserts ``init_link()`` every ~6th
+        probe. A reply lets poll()'s relink path recover the session.
         """
-        if self.connected or self._avrcp_suspended:
+        if self.connected or self._avrcp_suspended or self._explicit_off:
             return False
         if now is None:
             now = time.monotonic()

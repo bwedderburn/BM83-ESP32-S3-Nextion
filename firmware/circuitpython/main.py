@@ -153,6 +153,34 @@ def main():
     BTM_TEARDOWN_STATES = (0x00, 0x08, 0x0C, 0x0F, 0x11)
     BTM_AVRCP_LINK_UP = 0x0B
 
+    def arm_avrcp_session():
+        """Register the AVRCP notifications for a (re)established session.
+
+        Reached from two places: the BTM_Status CONNECTED / 0x0B edge, and a
+        self-healed relink (bm.consume_relink()). The relink path bypasses
+        note_btm_state() entirely, so without sharing this block a recovered
+        session would never register PlaybackStatus / TrackChanged / Position
+        notifications and its metadata would stay frozen.
+        """
+        nonlocal avrcp_notifs_registered
+        print("[BTM] Connected -> register notifications + request metadata")
+        # Stagger the initial registrations instead of sending all three
+        # back-to-back. Some BM83 firmware revs choke on rapid
+        # register-notification bursts during CT-side establishment and
+        # silently drop the A2DP profile while leaving the BT link up (same
+        # failure mode the reregister throttles in bm83.py guard against;
+        # this is the initial-burst counterpart). Suspected trigger for
+        # "first play after a fresh (re)connect stalls after a few seconds"
+        # on the Windows / Apple Music central.
+        bm.schedule_avrcp_notifications((
+            (0.25, 0x01, 0),   # PlaybackStatusChanged
+            (0.75, 0x02, 0),   # TrackChanged
+            (1.25, 0x05, 1),   # PlaybackPositionChanged, 1s interval
+        ))
+        bm.schedule_play_status(1.6)
+        bm.schedule_attrs(2.0)
+        avrcp_notifs_registered = True
+
     def flush_page(pageid):
         nonlocal pending_flush
         if pageid is None:
@@ -268,13 +296,21 @@ def main():
         bm_tick_notif_regs(now)
         bm_tick_stream_kick(now)
 
-        # Self-healing: lift a stale AVRCP suspension, and probe the chip when
-        # we believe we are disconnected while still powered. Together these
-        # stop a transient blip from stranding the firmware in a permanently
-        # "disconnected" state with no way back (2026-08-26 field failure).
+        # Self-healing: lift a stale AVRCP suspension, and probe the chip
+        # whenever we believe the link is down. The probe is deliberately not
+        # gated on power_on (a silent module pins that False); it is skipped
+        # only after an explicit power-off. Together these stop a transient
+        # blip from stranding the firmware in a permanently "disconnected"
+        # state with no way back (2026-08-26 field failure).
         bm_tick_boot_init(now)
         bm_tick_avrcp_resume(now)
         bm_tick_link_recovery(now)
+
+        # A self-healed relink never produces a BTM_Status CONNECTED edge, so
+        # arm the session-scoped registrations here or the recovered session
+        # would receive no AVRCP notifications at all.
+        if bm.consume_relink() and not avrcp_notifs_registered:
+            arm_avrcp_session()
 
         # aux_mode is driven by the BM83's own audio-source reporting.
         # Datasheet "AudioUARTCommandSet v2.09" 7.2 BTM_Status describes
@@ -341,24 +377,7 @@ def main():
                     print("[BTM] link teardown (0x%02X) -> will re-register on next AVRCP link" % state)
                     avrcp_notifs_registered = False
                 if (change == "CONNECTED" or state == BTM_AVRCP_LINK_UP) and not avrcp_notifs_registered:
-                    print("[BTM] Connected -> register notifications + request metadata")
-                    # Stagger the initial registrations instead of sending all
-                    # three back-to-back. Some BM83 firmware revs choke on
-                    # rapid register-notification bursts during CT-side
-                    # establishment and silently drop the A2DP profile while
-                    # leaving the BT link up (same failure mode the
-                    # reregister throttles in bm83.py guard against; this is
-                    # the initial-burst counterpart). Suspected trigger for
-                    # "first play after a fresh (re)connect stalls after a
-                    # few seconds" on the Windows / Apple Music central.
-                    bm.schedule_avrcp_notifications((
-                        (0.25, 0x01, 0),   # PlaybackStatusChanged
-                        (0.75, 0x02, 0),   # TrackChanged
-                        (1.25, 0x05, 1),   # PlaybackPositionChanged, 1s interval
-                    ))
-                    bm.schedule_play_status(1.6)
-                    bm.schedule_attrs(2.0)
-                    avrcp_notifs_registered = True
+                    arm_avrcp_session()
                 elif change == "DISCONNECTED":
                     avrcp_notifs_registered = False
                     last_play_status = None
@@ -394,7 +413,9 @@ def main():
                         changed.extend(invalidate_track_meta())
                         dprint("[TRACK] inferred change -> request metadata")
                         bm.schedule_attrs(0.25)
-                    if primary_metadata_missing() and (pos_ms is not None or (total_ms is not None and total_ms > 0)):
+                    if primary_metadata_missing() and (
+                        pos_ms is not None or (total_ms is not None and total_ms > 0)
+                    ):
                         bm.schedule_attrs(0.15)
                     if pos_ms is not None and (last_play_status in PLAYING_STATES or desired_meta.get("time_cur") == TIME_UNKNOWN):
                         meta_set("time_cur", _fmt_ms(pos_ms), changed)
