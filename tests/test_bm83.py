@@ -1053,3 +1053,85 @@ def test_link_recovery_runs_even_when_power_state_unknown(monkeypatch):
     bm.poll()
     assert bm.power_on is True
     assert bm._link_probe_misses == 0
+
+
+def test_explicit_power_off_is_not_undone_by_shutdown_chatter(monkeypatch):
+    """A late frame during shutdown must not resurrect power_on.
+
+    Review finding (PR #131, Codex P2): after power_off_cmd() the recovery
+    probe's deadline is stale, so it fires immediately; a command ACK or probe
+    reply arriving while the module finishes shutting down hit poll()'s
+    "any frame proves it is powered" branch and set power_on back to True. The
+    UI then showed the wrong power state and the next BT_POWER press sent
+    another power-OFF instead of powering on.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [50000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.note_btm_state(0x06)              # chip reporting -> powered
+    assert bm.power_on is True
+
+    bm.power_off_cmd()
+    t[0] += 2.0
+    bm.tick_power()                      # sends release, latches the intent
+    assert bm.power_on is False
+    assert bm.connected is False
+
+    # The probe must stay quiet: silence is the intended outcome here.
+    assert bm.tick_link_recovery() is False
+
+    # ...and shutdown-time chatter must not flip power_on back on.
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_AVC_VENDOR_RSP, b"\x00" + b"\x00" * 10))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is False
+
+    # A real power-on request clears the latch and re-enables recovery.
+    bm.power_on_cmd()
+    assert bm._explicit_off is False
+
+
+def test_chip_reporting_overrides_explicit_off(monkeypatch):
+    """Powering the module up by its own button must be believed."""
+    bm = Bm83(None)
+    t = [51000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm._explicit_off = True
+    bm.power_on = False
+
+    bm.note_btm_state(0x06)              # chip says a link is established
+    assert bm.power_on is True
+    assert bm._explicit_off is False
+
+    bm.note_btm_state(0x00)              # explicit Power OFF state
+    assert bm.power_on is False
+    assert bm._explicit_off is True
+
+
+def test_relink_is_surfaced_once_for_session_rearm(monkeypatch):
+    """A self-healed relink must be reported so notifications get re-armed.
+
+    Review finding (PR #131, Codex P2): the recovery path sets connected
+    directly and never produces note_btm_state()'s "CONNECTED" edge, which is
+    what main.py keys the AVRCP registrations off. In the silent-BTM case this
+    path exists to recover, no later 0x0B may ever arrive — so the recovered
+    session would have run with no PlaybackStatus / TrackChanged / Position
+    notifications at all.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [52000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on = True
+    bm.connected = False
+
+    assert bm.consume_relink() is False          # nothing to report yet
+
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_AVC_VENDOR_RSP, b"\x00" + b"\x00" * 10))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.connected is True
+    assert bm.consume_relink() is True           # reported exactly once
+    assert bm.consume_relink() is False
