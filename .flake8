@@ -1,0 +1,20 @@
+[flake8]
+# Keep a local `flake8 .` equivalent to what CI lints.
+#
+# CI runs in a clean checkout, so it never sees a developer's virtualenv. A
+# local run did: `.venv/Lib/site-packages/pip/_vendor/**` tripped 9 findings
+# (F821 `basestring` and friends in pip's vendored Python-2-compatible code),
+# which made the local lint look broken while CI was green. Excluding build and
+# environment directories — none of which exist in CI — makes the two agree.
+extend-exclude =
+    .venv,
+    venv,
+    env,
+    .eggs,
+    *.egg-info,
+    node_modules,
+    __pycache__
+
+# Matches the workflow's second, advisory pass.
+max-line-length = 127
+max-complexity = 10
