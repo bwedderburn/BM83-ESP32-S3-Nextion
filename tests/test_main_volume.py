@@ -6,6 +6,7 @@ from unittest import mock
 # which are CircuitPython-specific hardware modules not available in CI
 sys.modules['board'] = mock.MagicMock()
 sys.modules['busio'] = mock.MagicMock()
+sys.modules['microcontroller'] = mock.MagicMock()
 
 import main  # noqa: E402
 

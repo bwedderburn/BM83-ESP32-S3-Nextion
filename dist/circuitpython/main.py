@@ -2,6 +2,7 @@ import gc
 import time
 import board
 import busio
+import microcontroller
 
 from utils.common import (
     TIME_UNKNOWN,
@@ -102,6 +103,9 @@ def main():
             ble_volume(up)
 
     print("=== ESP32-S3 BM83 + Nextion + BLE HID (smart-routed volume) ===")
+    # If this ever says BROWNOUT after a BT_POWER press, the power-button
+    # "struggle" is a supply sag when the BM83 starts, not firmware.
+    print("[BOOT] reset_reason:", microcontroller.cpu.reset_reason)
 
     nx.boot_sync(0.9)
 
@@ -499,8 +503,10 @@ def main():
         for tok in tokens:
             dprint("[NX] Token:", tok)
             if tok == b"BT_POWER":
+                print("[NX] BT_POWER token")
                 bm.power_toggle()
             elif tok == b"BT_POWEROFF":
+                print("[NX] BT_POWEROFF token")
                 bm.power_off_cmd()
             elif tok == b"BT_PAIR":
                 bm.pair()

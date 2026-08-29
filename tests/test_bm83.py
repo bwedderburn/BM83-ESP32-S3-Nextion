@@ -1177,19 +1177,63 @@ def test_power_on_unconfirmed_reverts_and_toggle_stays_in_phase(monkeypatch):
     assert uart.writes[n][4:6] == bytes([0x00, Bm83.MMI_POWER_ON_PRESS])
 
 
-def test_power_presses_ignored_while_confirmation_pending(monkeypatch):
-    """Mashing BT_POWER during the confirmation window must not double-fire."""
+def test_power_press_during_confirmation_retries_on(monkeypatch):
+    """A press while an ON attempt is unconfirmed restarts the attempt.
+
+    Field report 2026-08-29 ("still struggles with the power button"):
+    the original contract silently swallowed presses for the whole
+    confirmation window, so a user mashing BT_POWER after a slow or failed
+    boot got a dead button. New contract: the press is the user insisting
+    -- retry the ON sequence (MMI power-on to a chip that is actually
+    mid-boot is a no-op, so this is safe).
+    """
     uart = MockUART()
     bm = Bm83(uart)
     t = [61000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()
     t[0] += 0.3; bm.tick_power()
-    t[0] += 0.6; bm.tick_power()
+    t[0] += 0.6; bm.tick_power()         # confirmation pending
+    assert bm._power_confirm_deadline > 0
     n = len(uart.writes)
-    bm.power_toggle()                    # pending -> ignored
-    bm.power_on_cmd()                    # pending -> ignored
-    bm.power_off_cmd()                   # pending -> ignored
+    bm.power_toggle()                    # power_on False -> retries ON
+    assert len(uart.writes) == n + 1
+    assert uart.writes[n][4:6] == bytes([0x00, Bm83.MMI_POWER_ON_PRESS])
+    # The retry rearms the press sequence; the old deadline is dropped so
+    # a fresh one is set when the retry reaches on_init.
+    assert bm._power_confirm_deadline == 0.0
+    assert bm._power_state == "on_press"
+
+
+def test_power_off_during_confirmation_cancels_and_proceeds(monkeypatch):
+    """OFF during an unconfirmed ON settles it the user's way."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [61500.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()
+    t[0] += 0.3; bm.tick_power()
+    t[0] += 0.6; bm.tick_power()         # confirmation pending
+    n = len(uart.writes)
+    bm.power_off_cmd()
+    assert bm._power_confirm_deadline == 0.0
+    assert len(uart.writes) == n + 1
+    assert uart.writes[n][4:6] == bytes([0x00, Bm83.MMI_POWER_OFF_PRESS])
+    t[0] += 2.0; bm.tick_power()         # release
+    assert bm.power_on is False
+    assert bm._explicit_off is True
+
+
+def test_power_press_ignored_only_while_sequence_in_flight(monkeypatch):
+    """The sub-2s press/release window still debounces double-fires."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [61800.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()                    # press in flight
+    n = len(uart.writes)
+    bm.power_on_cmd()                    # ignored (sequence in flight)
+    bm.power_off_cmd()                   # ignored (sequence in flight)
     assert len(uart.writes) == n
 
 
@@ -1380,3 +1424,63 @@ def test_btm_off_frame_is_not_boot_evidence(monkeypatch):
     bm.poll()
     assert bm.power_on is True
     assert bm._power_confirm_deadline == 0.0
+
+
+def test_shutdown_transient_states_do_not_resurrect_power(monkeypatch):
+    """Teardown reports during a commanded OFF must not flip power_on.
+
+    Issue #135, captured live 2026-08-29: 0x08 arrived 0.4s after the OFF
+    release and resurrected power_on for 100ms until the final 0x00. If the
+    chip dies before that final 0x00, power_on sticks True and the next
+    press sends OFF -- a one-press toggle inversion.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [69000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.note_btm_state(0x06)              # connected, chip on
+    bm.power_off_cmd()
+    t[0] += 2.0; bm.tick_power()         # OFF released; _explicit_off latched
+    assert bm.power_on is False
+
+    # The captured sequence: teardown chatter, then the final OFF report.
+    for st in (0x08, 0x0C, 0x11, 0x0F):
+        bm.note_btm_state(st)
+        assert bm.power_on is False, "state 0x%02X resurrected power_on" % st
+        assert bm._explicit_off is True
+    bm.note_btm_state(0x00)
+    assert bm.power_on is False
+
+    # Truncated variant: chip dies right after 0x08, no final 0x00 --
+    # the next press must still send ON.
+    uart2 = MockUART()
+    bm2 = Bm83(uart2)
+    bm2.note_btm_state(0x06)
+    bm2.power_off_cmd()
+    t[0] += 2.0; bm2.tick_power()
+    bm2.note_btm_state(0x08)             # last thing it ever says
+    n = len(uart2.writes)
+    bm2.power_toggle()
+    assert uart2.writes[n][4:6] == bytes([0x00, Bm83.MMI_POWER_ON_PRESS])
+
+
+def test_module_button_power_on_still_believed_during_explicit_off(monkeypatch):
+    """Affirmative states must still resurrect power_on after explicit OFF.
+
+    The user can power the module back up with its own physical button;
+    link-up reports (0x06/0x0B/0x15) and audio-source reports are proof of
+    a running chip and must clear the latch -- only the shutdown-transient
+    states are gated (issue #135).
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [69500.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.note_btm_state(0x06)
+    bm.power_off_cmd()
+    t[0] += 2.0; bm.tick_power()
+    assert bm.power_on is False and bm._explicit_off is True
+
+    bm.note_btm_state(0x06)              # A2DP up: chip is running
+    assert bm.power_on is True
+    assert bm._explicit_off is False

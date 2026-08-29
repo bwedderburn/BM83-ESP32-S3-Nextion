@@ -155,6 +155,11 @@ class Bm83:
     # disconnects during AUX sessions that wiped audio_source and flapped
     # aux_mode (repeated Line-In gain kicks -> gain pegged at max, beeps).
     LINK_DOWN_STATES = (0x00, 0x0F, 0x11)
+    # States a commanded shutdown legitimately walks through before the
+    # final 0x00 (captured live 2026-08-29: 0x08 arrived 0.4s after the OFF
+    # release). While _explicit_off is latched these mean "still shutting
+    # down", not "running and staying on" (issue #135).
+    SHUTDOWN_TRANSIENT_STATES = (0x08, 0x0C, 0x0F, 0x11)
 
     def __init__(self, uart=None):
         self.uart = uart
@@ -638,9 +643,19 @@ class Bm83:
 
     def power_on_cmd(self):
         """Begin the non-blocking power-on sequence (press now, release via tick_power())."""
-        # Ignore if state machine already in progress to prevent inconsistent state
-        if self._power_state is not None or self._power_confirm_deadline:
+        if self._power_state is not None:
+            # A press/release is mid-flight (sub-2s window) -- ignore, but
+            # never silently: invisible swallowing reads as a broken button.
+            print("[POWER] press ignored (sequence in flight)")
             return
+        if self._power_confirm_deadline:
+            # A press while the previous ON is unconfirmed is the user
+            # insisting -- restart the attempt instead of swallowing the
+            # press (field report 2026-08-29: the silent dead zone read as
+            # "the power button struggles"). MMI power-on sent to a chip
+            # that is actually mid-boot is a no-op, so retrying is safe.
+            print("[POWER] retrying ON (previous attempt unconfirmed)")
+            self._power_confirm_deadline = 0.0
         now = time.monotonic()
         self._power_state = "on_press"
         self._explicit_off = False
@@ -649,9 +664,14 @@ class Bm83:
 
     def power_off_cmd(self):
         """Begin the non-blocking power-off sequence (press now, release via tick_power())."""
-        # Ignore if state machine already in progress to prevent inconsistent state
-        if self._power_state is not None or self._power_confirm_deadline:
+        if self._power_state is not None:
+            print("[POWER] press ignored (sequence in flight)")
             return
+        if self._power_confirm_deadline:
+            # The user wants it OFF while an ON attempt is unconfirmed:
+            # settle the question their way instead of blocking the press.
+            print("[POWER] cancelling unconfirmed ON -> powering OFF")
+            self._power_confirm_deadline = 0.0
         now = time.monotonic()
         self._power_state = "off_press"
         self._power_next_at = now + 1.5  # Wait 1.5s before sending release
@@ -682,7 +702,10 @@ class Bm83:
             # Do NOT claim power_on yet — wait for the chip's own reporting
             # (any BTM_Status or inbound frame clears this deadline via the
             # normal inference paths). See _power_confirm_deadline.
-            self._power_confirm_deadline = now + 6.0
+            # 3.5s: healthy boots confirm in 0.8-1.5s on hardware (three
+            # captures 2026-08-29), so this is >2x margin while keeping the
+            # "not confirmed" hint prompt enough to feel responsive.
+            self._power_confirm_deadline = now + 3.5
             self._power_state = None
             print("[POWER] ON requested (awaiting chip confirmation)")
         elif self._power_state == "off_press":
@@ -864,6 +887,14 @@ class Bm83:
                 print("[POWER] ON attempt cancelled - chip reported OFF")
             self.power_on = False
             self._explicit_off = True
+        elif self._explicit_off and state in self.SHUTDOWN_TRANSIENT_STATES:
+            # Commanded shutdown walks teardown states (0x0C/0x08/0x11/0x0F)
+            # before the final 0x00 -- captured live 2026-08-29 with 0x08
+            # resurrecting power_on for 100ms. These mean "still shutting
+            # down", not "running and staying on"; without this gate a chip
+            # that dies before its final 0x00 leaves power_on stuck True and
+            # the next press sends OFF -- issue #135's toggle inversion.
+            pass
         else:
             # Authoritative: the chip is demonstrably running (this also covers
             # the user powering it back on with the module's own button).
