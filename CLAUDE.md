@@ -53,3 +53,35 @@ content followed by a duplicate fragment.
 
 When `firmware/` changes, run `build_mpy.sh` to refresh `dist/`. Do not
 hand-edit `dist/` — it will be overwritten on the next build.
+
+
+## Change workflow — branch + PR by default
+
+`main` is protected: it takes changes through a pull request, and the Python
+matrix must be green before merge. Admin bypass is deliberately left enabled
+for genuine emergencies (see below).
+
+**Normal change:**
+
+1. Branch off `main` (`fix/...`, `feat/...`, `chore/...`).
+2. Commit, push, open a PR. Request **Copilot** as a reviewer.
+3. Let CI finish, and respond to Copilot's comments — fix what is right,
+   push back on what is wrong, and say which and why in the thread.
+4. **Hardware-test on the actual unit**, then merge.
+
+**Do not merge on green CI alone.** Every fault that has actually hurt this
+project was invisible to CI: the first-play A2DP stall, the muted-path wedge,
+the PR #128 AUX regression (CI-green, Copilot-clean, and it pegged the Line-In
+gain and made the unit beep), and the 2026-08-26 phantom-AUX incident. Green
+means "the host tests still pass", not "it works on the hardware".
+
+**Emergency path:** when the unit is broken and Brian is waiting, push straight
+to `main` (admin bypass), then open a retroactive review PR against the parent
+commit so the change still gets reviewed. Say plainly in the PR that it is
+already merged and hardware-verified.
+
+**Reviewer split that works here:** Copilot is good at breadth — conventions,
+missing guards, things visible in a diff. Claude is better at the domain
+reasoning that needs the datasheet and a serial capture (why `0x08` must not
+demote the link, why clearing `audio_source` re-arms a boot heuristic). Neither
+substitutes for the hardware.
