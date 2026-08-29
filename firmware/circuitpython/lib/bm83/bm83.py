@@ -105,6 +105,7 @@ class Bm83:
     OP_EQ_MODE_SETTING = const(0x1C)
     OP_AVRCP_VENDOR_DEP_CMD = const(0x4A)
 
+    EVT_CMD_ACK = const(0x00)
     EVT_BTM_STATUS = const(0x01)
     EVT_EQ_MODE_IND = const(0x10)
     EVT_AVC_VENDOR_RSP = const(0x1A)
@@ -482,10 +483,17 @@ class Bm83:
                 # _last_rx_byte_at instead (see check_connection_watchdog).
                 self._last_connected_seen = time.monotonic()
             if not self.connected:
-                # Any frame at all proves the module is powered and wired --
+                # A non-ACK frame proves the module's BT stack is running --
                 # unless we just commanded it off, in which case this is
                 # shutdown-time chatter and must not resurrect power_on.
-                if not self._explicit_off:
+                # Command_ACKs are deliberately excluded: the BM83's UART
+                # front-end ACKs commands even from soft-off (hardware-
+                # captured 2026-08-29 -- the power-on press ACK arrived at
+                # +0.02s, before the chip could possibly have booted). In a
+                # failed boot (LEDs light, then silence) the init_link ACKs
+                # would otherwise "confirm" a dead chip, pin power_on=True,
+                # and re-invert the BT_POWER toggle -- the original field bug.
+                if (not self._explicit_off) and op != self.EVT_CMD_ACK:
                     if self._power_confirm_deadline:
                         self._power_confirm_deadline = 0.0
                         print("[POWER] ON confirmed by chip reporting")
