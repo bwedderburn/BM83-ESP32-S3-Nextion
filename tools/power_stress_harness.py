@@ -79,9 +79,14 @@ for i, gap in enumerate(OFF_GAPS):
         print("[STRESS] cycle %d: power_on RESURRECTED %.2fs into the "
               "off-gap (issue #135 class)" % (n, resurrected))
         results.append((n, gap, "RESURRECT", resurrected))
-        # Re-settle to OFF before continuing.
-        bm.power_toggle()
-        spin(6, until=lambda: bm.power_on is False)
+        # With the shutdown-transient gate, only affirmative chip reports
+        # resurrect power_on -- so the chip really is running. Keep the ON
+        # state; the next cycle's opening OFF toggle is then in phase.
+        # (Toggling OFF here instead would desync every later cycle:
+        # the next OFF check would pass vacuously against an already-False
+        # power_on and the following boot would misreport as another
+        # resurrection.)
+        spin(2)
         continue
     print("[STRESS] cycle %d: ON press" % n)
     bm.power_toggle()                    # OFF -> sends ON

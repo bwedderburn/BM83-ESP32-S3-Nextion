@@ -880,7 +880,8 @@ class Bm83:
                 # OFF report: the question is settled (honestly, in the
                 # negative). Clearing the deadline here also releases the
                 # power_on_cmd/power_off_cmd press guard immediately instead
-                # of blocking retries for the rest of the 6s window, and
+                # of blocking retries for the rest of the confirmation
+                # window, and
                 # prevents a misleading "chip stayed silent" expiry message
                 # (Copilot, #133).
                 self._power_confirm_deadline = 0.0
