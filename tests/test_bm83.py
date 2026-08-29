@@ -74,7 +74,15 @@ def test_tick_power_on_sequence():
     bm._power_next_at = time.monotonic() - 1
     bm.tick_power()
     assert bm._power_state is None
+    # 2026-08-29: power_on is no longer claimed on faith here — the old
+    # assertion (power_on is True at this point) encoded the field bug where
+    # a failed chip power-up left the toggle inverted. Confirmation now comes
+    # from the chip's own reporting.
+    assert bm.power_on is False
+    assert bm._power_confirm_deadline > 0.0
+    bm.note_btm_state(0x02)              # chip reports Power ON
     assert bm.power_on is True
+    assert bm._power_confirm_deadline == 0.0
     assert len(uart.writes) >= 4  # init_link sends multiple commands
     # Verify init_link commands include OP_READ_BD_ADDR (0x0F)
     init_link_cmds = uart.writes[2:]
@@ -1134,4 +1142,97 @@ def test_relink_is_surfaced_once_for_session_rearm(monkeypatch):
     bm.poll()
     assert bm.connected is True
     assert bm.consume_relink() is True           # reported exactly once
+    assert bm.consume_relink() is False
+
+
+def test_power_on_unconfirmed_reverts_and_toggle_stays_in_phase(monkeypatch):
+    """A failed power-up must leave the toggle pointing at ON, not OFF.
+
+    Field report 2026-08-29: press BT_POWER, BM83 LEDs light, chip goes
+    silent; it then took "several attempts / double tapping" to power on.
+    Cause: power_on was set True on faith when the on/release sequence
+    finished, so after a failed chip boot the next press sent power-OFF to an
+    off module, and only the press after that was back in phase.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [60000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    bm.power_on_cmd()
+    t[0] += 0.3; bm.tick_power()         # release
+    t[0] += 0.6; bm.tick_power()         # init_link + pending confirmation
+    assert bm.power_on is False
+    assert bm._power_confirm_deadline > 0.0
+
+    # Chip stays silent past the deadline -> belief reverts, with a log line.
+    t[0] += 7.0; bm.tick_power()
+    assert bm._power_confirm_deadline == 0.0
+    assert bm.power_on is False
+
+    # The NEXT press must therefore send power-ON again, not power-OFF.
+    n = len(uart.writes)
+    bm.power_toggle()
+    assert len(uart.writes) == n + 1
+    assert uart.writes[n][4:6] == bytes([0x00, Bm83.MMI_POWER_ON_PRESS])
+
+
+def test_power_presses_ignored_while_confirmation_pending(monkeypatch):
+    """Mashing BT_POWER during the confirmation window must not double-fire."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [61000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()
+    t[0] += 0.3; bm.tick_power()
+    t[0] += 0.6; bm.tick_power()
+    n = len(uart.writes)
+    bm.power_toggle()                    # pending -> ignored
+    bm.power_on_cmd()                    # pending -> ignored
+    bm.power_off_cmd()                   # pending -> ignored
+    assert len(uart.writes) == n
+
+
+def test_recovery_probe_quiet_during_power_transition(monkeypatch):
+    """No probe/init_link traffic may land while the chip is powering up.
+
+    The BM83 is documented to dislike command bursts; probe traffic hitting
+    it mid boot is a plausible contributor to failed power-ups.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [62000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()                    # state machine active
+    assert bm.tick_link_recovery() is False
+    t[0] += 0.3; bm.tick_power()
+    t[0] += 0.6; bm.tick_power()         # now pending confirmation
+    assert bm.tick_link_recovery() is False
+    bm.note_btm_state(0x02)              # confirmed
+    t[0] += 10.0
+    # After confirmation the probe may run again if the link is down.
+    assert bm.tick_link_recovery() is True
+
+
+def test_relink_suppressed_during_explicit_off(monkeypatch):
+    """Shutdown-time AVRCP chatter must not fake a session recovery.
+
+    Copilot + Codex (PR #133): the relink branch set connected/_relinked on
+    frames arriving during an explicit power-off, re-arming registrations
+    into a dying module and leaving avrcp_notifs_registered representing a
+    dead session.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [63000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.note_btm_state(0x06)
+    bm.power_off_cmd()
+    t[0] += 2.0; bm.tick_power()         # OFF released; _explicit_off latched
+    assert bm.connected is False
+
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_AVC_VENDOR_RSP, b"\x00" + b"\x00" * 10))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.connected is False         # chatter must not relink
     assert bm.consume_relink() is False

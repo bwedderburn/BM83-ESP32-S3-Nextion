@@ -61,6 +61,7 @@ class Bm83:
         "_link_dead_warned",
         "_explicit_off",
         "_relinked",
+        "_power_confirm_deadline",
         "_hb_idle_next_at",
         "_hb_idle_period_s",
         "_boot_init_at",
@@ -258,6 +259,16 @@ class Bm83:
         # without it a healed session would never register PlaybackStatus /
         # TrackChanged / Position notifications and metadata would stay frozen.
         self._relinked = False
+        # Non-zero while a host-commanded power-ON awaits confirmation from
+        # the chip's own reporting. The old code set power_on=True the moment
+        # the press/release sequence finished, purely on faith; whenever the
+        # chip failed to complete power-up (LEDs flash, then silence) the
+        # toggle went out of phase with reality and the next BT_POWER press
+        # sent power-OFF to an off module. Field report 2026-08-29: "several
+        # attempts / double tapping on" required. power_on now flips True
+        # only on chip evidence; if this deadline expires silent, the belief
+        # reverts and the next press retries ON — in phase.
+        self._power_confirm_deadline = 0.0
         # Idle heartbeat cadence. Never go completely silent: a board printing
         # nothing at all is indistinguishable from a crashed one (that cost
         # ~20 min of misdiagnosis on 2026-08-26).
@@ -475,13 +486,21 @@ class Bm83:
                 # unless we just commanded it off, in which case this is
                 # shutdown-time chatter and must not resurrect power_on.
                 if not self._explicit_off:
+                    if self._power_confirm_deadline:
+                        self._power_confirm_deadline = 0.0
+                        print("[POWER] ON confirmed by chip reporting")
                     self.power_on = True
                 self._link_probe_misses = 0
                 if self._link_dead_warned:
                     self._link_dead_warned = False
                     print("[BM83] responding again")
-            if (not self.connected) and op in (
+            if (not self.connected) and (not self._explicit_off) and op in (
                     self.EVT_AVC_VENDOR_RSP, self.EVT_AVRCP_VENDOR_DEP_RSP):
+                # NB: gated on _explicit_off too (Copilot + Codex, PR #133):
+                # an AVRCP response arriving as shutdown-time chatter must not
+                # fake a session recovery — it would re-arm registrations into
+                # a dying module and leave avrcp_notifs_registered=True for a
+                # dead session, so the next real 0x0B would skip re-arming.
                 # Positive proof of a live AVRCP session while we believed the
                 # link was down: a false disconnect. Heal instead of waiting
                 # for a spontaneous BTM_Status that may never come.
@@ -579,6 +598,9 @@ class Bm83:
         """Send the one-shot boot handshake once the radio has settled."""
         if self._boot_init_at == 0.0:
             return False
+        if self._power_state is not None:
+            # Defer (do not cancel) while a power press/release is mid-flight.
+            return False
         if now is None:
             now = time.monotonic()
         if now < self._boot_init_at:
@@ -597,7 +619,7 @@ class Bm83:
     def power_on_cmd(self):
         """Begin the non-blocking power-on sequence (press now, release via tick_power())."""
         # Ignore if state machine already in progress to prevent inconsistent state
-        if self._power_state is not None:
+        if self._power_state is not None or self._power_confirm_deadline:
             return
         now = time.monotonic()
         self._power_state = "on_press"
@@ -608,7 +630,7 @@ class Bm83:
     def power_off_cmd(self):
         """Begin the non-blocking power-off sequence (press now, release via tick_power())."""
         # Ignore if state machine already in progress to prevent inconsistent state
-        if self._power_state is not None:
+        if self._power_state is not None or self._power_confirm_deadline:
             return
         now = time.monotonic()
         self._power_state = "off_press"
@@ -617,6 +639,14 @@ class Bm83:
 
     def tick_power(self):
         """Advance the non-blocking power press/release state machine."""
+        # Service the ON-confirmation deadline even when no press is active.
+        if self._power_confirm_deadline:
+            _now = time.monotonic()
+            if _now >= self._power_confirm_deadline:
+                self._power_confirm_deadline = 0.0
+                if not self.power_on:
+                    print("[POWER] ON not confirmed - chip stayed silent.")
+                    print("        Check module power; press BT_POWER to retry.")
         if self._power_state is None:
             return
         now = time.monotonic()
@@ -629,9 +659,12 @@ class Bm83:
             self._power_next_at = now + 0.5  # Wait 0.5s before init_link
         elif self._power_state == "on_init":
             self.init_link()
-            self.power_on = True
+            # Do NOT claim power_on yet — wait for the chip's own reporting
+            # (any BTM_Status or inbound frame clears this deadline via the
+            # normal inference paths). See _power_confirm_deadline.
+            self._power_confirm_deadline = now + 6.0
             self._power_state = None
-            print("[POWER] ON (UART)")
+            print("[POWER] ON requested (awaiting chip confirmation)")
         elif self._power_state == "off_press":
             # 1.5s elapsed since press, now send release
             self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_RELEASE]))
@@ -804,6 +837,9 @@ class Bm83:
         else:
             # Authoritative: the chip is demonstrably running (this also covers
             # the user powering it back on with the module's own button).
+            if self._power_confirm_deadline:
+                self._power_confirm_deadline = 0.0
+                print("[POWER] ON confirmed by chip reporting")
             self.power_on = True
             self._explicit_off = False
         # Audio-source tracking. States 0x80/0x81/0x82 report which audio
@@ -1111,7 +1147,11 @@ class Bm83:
         is already known alive, and re-asserts ``init_link()`` every ~6th
         probe. A reply lets poll()'s relink path recover the session.
         """
-        if self.connected or self._avrcp_suspended or self._explicit_off:
+        if (self.connected or self._avrcp_suspended or self._explicit_off
+                or self._power_state is not None or self._power_confirm_deadline):
+            # The last two give the module a QUIET boot window: probe traffic
+            # and init_link bursts landing mid power-up are exactly the kind
+            # of UART activity this chip is documented to dislike.
             return False
         if now is None:
             now = time.monotonic()
