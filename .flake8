@@ -1,0 +1,32 @@
+[flake8]
+# Scope control only — this file does NOT make a bare `flake8 .` equal to CI.
+#
+# What it fixes: CI lints a clean checkout and never sees a developer
+# virtualenv. A local run did, and pip's vendored Python-2-compatible code
+# under .venv tripped 9 findings (F821 `basestring` and friends) on the exact
+# selector CI treats as fatal — so the gate that blocks merges failed locally
+# while CI was green. Excluding environment and build directories, none of
+# which exist in CI, makes that selector agree in both places.
+#
+# What it does NOT fix: CI runs two passes, and only the first can fail a
+# build. A bare `flake8 .` runs the full default rule set and currently
+# reports ~220 advisory style findings, so it is not a merge signal.
+#
+# The command that matches the merge gate:
+#     flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+#
+# The advisory pass CI runs (never fails the build):
+#     flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+extend-exclude =
+    .venv,
+    venv,
+    env,
+    .eggs,
+    *.egg-info,
+    node_modules,
+    __pycache__
+
+# Thresholds kept in sync with the advisory pass above, so a bare run reports
+# against the same limits the workflow uses rather than flake8's 79-col default.
+max-line-length = 127
+max-complexity = 10
