@@ -11,6 +11,15 @@
 # the power-button "struggle" is a supply sag when the BM83 starts -- a
 # hardware fix (bulk capacitance / supply), not firmware.
 #
+# *** WARNING (hardware-observed 2026-08-29): rapid repeated power
+# cycling can HARD-FREEZE the ESP32-S3 mid-run (VM and filesystem wedge;
+# USB drive keeps serving stale reads and silently drops writes; only a
+# physical RST recovers, and the board re-freezes if this harness is
+# still code.py). Run it only while physically at the unit, and restore
+# main.py promptly. Single power cycles are safe -- use
+# power_cycle_harness.py for routine validation. Suspected mechanism:
+# supply sag from BM83 power-on inrush; see PR #136. ***
+#
 # Built for the 2026-08-29 field report "still struggles with the power
 # button" after the toggle-inversion fixes (PR #133) all passed on
 # hardware; the serial port re-enumerated at the exact moment of the

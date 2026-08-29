@@ -498,16 +498,31 @@ class Bm83:
                 # failed boot (LEDs light, then silence) the init_link ACKs
                 # would otherwise "confirm" a dead chip, pin power_on=True,
                 # and re-invert the BT_POWER toggle -- the original field bug.
-                # A BTM_Status power-off report (state 0x00) is the one
-                # non-ACK frame that is evidence AGAINST a running BT stack;
-                # letting it "confirm" an ON attempt or set power_on would
-                # invert its meaning for the moment until note_btm_state()
-                # processes it (Copilot, #133).
-                _btm_off_report = (
-                    op == self.EVT_BTM_STATUS and params[:1] == b"\x00"
+                # BTM_Status frames that argue AGAINST a running BT stack
+                # must not "confirm" an ON attempt or set power_on: a 0x00
+                # power-off report always (Copilot, #133), and teardown
+                # states (0x08/0x0C/0x0F/0x11) while an explicit OFF is
+                # latched or a power press/confirmation is in flight --
+                # hardware-captured 2026-08-29: stale shutdown chatter
+                # arrived 0.25s after an ON press and re-pinned power_on
+                # long before the chip could have booted, which on a failed
+                # boot would defeat the confirmation revert and re-invert
+                # the toggle.
+                _btm_state = (
+                    params[0]
+                    if (op == self.EVT_BTM_STATUS and params) else None
+                )
+                _power_transition = (
+                    self._power_state is not None
+                    or bool(self._power_confirm_deadline)
+                )
+                _btm_non_evidence = _btm_state is not None and (
+                    _btm_state == 0x00
+                    or (_btm_state in self.SHUTDOWN_TRANSIENT_STATES
+                        and (self._explicit_off or _power_transition))
                 )
                 if ((not self._explicit_off) and op != self.EVT_CMD_ACK
-                        and not _btm_off_report):
+                        and not _btm_non_evidence):
                     if self._power_confirm_deadline:
                         self._power_confirm_deadline = 0.0
                         print("[POWER] ON confirmed by chip reporting")
@@ -888,7 +903,10 @@ class Bm83:
                 print("[POWER] ON attempt cancelled - chip reported OFF")
             self.power_on = False
             self._explicit_off = True
-        elif self._explicit_off and state in self.SHUTDOWN_TRANSIENT_STATES:
+        elif state in self.SHUTDOWN_TRANSIENT_STATES and (
+                self._explicit_off
+                or self._power_state is not None
+                or self._power_confirm_deadline):
             # Commanded shutdown walks teardown states (0x0C/0x08/0x11/0x0F)
             # before the final 0x00 -- captured live 2026-08-29 with 0x08
             # resurrecting power_on for 100ms. These mean "still shutting
