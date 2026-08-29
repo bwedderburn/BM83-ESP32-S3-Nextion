@@ -1300,3 +1300,83 @@ def test_failed_boot_with_acks_keeps_toggle_on_phase(monkeypatch):
     pkt = uart.writes[-1]
     assert pkt[3] == Bm83.OP_MMI_ACTION
     assert pkt[5] == Bm83.MMI_POWER_ON_PRESS
+
+
+def test_btm_off_report_cancels_pending_confirmation(monkeypatch):
+    """An explicit chip OFF report settles the ON attempt immediately.
+
+    Copilot (#133): note_btm_state(0x00) left _power_confirm_deadline armed,
+    blocking power presses for the rest of the window and later printing a
+    misleading "chip stayed silent" -- the chip had answered, honestly, OFF.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [66000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()
+    t[0] += 0.25; bm.tick_power()
+    t[0] += 0.55; bm.tick_power()        # confirmation armed
+    assert bm._power_confirm_deadline > 0
+
+    bm.note_btm_state(0x00)              # chip: "I am OFF"
+    assert bm._power_confirm_deadline == 0.0
+    assert bm.power_on is False
+    assert bm._explicit_off is True
+
+    uart.writes.clear()
+    bm.power_on_cmd()                    # retry must not be press-guarded
+    assert uart.writes, "retry press was blocked by a stale deadline"
+    assert uart.writes[-1][5] == Bm83.MMI_POWER_ON_PRESS
+
+
+def test_boot_init_deferred_during_confirmation_window(monkeypatch):
+    """tick_boot_init must stay quiet while an ON confirmation is pending.
+
+    Copilot (#133): it deferred only on _power_state, so it could inject a
+    second init_link burst into the chip's boot window right after on_init.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [67000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()
+    t[0] += 0.25; bm.tick_power()
+    t[0] += 0.55; bm.tick_power()        # confirmation armed
+    t[0] += 2.0                          # well past _boot_init_at
+    uart.writes.clear()
+    assert bm.tick_boot_init() is False  # deferred, nothing sent
+    assert uart.writes == []
+
+    bm.note_btm_state(0x02)              # chip confirms ON
+    assert bm._power_confirm_deadline == 0.0
+    assert bm.tick_boot_init() is True   # deferral is not cancellation
+
+
+def test_btm_off_frame_is_not_boot_evidence(monkeypatch):
+    """A BTM_Status 0x00 frame during confirmation must not confirm ON.
+
+    Copilot (#133): poll()'s generic non-ACK inference would have treated
+    the chip's own power-off report as proof the BT stack booted.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [68000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()
+    t[0] += 0.25; bm.tick_power()
+    t[0] += 0.55; bm.tick_power()        # confirmation armed
+    deadline = bm._power_confirm_deadline
+    assert deadline > 0
+
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x00"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is False
+    assert bm._power_confirm_deadline == deadline  # still pending
+
+    # A non-OFF BTM report remains valid boot evidence.
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x02"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is True
+    assert bm._power_confirm_deadline == 0.0
