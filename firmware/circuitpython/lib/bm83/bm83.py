@@ -493,7 +493,16 @@ class Bm83:
                 # failed boot (LEDs light, then silence) the init_link ACKs
                 # would otherwise "confirm" a dead chip, pin power_on=True,
                 # and re-invert the BT_POWER toggle -- the original field bug.
-                if (not self._explicit_off) and op != self.EVT_CMD_ACK:
+                # A BTM_Status power-off report (state 0x00) is the one
+                # non-ACK frame that is evidence AGAINST a running BT stack;
+                # letting it "confirm" an ON attempt or set power_on would
+                # invert its meaning for the moment until note_btm_state()
+                # processes it (Copilot, #133).
+                _btm_off_report = (
+                    op == self.EVT_BTM_STATUS and params[:1] == b"\x00"
+                )
+                if ((not self._explicit_off) and op != self.EVT_CMD_ACK
+                        and not _btm_off_report):
                     if self._power_confirm_deadline:
                         self._power_confirm_deadline = 0.0
                         print("[POWER] ON confirmed by chip reporting")
@@ -606,8 +615,11 @@ class Bm83:
         """Send the one-shot boot handshake once the radio has settled."""
         if self._boot_init_at == 0.0:
             return False
-        if self._power_state is not None:
-            # Defer (do not cancel) while a power press/release is mid-flight.
+        if self._power_state is not None or self._power_confirm_deadline:
+            # Defer (do not cancel) while a power press/release is mid-flight
+            # or an ON confirmation is pending: on_init already sent
+            # init_link, and a second burst inside the chip's boot window is
+            # exactly what the quiet period exists to avoid (Copilot, #133).
             return False
         if now is None:
             now = time.monotonic()
@@ -840,6 +852,16 @@ class Bm83:
         # should_show_aux()/tick_link_recovery() both gate on it, leaving the
         # UI inert. Trust the chip's own reporting instead.
         if state == 0x00:
+            if self._power_confirm_deadline:
+                # The chip answered the pending ON attempt with an explicit
+                # OFF report: the question is settled (honestly, in the
+                # negative). Clearing the deadline here also releases the
+                # power_on_cmd/power_off_cmd press guard immediately instead
+                # of blocking retries for the rest of the 6s window, and
+                # prevents a misleading "chip stayed silent" expiry message
+                # (Copilot, #133).
+                self._power_confirm_deadline = 0.0
+                print("[POWER] ON attempt cancelled - chip reported OFF")
             self.power_on = False
             self._explicit_off = True
         else:
