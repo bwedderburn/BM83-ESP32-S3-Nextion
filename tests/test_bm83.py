@@ -1236,3 +1236,67 @@ def test_relink_suppressed_during_explicit_off(monkeypatch):
     bm.poll()
     assert bm.connected is False         # chatter must not relink
     assert bm.consume_relink() is False
+
+
+def test_ack_frames_do_not_confirm_power_on(monkeypatch):
+    """A Command_ACK must neither set power_on nor satisfy ON confirmation.
+
+    Hardware capture 2026-08-29: the BM83's UART front-end ACKs commands
+    even from soft-off (the power-on press ACK arrived at +0.02s, before
+    any chip could boot). Without excluding EVT_CMD_ACK from the power
+    inference, the init_link ACKs "confirm" a boot that never happened and
+    the BT_POWER toggle re-inverts on a failed start -- the original field
+    bug the confirmation deadline was built to fix.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [64000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()                    # press
+    t[0] += 0.25; bm.tick_power()        # release sent, on_init pending
+    t[0] += 0.55; bm.tick_power()        # on_init: confirmation armed
+    assert bm._power_confirm_deadline > 0
+    assert bm.power_on is False
+
+    # Soft-off chip ACKs the init_link commands -- not boot evidence.
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_CMD_ACK, b"\x0f\x00"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is False
+    assert bm._power_confirm_deadline > 0
+
+    # A real event report IS boot evidence and confirms immediately.
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x02"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is True
+    assert bm._power_confirm_deadline == 0.0
+
+
+def test_failed_boot_with_acks_keeps_toggle_on_phase(monkeypatch):
+    """ACK-only traffic through an unconfirmed window -> next press is ON.
+
+    Models the reported failure exactly: press ON, LEDs light (UART MCU
+    alive, ACKs flowing), BT stack never boots. After the deadline expires
+    the toggle must still be in the ON phase so a single retry press sends
+    ON again -- never OFF.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [65000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.power_on_cmd()
+    t[0] += 0.25; bm.tick_power()
+    t[0] += 0.55; bm.tick_power()        # confirmation armed
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_CMD_ACK, b"\x0f\x00"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()                            # ACKs only -- no confirmation
+    t[0] += 6.5
+    bm.tick_power()                      # deadline expires unconfirmed
+    assert bm._power_confirm_deadline == 0.0
+    assert bm.power_on is False
+    uart.writes.clear()
+    bm.power_toggle()                    # retry must send ON, not OFF
+    pkt = uart.writes[-1]
+    assert pkt[3] == Bm83.OP_MMI_ACTION
+    assert pkt[5] == Bm83.MMI_POWER_ON_PRESS
