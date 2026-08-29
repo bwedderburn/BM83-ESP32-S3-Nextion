@@ -23,9 +23,9 @@ rebooting mid-stream.
 
 ## Windows-side signature (new, 2026-08-29)
 
-The wedge is visible from the central too: while wedged, **Windows
-Advanced sound settings removes the "Test" sound option** for the BM83
-endpoint. The Bluetooth A2DP driver still holds the dead AVDTP stream
+The wedge is visible from the central too: while wedged, **the "Test"
+sound option disappears from Windows Advanced sound settings** for the
+BM83 endpoint. The Bluetooth A2DP driver still holds the dead AVDTP stream
 object, so the endpoint reports itself non-renderable and Windows will not
 offer test playback on it. This confirms the wedge lives on *both* ends —
 the chip's internal routing and the host driver's stream state — which is

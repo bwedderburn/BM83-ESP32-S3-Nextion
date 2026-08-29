@@ -46,6 +46,7 @@ class CountingUART:
     def __init__(self, real):
         self._real = real
         self.tx_ops = []
+        self.capture = False   # only record TX ops while a phase needs them
 
     @property
     def in_waiting(self):
@@ -55,10 +56,11 @@ class CountingUART:
         return self._real.read(n)
 
     def write(self, data):
-        try:
-            self.tx_ops.append(data[3])
-        except (IndexError, TypeError):
-            self.tx_ops.append(None)
+        if self.capture:
+            try:
+                self.tx_ops.append(data[3])
+            except (IndexError, TypeError):
+                self.tx_ops.append(None)   # non-frame write: anomalous, kept
         return self._real.write(data)
 
 
@@ -149,13 +151,16 @@ print("[TEST] phase 1 result: power_on=%s explicit_off=%s -> %s" % (
 # power_on, and the ONLY permissible TX is acking inbound events --
 # recovery probes and any other command traffic must stay silent.
 print("[TEST] phase 2: 6s quiet window (no resurrect, no probe spam)")
-_tx_base = len(uart.tx_ops)
+uart.tx_ops = []
+uart.capture = True
 run(6)
-_quiet_tx = [op for op in uart.tx_ops[_tx_base:] if op != bm.OP_EVENT_ACK]
+uart.capture = False
+_quiet_tx = [op for op in uart.tx_ops if op != bm.OP_EVENT_ACK]
 quiet_ok = (bm.power_on is False) and (not _quiet_tx)
 print("[TEST] phase 2 result: power_on=%s non-ack TX=%s -> %s" % (
     bm.power_on,
-    "none" if not _quiet_tx else " ".join("%02X" % op for op in _quiet_tx),
+    "none" if not _quiet_tx else " ".join(
+        "??" if op is None else "%02X" % op for op in _quiet_tx),
     "OK" if quiet_ok else "FAIL"))
 
 # Phase 3: BT_POWER toggle while OFF -> must send ON, and the claimed
