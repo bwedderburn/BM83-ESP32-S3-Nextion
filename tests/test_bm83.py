@@ -1484,3 +1484,45 @@ def test_module_button_power_on_still_believed_during_explicit_off(monkeypatch):
     bm.note_btm_state(0x06)              # A2DP up: chip is running
     assert bm.power_on is True
     assert bm._explicit_off is False
+
+
+def test_stale_teardown_chatter_during_on_attempt_not_boot_evidence(monkeypatch):
+    """Shutdown-tail reports after an ON press must not fake a boot.
+
+    Hardware trace 2026-08-29 12:30: a single OFF -> 4s -> ON cycle showed
+    power_on flipping True 0.25s after the ON press -- stale teardown
+    chatter from the still-winding-down chip, not boot evidence. On a
+    failed boot this would defeat the confirmation revert and re-invert
+    the toggle for exactly the quick-OFF-then-ON press pattern users hit.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [70000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm.note_btm_state(0x06)
+    bm.power_off_cmd()
+    t[0] += 2.0; bm.tick_power()         # OFF released, latched
+
+    bm.power_on_cmd()                    # quick ON press clears the latch
+    bm.note_btm_state(0x11)              # stale ACL-teardown tail
+    assert bm.power_on is False
+    t[0] += 0.25; bm.tick_power()        # release
+    t[0] += 0.55; bm.tick_power()        # confirmation armed
+    deadline = bm._power_confirm_deadline
+    assert deadline > 0
+
+    # Teardown chatter via BOTH paths: raw frame through poll() ...
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x0c"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is False
+    assert bm._power_confirm_deadline == deadline
+    # ... and dispatched through note_btm_state().
+    bm.note_btm_state(0x0F)
+    assert bm.power_on is False
+    assert bm._power_confirm_deadline == deadline
+
+    # A genuinely-alive report still confirms.
+    bm.note_btm_state(0x02)
+    assert bm.power_on is True
+    assert bm._power_confirm_deadline == 0.0
