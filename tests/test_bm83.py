@@ -1567,3 +1567,37 @@ def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
     # And 0x15 while ALREADY on is left alone (no demotion, no churn).
     bm.note_btm_state(0x15)
     assert bm.power_on is True
+
+
+def test_soft_off_reply_events_are_not_power_evidence(monkeypatch):
+    """Only session-level traffic proves power; reply events do not.
+
+    Captured 2026-08-30 14:00 (cold boot, chip soft-off, flap fix live):
+    RX arrived ~1.4s after boot with NO BTM reports -- the chip's real
+    reply event to the boot handshake's Read_BD_Addr -- and power_on
+    flipped True, so the first press sent OFF. The BM83's UART MCU
+    answers a growing set of messages from soft-off; power evidence is
+    therefore a whitelist (AVRCP/EQ events, affirmative BTM states).
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [72000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    # A non-ACK reply event with an op outside the whitelist (e.g. a
+    # BD-address report) must not flip power_on.
+    uart.to_read = bytearray(frame_to_bytes(0x2F, b"\x01\x02\x03\x04\x05\x06"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is False
+
+    # Whitelisted session traffic still proves power: an EQ indication...
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_EQ_MODE_IND, b"\x05"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is True
+
+    # ...and, from scratch, an affirmative BTM report.
+    bm2 = Bm83(MockUART())
+    bm2.note_btm_state(0x06)
+    assert bm2.power_on is True
