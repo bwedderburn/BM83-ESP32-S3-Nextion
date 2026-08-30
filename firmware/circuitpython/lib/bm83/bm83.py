@@ -508,9 +508,11 @@ class Bm83:
                 # and re-invert the BT_POWER toggle -- the original field bug.
                 # BTM_Status frames that argue AGAINST a running BT stack
                 # must not "confirm" an ON attempt or set power_on: a 0x00
-                # power-off report always (Copilot, #133), and teardown
-                # states (0x08/0x0C/0x0F/0x11) while an explicit OFF is
-                # latched or a power press/confirmation is in flight --
+                # power-off report always (Copilot, #133), and link-flap
+                # states (0x08/0x0C/0x0F/0x11/0x15) while an explicit OFF
+                # is latched, a power press/confirmation is in flight, or
+                # power_on is False (a soft-off chip still emits 0x15/0x11
+                # ACL flaps when the paired central retries) --
                 # hardware-captured 2026-08-29: stale shutdown chatter
                 # arrived 0.25s after an ON press and re-pinned power_on
                 # long before the chip could have booted, which on a failed
@@ -924,12 +926,13 @@ class Bm83:
                 or self._power_state is not None
                 or self._power_confirm_deadline
                 or not self.power_on):
-            # Commanded shutdown walks teardown states (0x0C/0x08/0x11/0x0F)
-            # before the final 0x00 -- captured live 2026-08-29 with 0x08
-            # resurrecting power_on for 100ms. These mean "still shutting
-            # down", not "running and staying on"; without this gate a chip
-            # that dies before its final 0x00 leaves power_on stuck True and
-            # the next press sends OFF -- issue #135's toggle inversion.
+            # Link-flap states (0x0C/0x08/0x11/0x0F/0x15) are gated here:
+            # commanded shutdowns walk them before the final 0x00 (issue
+            # #135), and a soft-off chip still emits 0x15/0x11 ACL flaps
+            # when the paired central background-retries (2026-08-30) --
+            # none of them prove a usable powered chip, so they never flip
+            # power_on False->True nor pierce an explicit-off latch or an
+            # in-flight power transition.
             pass
         else:
             # Authoritative: the chip is demonstrably running (this also covers
