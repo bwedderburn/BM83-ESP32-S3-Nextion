@@ -659,7 +659,8 @@ class Bm83:
     def power_on_cmd(self):
         """Begin the non-blocking power-on sequence (press now, release via tick_power())."""
         if self._power_state is not None:
-            # A press/release is mid-flight (sub-2s window) -- ignore, but
+            # A press/release is mid-flight (the ON hold is 2.2s, OFF
+            # 1.5s) -- ignore, but
             # never silently: invisible swallowing reads as a broken button.
             print("[POWER] press ignored (sequence in flight)")
             return
