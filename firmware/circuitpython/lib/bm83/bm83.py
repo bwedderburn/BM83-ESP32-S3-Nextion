@@ -167,7 +167,7 @@ class Bm83:
     # False->True flip and while an explicit OFF / power transition is in
     # flight; profile- and power-level states (0x02/0x03/0x06/0x0B/0x8x)
     # remain authoritative evidence.
-    SHUTDOWN_TRANSIENT_STATES = (0x08, 0x0C, 0x0F, 0x11, 0x15)
+    LINK_FLAP_STATES = (0x08, 0x0C, 0x0F, 0x11, 0x15)
 
     def __init__(self, uart=None):
         self.uart = uart
@@ -537,7 +537,7 @@ class Bm83:
                     or (_btm_state is not None
                         and _btm_state != 0x00
                         and not (
-                            _btm_state in self.SHUTDOWN_TRANSIENT_STATES
+                            _btm_state in self.LINK_FLAP_STATES
                             and (self._explicit_off or _power_transition
                                  or not self.power_on)))
                 )
@@ -929,7 +929,7 @@ class Bm83:
                 print("[POWER] ON attempt cancelled - chip reported OFF")
             self.power_on = False
             self._explicit_off = True
-        elif state in self.SHUTDOWN_TRANSIENT_STATES and (
+        elif state in self.LINK_FLAP_STATES and (
                 self._explicit_off
                 or self._power_state is not None
                 or self._power_confirm_deadline
