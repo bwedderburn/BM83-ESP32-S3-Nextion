@@ -1225,7 +1225,7 @@ def test_power_off_during_confirmation_cancels_and_proceeds(monkeypatch):
 
 
 def test_power_press_ignored_only_while_sequence_in_flight(monkeypatch):
-    """The sub-2s press/release window still debounces double-fires."""
+    """The press/release hold window still debounces double-fires."""
     uart = MockUART()
     bm = Bm83(uart)
     t = [61800.0]
