@@ -506,18 +506,22 @@ class Bm83:
                 # failed boot (LEDs light, then silence) the init_link ACKs
                 # would otherwise "confirm" a dead chip, pin power_on=True,
                 # and re-invert the BT_POWER toggle -- the original field bug.
-                # BTM_Status frames that argue AGAINST a running BT stack
-                # must not "confirm" an ON attempt or set power_on: a 0x00
-                # power-off report always (Copilot, #133), and link-flap
-                # states (0x08/0x0C/0x0F/0x11/0x15) while an explicit OFF
-                # is latched, a power press/confirmation is in flight, or
-                # power_on is False (a soft-off chip still emits 0x15/0x11
-                # ACL flaps when the paired central retries) --
-                # hardware-captured 2026-08-29: stale shutdown chatter
-                # arrived 0.25s after an ON press and re-pinned power_on
-                # long before the chip could have booted, which on a failed
-                # boot would defeat the confirmation revert and re-invert
-                # the toggle.
+                # Power evidence is a WHITELIST, not an exclusion list.
+                # The BM83's UART front-end answers a growing set of
+                # messages even from soft-off -- Command_ACKs (captured
+                # 2026-08-29), and real reply events like the BD-address
+                # report to the boot handshake's Read_BD_Addr (captured
+                # 2026-08-30 14:00: a cold-booted, silent-off chip's
+                # handshake reply flipped power_on and made the first
+                # BT_POWER press send OFF). Excluding ops one at a time
+                # loses that race forever, so only traffic that requires a
+                # RUNNING BT stack counts as power evidence: AVRCP/EQ
+                # session events, and affirmative BTM states (power-on /
+                # profile-up / audio-source reports; link-flap states are
+                # gated -- a soft-off chip still emits 0x15/0x11 ACL flaps
+                # when the paired central background-retries). Everything
+                # else still clears probe-miss counters (UART liveness)
+                # but proves nothing about power.
                 _btm_state = (
                     params[0]
                     if (op == self.EVT_BTM_STATUS and params) else None
@@ -526,14 +530,18 @@ class Bm83:
                     self._power_state is not None
                     or bool(self._power_confirm_deadline)
                 )
-                _btm_non_evidence = _btm_state is not None and (
-                    _btm_state == 0x00
-                    or (_btm_state in self.SHUTDOWN_TRANSIENT_STATES
-                        and (self._explicit_off or _power_transition
-                             or not self.power_on))
+                _power_evidence = (
+                    op in (self.EVT_AVC_VENDOR_RSP,
+                           self.EVT_AVRCP_VENDOR_DEP_RSP,
+                           self.EVT_EQ_MODE_IND)
+                    or (_btm_state is not None
+                        and _btm_state != 0x00
+                        and not (
+                            _btm_state in self.SHUTDOWN_TRANSIENT_STATES
+                            and (self._explicit_off or _power_transition
+                                 or not self.power_on)))
                 )
-                if ((not self._explicit_off) and op != self.EVT_CMD_ACK
-                        and not _btm_non_evidence):
+                if (not self._explicit_off) and _power_evidence:
                     if self._power_confirm_deadline:
                         self._power_confirm_deadline = 0.0
                         print("[POWER] ON confirmed by chip reporting")
