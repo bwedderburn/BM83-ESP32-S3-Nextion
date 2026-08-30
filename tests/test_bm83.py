@@ -1526,3 +1526,44 @@ def test_stale_teardown_chatter_during_on_attempt_not_boot_evidence(monkeypatch)
     bm.note_btm_state(0x02)
     assert bm.power_on is True
     assert bm._power_confirm_deadline == 0.0
+
+
+def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
+    """A central's doomed reconnects must not fake a powered chip.
+
+    Captured 2026-08-30 13:39-13:42: with the BM83 soft-off, Windows'
+    background reconnect attempts produced 0x15/0x11 ACL flap reports that
+    flipped power_on True within seconds of every ESP32 boot -- so the
+    first BT_POWER press sent OFF to an off chip (LEDs flash, stays dead)
+    and only the second press powered it on. Link-flap states never flip
+    power_on False->True; profile/power states remain authoritative.
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [71000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    # Fresh boot, chip off, central flapping -- via BOTH paths.
+    for st in (0x15, 0x11, 0x15, 0x11, 0x0F):
+        bm.note_btm_state(st)
+        assert bm.power_on is False, "state 0x%02X faked power_on" % st
+    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x15"))
+    uart.in_waiting = len(uart.to_read)
+    bm.poll()
+    assert bm.power_on is False
+
+    # The first press must therefore send power-ON.
+    n = len(uart.writes)
+    bm.power_toggle()
+    assert uart.writes[n][4:6] == bytes([0x00, Bm83.MMI_POWER_ON_PRESS])
+
+    # Genuine evidence still flips it: the chip's own power-on report.
+    t[0] += 2.3; bm.tick_power()         # release
+    t[0] += 0.6; bm.tick_power()         # confirmation armed
+    bm.note_btm_state(0x02)
+    assert bm.power_on is True
+    assert bm._power_confirm_deadline == 0.0
+
+    # And 0x15 while ALREADY on is left alone (no demotion, no churn).
+    bm.note_btm_state(0x15)
+    assert bm.power_on is True

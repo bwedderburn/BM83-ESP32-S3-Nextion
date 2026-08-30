@@ -155,11 +155,19 @@ class Bm83:
     # disconnects during AUX sessions that wiped audio_source and flapped
     # aux_mode (repeated Line-In gain kicks -> gain pegged at max, beeps).
     LINK_DOWN_STATES = (0x00, 0x0F, 0x11)
-    # States a commanded shutdown legitimately walks through before the
-    # final 0x00 (captured live 2026-08-29: 0x08 arrived 0.4s after the OFF
-    # release). While _explicit_off is latched these mean "still shutting
-    # down", not "running and staying on" (issue #135).
-    SHUTDOWN_TRANSIENT_STATES = (0x08, 0x0C, 0x0F, 0x11)
+    # Link-transition flap states: what a commanded shutdown walks through
+    # before its final 0x00 (0x0C/0x08/0x11/0x0F, captured 2026-08-29), plus
+    # 0x15 (ACL up). None of these prove a USABLE powered chip on their own:
+    # a soft-off BM83 still completes/rejects ACL attempts from a paired
+    # central, emitting 0x15/0x11 flaps -- captured 2026-08-30 13:39-13:42,
+    # where Windows' background reconnects against the off chip flipped
+    # power_on True within seconds of every ESP32 boot, making the first
+    # BT_POWER press send OFF to an off chip (the "always two presses after
+    # power up" report). These states are ignored for any power_on
+    # False->True flip and while an explicit OFF / power transition is in
+    # flight; profile- and power-level states (0x02/0x03/0x06/0x0B/0x8x)
+    # remain authoritative evidence.
+    SHUTDOWN_TRANSIENT_STATES = (0x08, 0x0C, 0x0F, 0x11, 0x15)
 
     def __init__(self, uart=None):
         self.uart = uart
@@ -519,7 +527,8 @@ class Bm83:
                 _btm_non_evidence = _btm_state is not None and (
                     _btm_state == 0x00
                     or (_btm_state in self.SHUTDOWN_TRANSIENT_STATES
-                        and (self._explicit_off or _power_transition))
+                        and (self._explicit_off or _power_transition
+                             or not self.power_on))
                 )
                 if ((not self._explicit_off) and op != self.EVT_CMD_ACK
                         and not _btm_non_evidence):
@@ -913,7 +922,8 @@ class Bm83:
         elif state in self.SHUTDOWN_TRANSIENT_STATES and (
                 self._explicit_off
                 or self._power_state is not None
-                or self._power_confirm_deadline):
+                or self._power_confirm_deadline
+                or not self.power_on):
             # Commanded shutdown walks teardown states (0x0C/0x08/0x11/0x0F)
             # before the final 0x00 -- captured live 2026-08-29 with 0x08
             # resurrecting power_on for 100ms. These mean "still shutting
