@@ -674,7 +674,13 @@ class Bm83:
         now = time.monotonic()
         self._power_state = "on_press"
         self._explicit_off = False
-        self._power_next_at = now + 0.2  # Wait 0.2s before sending release
+        # Hold the virtual button through the chip's power-on threshold.
+        # The BM83's MMI power-on requires the key held ~2s (UI-config
+        # hold time) before release; a short tap wakes the chip (LEDs
+        # light) but aborts the boot -- the deterministic two-press
+        # pattern reported 2026-08-30. The OFF path always held 1.5s;
+        # ON held only 0.2s. 2.2s clears the common 2s threshold.
+        self._power_next_at = now + 2.2
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_PRESS]))
 
     def power_off_cmd(self):

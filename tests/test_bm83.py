@@ -1160,7 +1160,7 @@ def test_power_on_unconfirmed_reverts_and_toggle_stays_in_phase(monkeypatch):
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
 
     bm.power_on_cmd()
-    t[0] += 0.3; bm.tick_power()         # release
+    t[0] += 2.3; bm.tick_power()         # release
     t[0] += 0.6; bm.tick_power()         # init_link + pending confirmation
     assert bm.power_on is False
     assert bm._power_confirm_deadline > 0.0
@@ -1192,7 +1192,7 @@ def test_power_press_during_confirmation_retries_on(monkeypatch):
     t = [61000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()
-    t[0] += 0.3; bm.tick_power()
+    t[0] += 2.3; bm.tick_power()
     t[0] += 0.6; bm.tick_power()         # confirmation pending
     assert bm._power_confirm_deadline > 0
     n = len(uart.writes)
@@ -1212,7 +1212,7 @@ def test_power_off_during_confirmation_cancels_and_proceeds(monkeypatch):
     t = [61500.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()
-    t[0] += 0.3; bm.tick_power()
+    t[0] += 2.3; bm.tick_power()
     t[0] += 0.6; bm.tick_power()         # confirmation pending
     n = len(uart.writes)
     bm.power_off_cmd()
@@ -1249,7 +1249,7 @@ def test_recovery_probe_quiet_during_power_transition(monkeypatch):
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()                    # state machine active
     assert bm.tick_link_recovery() is False
-    t[0] += 0.3; bm.tick_power()
+    t[0] += 2.3; bm.tick_power()
     t[0] += 0.6; bm.tick_power()         # now pending confirmation
     assert bm.tick_link_recovery() is False
     bm.note_btm_state(0x02)              # confirmed
@@ -1297,7 +1297,7 @@ def test_ack_frames_do_not_confirm_power_on(monkeypatch):
     t = [64000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()                    # press
-    t[0] += 0.25; bm.tick_power()        # release sent, on_init pending
+    t[0] += 2.3; bm.tick_power()        # release sent, on_init pending
     t[0] += 0.55; bm.tick_power()        # on_init: confirmation armed
     assert bm._power_confirm_deadline > 0
     assert bm.power_on is False
@@ -1330,7 +1330,7 @@ def test_failed_boot_with_acks_keeps_toggle_on_phase(monkeypatch):
     t = [65000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()
-    t[0] += 0.25; bm.tick_power()
+    t[0] += 2.3; bm.tick_power()
     t[0] += 0.55; bm.tick_power()        # confirmation armed
     uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_CMD_ACK, b"\x0f\x00"))
     uart.in_waiting = len(uart.to_read)
@@ -1358,7 +1358,7 @@ def test_btm_off_report_cancels_pending_confirmation(monkeypatch):
     t = [66000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()
-    t[0] += 0.25; bm.tick_power()
+    t[0] += 2.3; bm.tick_power()
     t[0] += 0.55; bm.tick_power()        # confirmation armed
     assert bm._power_confirm_deadline > 0
 
@@ -1384,7 +1384,7 @@ def test_boot_init_deferred_during_confirmation_window(monkeypatch):
     t = [67000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()
-    t[0] += 0.25; bm.tick_power()
+    t[0] += 2.3; bm.tick_power()
     t[0] += 0.55; bm.tick_power()        # confirmation armed
     t[0] += 2.0                          # well past _boot_init_at
     uart.writes.clear()
@@ -1407,7 +1407,7 @@ def test_btm_off_frame_is_not_boot_evidence(monkeypatch):
     t = [68000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
     bm.power_on_cmd()
-    t[0] += 0.25; bm.tick_power()
+    t[0] += 2.3; bm.tick_power()
     t[0] += 0.55; bm.tick_power()        # confirmation armed
     deadline = bm._power_confirm_deadline
     assert deadline > 0
@@ -1506,7 +1506,7 @@ def test_stale_teardown_chatter_during_on_attempt_not_boot_evidence(monkeypatch)
     bm.power_on_cmd()                    # quick ON press clears the latch
     bm.note_btm_state(0x11)              # stale ACL-teardown tail
     assert bm.power_on is False
-    t[0] += 0.25; bm.tick_power()        # release
+    t[0] += 2.3; bm.tick_power()        # release
     t[0] += 0.55; bm.tick_power()        # confirmation armed
     deadline = bm._power_confirm_deadline
     assert deadline > 0
