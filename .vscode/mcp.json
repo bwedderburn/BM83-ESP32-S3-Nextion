@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "repo-health": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["${workspaceFolder}/tools/mcp/repo_health/server.py"]
+    }
+  }
+}

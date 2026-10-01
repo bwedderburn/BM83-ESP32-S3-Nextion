@@ -184,3 +184,50 @@ def show_title(title):
     safe_title = _sanitize_text(title)
     uart.write(f't0.txt="{safe_title}"\xff\xff\xff')
 ```
+
+## Behavioral Contracts (hard-won — do not re-litigate)
+
+Each rule below encodes a debugging campaign verified on hardware with serial captures.
+Reviewers and agents must not "simplify" them away; read the cited evidence before proposing
+any change that touches one.
+
+1. **Power-evidence whitelist**: only AVRCP/EQ session events (`0x1A`/`0x5D`/`0x10`) and
+   affirmative BTM states prove the BM83 is ON. Everything else — command ACKs, BD-addr
+   replies, ACL completions from paired centrals — is UART liveness only. A soft-off BM83
+   answers all of those.
+2. **`LINK_FLAP_STATES` (`0x08`/`0x0C`/`0x0F`/`0x11`/`0x15`) never flip `power_on`
+   False→True**, and are gated during explicit-off/transitions (background reconnects from
+   paired centrals fake power-on otherwise).
+3. **Only `LINK_DOWN_STATES` (`0x00`, `0x0F`, `0x11`) may demote the link.** `0x08` (A2DP) and
+   `0x0C` (AVRCP) are routine profile drops with the ACL up; arming disconnect debounce on
+   `0x08` caused AUX flapping and audible Line-In gain runaway.
+4. **AUX gating**: `should_show_aux()`'s "not connected ⇒ AUX" fallback is a boot-window-only
+   heuristic guarded by `_source_ever_seen`. Removing the guard reproduces
+   `docs/incident-2026-08-26-phantom-aux.md` (phantom AUX mid-playback wipes metadata and
+   disables transport controls).
+5. **AVRCP register-notifications stay staggered** — back-to-back bursts kill A2DP on some
+   BM83 firmware revisions.
+6. **Muted-path wedge recovery is source-side only** (`docs/muted-path-wedge.md`). A
+   sink-initiated AVRCP pause/play does not fix it; that path shipped disabled as
+   `STREAM_KICK_ENABLED`.
+7. **MMI power timing**: ON needs a ~2.2 s held press (a 0.2 s tap does nothing); OFF is held
+   1.5 s. Healthy boot confirms within 0.8–1.5 s via `0x02`/profile states; commanded shutdown
+   walks `0x0C`/`0x08`/`0x11` → `0x00`.
+8. **`dist/circuitpython/` is generated** by `build_mpy.sh`; never hand-edit it.
+   `dist/circuitpython/main.py` must stay byte-identical to
+   `firmware/circuitpython/main.py` (a test enforces parity).
+9. **Green CI is not a merge verdict for protocol changes** — the hardware serial capture is
+   (see `CLAUDE.md`). Label firmware-behavior PRs `needs-hardware-test`.
+
+## Automation conventions (weekly agents)
+
+- Monday: `weekly-copilot-review.yml` opens a focused issue (label `agent:weekly`, 4-week
+  rotation deps → robustness → quality → tests) assigned to the Copilot coding agent.
+- Thursday: `weekly-claude-audit.yml` runs the Claude dependency/upgrade audit and writes
+  `docs/weekly-audit/<date>.md`.
+- Agent ground rules: ≤ ~300 changed lines per PR, host-verifiable changes only, no firmware
+  behavior changes (those become `code-health` issues with proposed diffs), workflows and
+  `Documents/` read-only.
+- The full review brief lives in `.github/prompts/extensive-review.prompt.md`.
+- Repo-health facts (inventory, TODO debt, churn, dependency report, test/lint status) are
+  available via the `repo-health` MCP server (`tools/mcp/repo_health/`).
