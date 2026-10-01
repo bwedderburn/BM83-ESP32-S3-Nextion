@@ -1,2 +1,2 @@
 # repo_health_mcp server dependency (Dependabot keeps this current)
-mcp>=1.2,<2
+mcp>=2.2.0,<3
