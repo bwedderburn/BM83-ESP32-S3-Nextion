@@ -15,7 +15,7 @@ PR; this file is the runbook.
 | `.github/agent-tasks/weekly-copilot-body.md` | Issue body template for the Monday task |
 | `.github/workflows/weekly-claude-audit.yml` | Thursdays: Claude Code dependency/upgrade audit → report + safe-fix PR + issues |
 | `.github/dependabot.yml` | + pip ecosystem for the MCP server |
-| `tools/mcp/repo_health/` | Read-only repo-health MCP server (inventory, TODOs, churn, deps, test/lint) |
+| `tools/mcp/repo_health/` | Repo-health MCP server (inventory, TODOs, churn, deps, test/lint) — read-only except `repo_test_summary`, which runs repo tests and writes caches |
 | `.mcp.json`, `.vscode/mcp.json` | MCP registration for Claude Code and VS Code agent mode |
 | `docs/agents/copilot-coding-agent-mcp.json` | MCP config to paste into repo settings (coding agent) |
 
@@ -57,10 +57,14 @@ input line in `weekly-claude-audit.yml`.
 Repo → **Settings → Copilot → Coding agent → MCP configuration** (shown as "MCP servers" in
 some UI versions) → paste the contents of `docs/agents/copilot-coding-agent-mcp.json` → save.
 The coding agent's firewall and setup steps handle the rest; `copilot-setup-steps.yml`
-preinstalls the `mcp` package it needs.
+preinstalls the `mcp` package it needs. Note the pasted config's `"tools": ["*"]` enables
+all six tools for the coding agent and is NOT a read-only boundary — `repo_test_summary`
+executes repository tests and writes pytest caches, so never reuse this wildcard set for
+Copilot code review (see the server README's "Read-only guarantee").
 
 Claude Code and VS Code need nothing — `.mcp.json` and `.vscode/mcp.json` are picked up from
-the repo automatically (VS Code will ask once to trust/start the server).
+the repo automatically (VS Code will ask once to trust/start the server); the same
+read-only exception applies to whatever those agents do with `repo_test_summary`.
 
 ### 3. Validate copilot-setup-steps
 
