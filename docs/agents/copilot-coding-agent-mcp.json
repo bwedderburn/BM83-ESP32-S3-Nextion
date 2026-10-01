@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "repo-health": {
+      "type": "local",
+      "command": "python3",
+      "args": ["tools/mcp/repo_health/server.py"],
+      "tools": ["*"]
+    }
+  }
+}

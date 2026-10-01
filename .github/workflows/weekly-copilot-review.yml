@@ -1,0 +1,105 @@
+# Weekly code-improvement pass, driven by the Copilot coding agent.
+#
+# Every Monday this opens a focused improvement issue (4-week focus rotation)
+# and hands it to Copilot, which works in its own session and opens a PR for
+# normal review (Copilot/Codex review + branch protection still gate merges).
+#
+# Auto-assignment needs the GH_AGENT_PAT repo secret: a fine-grained PAT for
+# this repo with Read on metadata and Read+Write on actions, contents, issues,
+# and pull requests (the set GitHub documents for Copilot issue assignment).
+# Without the secret the issue is still created — assign Copilot by hand.
+#
+# See docs/agents/SETUP.md for the one-time setup checklist.
+
+name: Weekly code improvement (Copilot)
+
+on:
+  schedule:
+    - cron: "17 14 * * 1" # Mondays 14:17 UTC = 06:17 PST / 07:17 PDT
+  workflow_dispatch:
+    inputs:
+      focus:
+        description: "Override focus (deps|robustness|quality|tests)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: weekly-copilot-review
+  cancel-in-progress: false
+
+jobs:
+  open-weekly-task:
+    if: github.repository == 'bwedderburn/BM83-ESP32-S3-Nextion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout (for the issue body template)
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/agent-tasks
+
+      - name: Pick this week's focus
+        id: focus
+        env:
+          OVERRIDE: ${{ github.event.inputs.focus }}
+        run: |
+          WEEK=$(date -u +%V)
+          case $(( 10#$WEEK % 4 )) in
+            0) FOCUS=deps ;;
+            1) FOCUS=robustness ;;
+            2) FOCUS=quality ;;
+            3) FOCUS=tests ;;
+          esac
+          if [ -n "$OVERRIDE" ]; then FOCUS="$OVERRIDE"; fi
+          case "$FOCUS" in
+            deps|robustness|quality|tests) ;;
+            *) echo "Invalid focus override: $FOCUS"; exit 1 ;;
+          esac
+          echo "focus=$FOCUS" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Compose issue body
+        env:
+          FOCUS: ${{ steps.focus.outputs.focus }}
+        run: |
+          sed "s/{{FOCUS}}/$FOCUS/g" .github/agent-tasks/weekly-copilot-body.md > body.md
+
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "agent:weekly" --repo "$GITHUB_REPOSITORY" --color 5319E7 --description "Scheduled weekly agent task" 2>/dev/null || true
+          gh label create "code-health" --repo "$GITHUB_REPOSITORY" --color 0E8A16 --description "Code quality / upgrade tracking" 2>/dev/null || true
+
+      - name: Create issue and hand it to Copilot
+        env:
+          GH_TOKEN: ${{ secrets.GH_AGENT_PAT || github.token }}
+          HAS_PAT: ${{ secrets.GH_AGENT_PAT != '' }}
+          FOCUS: ${{ steps.focus.outputs.focus }}
+          DATE: ${{ steps.focus.outputs.date }}
+        run: |
+          TITLE="Weekly code improvement — $FOCUS ($DATE)"
+          if [ "$HAS_PAT" = "true" ]; then
+            # Create the issue already assigned to Copilot (starts a coding
+            # agent session). Endpoint + assignee login per GitHub docs.
+            jq -n --arg title "$TITLE" --arg repo "$GITHUB_REPOSITORY" --rawfile body body.md \
+              '{title: $title, body: $body, labels: ["agent:weekly"],
+                assignees: ["copilot-swe-agent[bot]"],
+                agent_assignment: {target_repo: $repo, base_branch: "main",
+                                   custom_instructions: "", custom_agent: "", model: ""}}' > issue.json
+            gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "/repos/$GITHUB_REPOSITORY/issues" --input issue.json \
+              --jq '"Created and assigned: " + .html_url'
+          else
+            URL=$(gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+              --label "agent:weekly" --body-file body.md)
+            gh issue comment "$URL" --repo "$GITHUB_REPOSITORY" \
+              --body "GH_AGENT_PAT secret is not set, so Copilot was not auto-assigned. Assign **Copilot** to this issue to start the coding agent (one-time setup: docs/agents/SETUP.md)."
+            echo "Created unassigned: $URL"
+          fi

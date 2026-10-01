@@ -1,0 +1,118 @@
+# Weekly dependency & upgrade audit, driven by Claude Code (claude-code-action).
+#
+# Thursdays: Claude baselines the repo, builds an upgrade matrix (CircuitPython,
+# mpy-cross, Actions, Python matrix, dev tools), writes a dated report, opens a
+# small PR when there are safe mechanical changes, and files code-health issues
+# for anything risky. Complements Monday's Copilot pass (implementation) with
+# the audit/domain side — mirroring the reviewer split described in CLAUDE.md.
+#
+# Auth (one of, as a repo secret):
+#   CLAUDE_CODE_OAUTH_TOKEN  — from `claude setup-token` (uses your Claude subscription)
+#   ANTHROPIC_API_KEY        — swap the input line below if you prefer API billing
+# Optional: GH_AGENT_PAT (same PAT as the Copilot workflow) so the audit PR is
+# opened under your account and CI triggers on it normally.
+#
+# See docs/agents/SETUP.md for the one-time setup checklist.
+
+name: Weekly dependency & upgrade audit (Claude)
+
+on:
+  schedule:
+    - cron: "47 14 * * 4" # Thursdays 14:47 UTC = 06:47 PST / 07:47 PDT
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: weekly-claude-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    if: github.repository == 'bwedderburn/BM83-ESP32-S3-Nextion'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history for churn analysis
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Preinstall toolchain (matches CI)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install flake8 pytest bandit
+          pip install -e .
+          python -m pip install -r tools/mcp/repo_health/requirements.txt
+
+      - name: Run Claude audit
+        uses: anthropics/claude-code-action@12dd8d74c712f5f3669365b2369b558c495b1104 # v1
+        env:
+          GH_TOKEN: ${{ secrets.GH_AGENT_PAT || github.token }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # To use API billing instead, replace the line above with:
+          # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are running the weekly dependency & upgrade audit for
+            BM83-ESP32-S3-Nextion (CircuitPython firmware for an ESP32-S3 that
+            host-controls a Microchip BM83 over UART; host tests on CPython).
+
+            First read .github/copilot-instructions.md (including Behavioral
+            Contracts) and CLAUDE.md. They are binding. Hard rules for this run:
+            no firmware behavior changes; dist/ is generated (never hand-edit);
+            .github/workflows/ and Documents/ are read-only (CI changes go in
+            the report as proposed diffs); total diff <= 300 lines excluding
+            the report. The repo-health MCP tools (mcp__repo-health) are
+            installed and allowed — prefer them for inventory, churn, TODO
+            and dependency facts.
+
+            1. Baseline: run the strict flake8 pass
+               (flake8 . --count --select=E9,F63,F7,F82) and pytest -q.
+               If the baseline is red, do NOT proceed: create or update an
+               issue titled "Weekly audit: baseline red" (label code-health)
+               with the failure output, and stop.
+            2. Upgrade scan — build a matrix
+               (Component | Current | Latest | Risk | Breaking changes | Recommendation):
+               - GitHub Actions majors across .github/workflows/.
+               - Python CI matrix in python-package.yml (3.9 is past EOL;
+                 evaluate adding 3.12/3.13).
+               - Dev tools flake8/pytest/bandit: what resolves today vs any
+                 known breaking majors.
+               - CircuitPython: gh api repos/adafruit/circuitpython/releases/latest
+                 — compare against the 10.x version the repo documents, and
+                 summarize changelog items relevant to ESP32-S3, UART,
+                 BLE/NimBLE, supervisor.
+               - mpy-cross latest-grab in build-circuitpython-dist.yml
+                 (reproducibility note).
+               - tools/mcp/repo_health/requirements.txt pins.
+            3. Code-improvement scan (host-verifiable only): flake8
+               max-complexity offenders, duplicated protocol constants, dead
+               code with proof, missing docstrings on public helpers,
+               TODO/FIXME triage, churn hotspots (git log --since=180.days).
+            4. Write the report to docs/weekly-audit/<YYYY-MM-DD>.md (create
+               the directory if needed): executive summary, the upgrade
+               matrix, ranked recommendations, and a short "what changed since
+               last week's report" if a previous one exists.
+            5. Branch chore/weekly-audit-<YYYY-MM-DD>. Commit the report plus
+               ONLY safe mechanical changes (docs corrections, deterministic
+               test additions, docstrings, requirement pins). Push and open a
+               PR titled "chore: weekly audit <YYYY-MM-DD>" summarizing
+               findings, then request a Copilot review via:
+               gh api --method POST repos/$GITHUB_REPOSITORY/pulls/<n>/requested_reviewers -f "reviewers[]=copilot-pull-request-reviewer[bot]"
+               If there are no safe changes, open the PR with the report alone.
+            6. File one code-health issue per risky theme (dedupe against open
+               issues first). Firmware behavior proposals go there as diffs,
+               never as commits.
+          claude_args: |
+            --max-turns 50
+            --mcp-config .mcp.json
+            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(python3:*),Bash(pip:*),Bash(pytest:*),Bash(flake8:*),Bash(bandit:*),Bash(mkdir:*),Bash(date:*),Read,Glob,Grep,Edit,Write,WebFetch,mcp__repo-health,mcp__repo-health__*"
