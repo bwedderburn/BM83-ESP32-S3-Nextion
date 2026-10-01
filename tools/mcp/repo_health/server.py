@@ -304,13 +304,28 @@ def repo_test_summary(extra_args: str = "") -> str:
     Requires pytest installed (copilot-setup-steps preinstalls it).
 
     Args:
-        extra_args: optional pytest args, whitespace-separated (e.g. "-k bm83").
-                    Only plain flags/expressions — no shell syntax.
+        extra_args: optional pytest args, whitespace-separated. Allowed: -k /
+                    -m with a following expression word, -x, -q, --maxfail=N,
+                    and relative test paths / node ids. Every other option is
+                    rejected — options like --basetemp can delete directories.
 
     Returns:
-        Last ~60 lines of pytest output (pass/fail summary included).
+        Last ~60 lines of pytest output (pass/fail summary included), or an
+        "Error: disallowed pytest argument ..." message without running.
     """
-    args = [a for a in extra_args.split() if re.fullmatch(r"[\w\-./:=\[\]]+", a)]
+    allowed_flags = {"-k", "-m", "-x", "-q"}
+    args: list[str] = []
+    for tok in extra_args.split():
+        if tok in allowed_flags or re.fullmatch(r"--maxfail=\d+", tok):
+            args.append(tok)
+        elif (not tok.startswith("-") and not tok.startswith("/")
+              and ".." not in tok and not re.match(r"^[A-Za-z]:", tok)
+              and re.fullmatch(r"[\w./:=\[\]-]+", tok)):
+            args.append(tok)  # -k/-m expression word, test path, or node id
+        else:
+            return (f"Error: disallowed pytest argument {tok!r} — allowed: "
+                    "-k/-m <expression>, -x, -q, --maxfail=N, and relative "
+                    "test paths or node ids.")
     out = _run([sys.executable, "-m", "pytest", "-q", *args], timeout=600, cwd=ROOT)
     tail = "\n".join((out["stdout"] + "\n" + out["stderr"]).strip().splitlines()[-60:])
     return _cap(f"exit code: {out['code']}\n{tail}")

@@ -51,6 +51,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install flake8 pytest bandit
           pip install -e .
+          python -m pip install -r tools/mcp/repo_health/requirements.txt
 
       - name: Run Claude audit
         uses: anthropics/claude-code-action@12dd8d74c712f5f3669365b2369b558c495b1104 # v1
@@ -70,7 +71,9 @@ jobs:
             no firmware behavior changes; dist/ is generated (never hand-edit);
             .github/workflows/ and Documents/ are read-only (CI changes go in
             the report as proposed diffs); total diff <= 300 lines excluding
-            the report.
+            the report. The repo-health MCP tools (mcp__repo-health) are
+            installed and allowed — prefer them for inventory, churn, TODO
+            and dependency facts.
 
             1. Baseline: run the strict flake8 pass
                (flake8 . --count --select=E9,F63,F7,F82) and pytest -q.
@@ -111,4 +114,5 @@ jobs:
                never as commits.
           claude_args: |
             --max-turns 50
-            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(python3:*),Bash(pip:*),Bash(pytest:*),Bash(flake8:*),Bash(bandit:*),Bash(mkdir:*),Bash(date:*),Read,Glob,Grep,Edit,Write,WebFetch"
+            --mcp-config .mcp.json
+            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(python3:*),Bash(pip:*),Bash(pytest:*),Bash(flake8:*),Bash(bandit:*),Bash(mkdir:*),Bash(date:*),Read,Glob,Grep,Edit,Write,WebFetch,mcp__repo-health"
