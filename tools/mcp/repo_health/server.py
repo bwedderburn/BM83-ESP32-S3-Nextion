@@ -6,9 +6,11 @@ structured, cheap access to the repo-health facts they otherwise burn turns
 rediscovering: inventory, TODO debt, churn hotspots, dependency/toolchain
 versions, and test/lint status.
 
-Every tool is read-only with respect to the working tree (test/lint runs only
-touch their own caches), so the server is also safe to expose to Copilot code
-review (which requires readOnlyHint annotations).
+Every tool except repo_test_summary is read-only with respect to the working
+tree and carries readOnlyHint, so that subset is safe to expose to Copilot
+code review. repo_test_summary executes the repository's test code and lets
+pytest write its caches, so it is NOT marked read-only — keep it out of any
+code-review tool set (see README, "Read-only guarantee").
 
 Run:  python tools/mcp/repo_health/server.py   (stdio transport)
 Deps: pip install -r tools/mcp/repo_health/requirements.txt
@@ -36,7 +38,12 @@ SKIP_DIRS = {
     "pytest-cache-files-fz3be7jp", ".codex", "egg-info",
 }
 SOURCE_EXTS = {".py", ".md", ".yml", ".yaml", ".sh", ".toml", ".ini", ".json", ".cfg"}
-TODO_MARKERS = ("TODO", "FIXME", "HACK", "XXX", "WATCH:")
+TODO_MARKERS = ("TODO", "FIXME", "HACK", "XXX", "WATCH")
+# Only comment/task syntax counts as debt — prose that merely discusses the
+# scan (docs, prompts, this constant) must not match.
+_MARKER_ALT = "|".join(TODO_MARKERS)
+TODO_IN_COMMENT = re.compile(r"(?:#|//|<!--)\s*(?:%s)\b" % _MARKER_ALT)
+TODO_TASK_LINE = re.compile(r"^\s*(?:[-*>]\s*)?(?:\[.\]\s*)?(?:%s)[:(]" % _MARKER_ALT)
 OUTPUT_CAP = 6000  # chars, keep tool results context-friendly
 
 
@@ -79,13 +86,37 @@ def _iter_source_files(root: Path):
 
 
 def _cap(text: str) -> str:
+    """Character cap for PLAIN-TEXT tool output only — never JSON."""
     if len(text) <= OUTPUT_CAP:
         return text
     return text[:OUTPUT_CAP] + f"\n... [truncated at {OUTPUT_CAP} chars]"
 
 
-def _json(data) -> str:
-    return _cap(json.dumps(data, indent=2, ensure_ascii=False))
+def _json(data: dict) -> str:
+    """Serialize to JSON, truncating structurally so output is ALWAYS valid JSON.
+
+    Oversized results shrink their largest top-level list (halving until the
+    dump fits OUTPUT_CAP) and gain "truncated": true plus kept/total counts —
+    never a mid-string character cut.
+    """
+    def dump(d: dict) -> str:
+        return json.dumps(d, indent=2, ensure_ascii=False)
+
+    text = dump(data)
+    if len(text) <= OUTPUT_CAP:
+        return text
+    data = dict(data)
+    totals = {k: len(v) for k, v in data.items() if isinstance(v, list)}
+    while len(text) > OUTPUT_CAP:
+        lists = [(k, v) for k, v in data.items() if isinstance(v, list) and len(v) > 1]
+        if not lists:
+            break  # nothing left to shrink; valid JSON beats the size cap
+        key = max(lists, key=lambda kv: len(dump({kv[0]: kv[1]})))[0]
+        data[key] = data[key][: max(1, len(data[key]) // 2)]
+        data["truncated"] = True
+        data["kept"] = {k: f"{len(data[k])} of {totals[k]}" for k in totals}
+        text = dump(data)
+    return text
 
 
 ROOT = _repo_root()
@@ -147,8 +178,10 @@ def repo_inventory(top_n: int = 15) -> str:
     },
 )
 def repo_todo_scan() -> str:
-    """Find TODO / FIXME / HACK / XXX / WATCH: markers in source files
-    (vendor docs, dist/, recovered_src/ and caches are skipped).
+    """Find TODO / FIXME / HACK / XXX / WATCH markers written as comment or
+    task syntax (e.g. "# TODO ...", "- [ ] FIXME: ..."). Prose that merely
+    mentions the words — docs, prompts — is ignored, as are vendor docs,
+    dist/, recovered_src/ and caches.
 
     Returns:
         JSON: {"count", "markers": [{"path", "line", "text"}]} — text trimmed
@@ -159,7 +192,7 @@ def repo_todo_scan() -> str:
         try:
             with path.open("r", encoding="utf-8", errors="replace") as fh:
                 for lineno, line in enumerate(fh, 1):
-                    if any(m in line for m in TODO_MARKERS):
+                    if TODO_IN_COMMENT.search(line) or TODO_TASK_LINE.match(line):
                         hits.append({
                             "path": str(rel).replace(os.sep, "/"),
                             "line": lineno,
@@ -260,12 +293,14 @@ def repo_dependency_report() -> str:
 @mcp.tool(
     name="repo_test_summary",
     annotations={
-        "title": "Run Pytest (summary)", "readOnlyHint": True,
+        "title": "Run Pytest (summary)", "readOnlyHint": False,
         "destructiveHint": False, "idempotentHint": False, "openWorldHint": False,
     },
 )
 def repo_test_summary(extra_args: str = "") -> str:
     """Run the host-only pytest suite and return the tail of its output.
+    NOT read-only: executes repository test code and lets pytest write its
+    caches — keep this tool out of any code-review tool set (see README).
     Requires pytest installed (copilot-setup-steps preinstalls it).
 
     Args:
@@ -293,8 +328,9 @@ def repo_lint_summary() -> str:
     return their tails. Requires flake8 installed.
 
     Returns:
-        "strict" pass output (E9,F63,F7,F82 — must be clean) and the last
-        lines of the style pass (warnings incl. C901 complexity offenders).
+        Both passes' exit codes with stdout AND stderr, so a failed flake8
+        invocation is never reported as clean (style pass incl. C901
+        complexity offenders).
     """
     strict = _run([sys.executable, "-m", "flake8", ".", "--count",
                    "--select=E9,F63,F7,F82", "--show-source", "--statistics"],
@@ -302,10 +338,16 @@ def repo_lint_summary() -> str:
     style = _run([sys.executable, "-m", "flake8", ".", "--count", "--exit-zero",
                   "--max-complexity=10", "--max-line-length=127", "--statistics"],
                  timeout=300, cwd=ROOT)
-    style_tail = "\n".join(style["stdout"].strip().splitlines()[-40:])
+
+    def _both(out: dict) -> str:
+        err = out["stderr"].strip()
+        return (out["stdout"].strip() + ("\n" + err if err else "")).strip()
+
+    strict_text = _both(strict) or ("clean" if strict["code"] == 0 else "(no output)")
+    style_tail = "\n".join(_both(style).splitlines()[-40:])
     return _cap(
-        f"strict pass exit code: {strict['code']}\n{strict['stdout'].strip() or 'clean'}\n"
-        f"\nstyle pass (exit-zero) tail:\n{style_tail}"
+        f"strict pass exit code: {strict['code']}\n{strict_text}\n"
+        f"\nstyle pass exit code: {style['code']} (run with --exit-zero):\n{style_tail}"
     )
 
 

@@ -15,13 +15,16 @@ know what is deliberately out of scope this week.
   `tools/mcp/repo_health/requirements.txt`, removal of proven-dead compat shims.
 - Run the advisory-database check on any pinned version you touch.
 
-### Scope: robustness — protocol & parsing hardening
+### Scope: robustness — protocol & parsing audit (audit-only)
 
-- Harden parsing paths in `firmware/circuitpython/lib/` (bm83 framing/checksum resync,
-  Nextion token parser under partial/garbage input, `_sanitize_text` coverage) — ONLY where a
-  host test can prove the defect first.
-- Every fix ships with a failing-then-passing pytest case pinning the contract.
-- Firmware must stay CircuitPython-compatible; no new allocation in hot loops.
+- Audit parsing paths in `firmware/circuitpython/lib/` (bm83 framing/checksum resync,
+  Nextion token parser under partial/garbage input, `_sanitize_text` coverage) for
+  host-provable weaknesses. Do NOT change firmware code in this scope — parser
+  hardening is behavioral and stays behind the hardware gate.
+- For each weakness found, file one `code-health` issue containing a failing-test
+  sketch that demonstrates the defect and your proposed diff.
+- This week's PR carries only the audit notes (and, at most, new tests that pin
+  CURRENT behavior without touching firmware).
 
 ### Scope: quality — maintainability
 
