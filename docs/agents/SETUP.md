@@ -62,9 +62,16 @@ all six tools for the coding agent and is NOT a read-only boundary — `repo_tes
 executes repository tests and writes pytest caches, so never reuse this wildcard set for
 Copilot code review (see the server README's "Read-only guarantee").
 
-Claude Code and VS Code need nothing — `.mcp.json` and `.vscode/mcp.json` are picked up from
-the repo automatically (VS Code will ask once to trust/start the server); the same
-read-only exception applies to whatever those agents do with `repo_test_summary`.
+Claude Code and VS Code pick up `.mcp.json` and `.vscode/mcp.json` automatically (VS Code
+will ask once to trust/start the server), but the server's own dependency must be installed
+once per machine or the auto-started process dies at `from mcp.server.fastmcp import ...`:
+
+shell (PowerShell, B-Intel)
+```
+python -m pip install -r tools/mcp/repo_health/requirements.txt
+```
+
+The same read-only exception applies to whatever those agents do with `repo_test_summary`.
 
 ### 3. Validate copilot-setup-steps
 

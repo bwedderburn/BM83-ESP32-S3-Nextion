@@ -179,9 +179,10 @@ def repo_inventory(top_n: int = 15) -> str:
 )
 def repo_todo_scan() -> str:
     """Find TODO / FIXME / HACK / XXX / WATCH markers written as comment or
-    task syntax (e.g. "# TODO ...", "- [ ] FIXME: ..."). Prose that merely
-    mentions the words — docs, prompts — is ignored, as are vendor docs,
-    dist/, recovered_src/ and caches.
+    task syntax — the marker directly after a comment leader (hash, //, or
+    <!--) or opening a checkbox/task line. Prose that merely mentions the
+    words — docs, prompts, and this docstring — is ignored, as are vendor
+    docs, dist/, recovered_src/ and caches.
 
     Returns:
         JSON: {"count", "markers": [{"path", "line", "text"}]} — text trimmed

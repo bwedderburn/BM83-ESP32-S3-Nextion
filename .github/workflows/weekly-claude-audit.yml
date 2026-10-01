@@ -115,4 +115,4 @@ jobs:
           claude_args: |
             --max-turns 50
             --mcp-config .mcp.json
-            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(python3:*),Bash(pip:*),Bash(pytest:*),Bash(flake8:*),Bash(bandit:*),Bash(mkdir:*),Bash(date:*),Read,Glob,Grep,Edit,Write,WebFetch,mcp__repo-health"
+            --allowedTools "Bash(git:*),Bash(gh:*),Bash(python:*),Bash(python3:*),Bash(pip:*),Bash(pytest:*),Bash(flake8:*),Bash(bandit:*),Bash(mkdir:*),Bash(date:*),Read,Glob,Grep,Edit,Write,WebFetch,mcp__repo-health,mcp__repo-health__*"
