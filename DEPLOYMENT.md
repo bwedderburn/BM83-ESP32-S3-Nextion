@@ -47,7 +47,10 @@ If you are using Codex CLI to implement and verify changes, use this repeatable 
    git status
    ```
 5. Deploy baseline `.py` first (`./deploy.sh`), then run post-deploy smoke checklist.
-6. Only after baseline stability is confirmed, build/deploy `.mpy` **from a clean CIRCUITPY filesystem** or **after deleting the root `bm83/`, `nextion/`, `blehid/`, and `utils/` directories** (`./build_mpy.sh` + copy `dist/circuitpython/*`), then re-run the same smoke checklist.
+6. Only after baseline stability is confirmed, build/deploy `.mpy` **from a clean
+   CIRCUITPY filesystem** or after deleting the project module folders under
+   `CIRCUITPY/lib/` (`bm83/`, `nextion/`, `blehid/`, and `utils/`) (`./build_mpy.sh`
+   + copy `dist/circuitpython/*`), then re-run the same smoke checklist.
 
 This sequence minimizes crash risk by proving deterministic host behavior first, then validating hardware behavior incrementally.
 
@@ -80,10 +83,10 @@ cp -r firmware/circuitpython/* /path/to/CIRCUITPY/
 ```
 
 **Important files to update** (if you've made changes):
-- `nextion/display.py` - Recent token parsing fixes
+- `lib/nextion/display.py` - Nextion protocol and token parsing
 - `main.py` - Main application logic
-- `bm83/bm83.py` - BM83 module updates
-- `blehid/ble.py` - BLE HID updates
+- `lib/bm83/bm83.py` - BM83 module updates
+- `lib/blehid/ble.py` - BLE HID updates
 
 ### Step 3: Verify the Update
 
@@ -218,7 +221,7 @@ If you're still seeing tokens like `b'BT_POWERf\x00'` after updating:
 1. **Verify the files were copied correctly:**
    ```bash
    # Check the modification time of display.py on the device
-   ls -l /path/to/CIRCUITPY/nextion/display.py
+   ls -l /path/to/CIRCUITPY/lib/nextion/display.py
    ```
    
 2. **Ensure code reloaded:**
@@ -240,8 +243,8 @@ If you're still seeing tokens like `b'BT_POWERf\x00'` after updating:
    Sometimes CircuitPython caches compiled code. Delete the `.mpy` files if present:
    ```bash
    # On the CIRCUITPY drive
-   rm -rf nextion/__pycache__
-   rm nextion/*.mpy
+   rm -rf lib/nextion/__pycache__
+   rm -f lib/nextion/*.mpy
    ```
 
 ### Buttons Still Don't Work
@@ -285,22 +288,18 @@ If the board shows errors or won't start:
 ```
 CIRCUITPY/
 ├── main.py              # Main entry point
-├── settings.toml        # Configuration
 ├── lib/                 # CircuitPython libraries
 │   ├── adafruit_ble/
 │   └── adafruit_hid/
-├── nextion/
-│   ├── __init__.py
-│   └── display.py       # ← TOKEN PARSING FIX HERE
-├── bm83/
-│   ├── __init__.py
-│   └── bm83.py
-├── blehid/
-│   ├── __init__.py
-│   └── ble.py
-└── utils/
-    ├── __init__.py
-    └── common.py
+│   ├── nextion/
+│   │   └── display.py   # ← TOKEN PARSING FIX HERE
+│   ├── bm83/
+│   │   └── bm83.py
+│   ├── blehid/
+│   │   └── ble.py
+│   └── utils/
+│       ├── common.py
+│       └── compat.py
 ```
 
 ### Serial Terminal Commands

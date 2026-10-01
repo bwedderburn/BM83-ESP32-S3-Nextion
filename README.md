@@ -53,7 +53,7 @@ Use this mode while bringing up new hardware, debugging regressions, or reproduc
    - `adafruit_hid`
 4. Connect:
    - **BM83** via UART (`IO17` / `IO18`)
-   - **Nextion** via UART (`IO43` / `IO44`)
+   - **Nextion** via UART (`IO15` / `IO16`)
 5. **Configure Nextion HMI buttons** - See [NEXTION_SETUP.md](NEXTION_SETUP.md) for press/release event configuration.
 6. Reset the board. `main.py` will execute and start all services.
 
