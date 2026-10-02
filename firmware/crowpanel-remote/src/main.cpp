@@ -13,6 +13,10 @@
 //     receiver is Stage 3 — until it lands, sends report no-ack, which is
 //     the expected bench state and proves the TX path runs.
 //   - heartbeat line every 5 s so a silent panel is never ambiguous
+//   - battery gauge (top right) from the panel's Li-ion cell, and supply
+//     detection that picks the sleep policy: on USB the screen only dims
+//     (a tap always wakes it); on battery it dims sooner and light-sleeps
+//     until BOOT is pressed (see battery.h, display_init.h)
 //
 // Display/touch/power bring-up comes verbatim from the solar HMI firmware
 // (same physical hardware). WiFi runs in unassociated STA mode for ESP-NOW
@@ -22,6 +26,7 @@
 #include <lvgl.h>
 #include <stdarg.h>
 
+#include "battery.h"
 #include "display_init.h"
 #include "espnow_link.h"
 
@@ -52,6 +57,118 @@ static lv_indev_drv_t     indev_drv;
 // ----- UI state ---------------------------------------------------------------
 static lv_obj_t *g_status_label = nullptr;
 static uint32_t  g_token_count  = 0;
+
+// ----- battery widget (the solar HMI header icon, scaled for the remote) -----
+// [body with fill + charging bolt][tip]  "98%  4.12 V"
+constexpr int      BATT_BODY_W = 40;
+constexpr int      BATT_BODY_H = 20;
+constexpr int      BATT_TIP_W  = 4;
+constexpr int      BATT_TIP_H  = 8;
+constexpr int      BATT_PAD    = 2;  // gap between the body's border and the fill
+constexpr uint32_t COLOR_FG    = 0xE8EAED;
+constexpr uint32_t COLOR_OK    = 0x34A853;
+constexpr uint32_t COLOR_WARN  = 0xFBBC04;
+constexpr uint32_t COLOR_BAD   = 0xEA4335;
+
+static lv_obj_t    *g_batt_fill = nullptr;
+static lv_obj_t    *g_batt_bolt = nullptr;
+static lv_obj_t    *g_batt_text = nullptr;
+static BatteryState g_batt      = {-1.0f, -1, Supply::Unknown, false};
+
+static lv_obj_t *make_plain(lv_obj_t *parent, int w, int h) {
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_size(o, w, h);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    return o;
+}
+
+static void build_battery_widget(lv_obj_t *scr) {
+    lv_obj_t *row = make_plain(scr, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 8, 0);
+    lv_obj_align(row, LV_ALIGN_TOP_RIGHT, -16, 22);
+
+    lv_obj_t *icon = make_plain(row, BATT_BODY_W + BATT_TIP_W, BATT_BODY_H);
+
+    lv_obj_t *body = make_plain(icon, BATT_BODY_W, BATT_BODY_H);
+    lv_obj_set_style_border_color(body, lv_color_hex(COLOR_FG), 0);
+    lv_obj_set_style_border_width(body, 1, 0);
+    lv_obj_set_style_radius(body, 3, 0);
+
+    lv_obj_t *tip = make_plain(icon, BATT_TIP_W, BATT_TIP_H);
+    lv_obj_set_pos(tip, BATT_BODY_W, (BATT_BODY_H - BATT_TIP_H) / 2);
+    lv_obj_set_style_bg_color(tip, lv_color_hex(COLOR_FG), 0);
+    lv_obj_set_style_bg_opa(tip, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(tip, 1, 0);
+
+    // Children sit inside the body's 1 px border, hence the -2.
+    g_batt_fill = make_plain(body, 0, BATT_BODY_H - 2 * BATT_PAD - 2);
+    lv_obj_set_pos(g_batt_fill, BATT_PAD, BATT_PAD);
+    lv_obj_set_style_bg_color(g_batt_fill, lv_color_hex(COLOR_OK), 0);
+    lv_obj_set_style_bg_opa(g_batt_fill, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(g_batt_fill, 1, 0);
+
+    g_batt_bolt = lv_label_create(body);
+    lv_label_set_text(g_batt_bolt, LV_SYMBOL_CHARGE);
+    lv_obj_set_style_text_color(g_batt_bolt, lv_color_hex(COLOR_FG), 0);
+    lv_obj_set_style_text_font(g_batt_bolt, &lv_font_montserrat_14, 0);
+    lv_obj_center(g_batt_bolt);
+    lv_obj_add_flag(g_batt_bolt, LV_OBJ_FLAG_HIDDEN);
+
+    g_batt_text = lv_label_create(row);
+    lv_label_set_text(g_batt_text, "--%");
+    lv_obj_set_style_text_color(g_batt_text, lv_color_hex(COLOR_FG), 0);
+    lv_obj_set_style_text_font(g_batt_text, &lv_font_montserrat_20, 0);
+}
+
+// Repaint only on a change: percent, bolt, or the voltage at 10 mV.
+static void ui_set_battery(const BatteryState &b) {
+    static int  last_pct  = -2;
+    static bool last_bolt = false;
+    static int  last_cv   = -1;
+    if (!g_batt_fill || !g_batt_text) return;
+    const bool bolt = b.charging && b.percent >= 0;
+    const int  cv   = (b.percent >= 0) ? (int)(b.volts * 100.0f + 0.5f) : -1;
+    if (b.percent == last_pct && bolt == last_bolt && cv == last_cv) return;
+    last_pct  = b.percent;
+    last_bolt = bolt;
+    last_cv   = cv;
+
+    if (bolt) lv_obj_clear_flag(g_batt_bolt, LV_OBJ_FLAG_HIDDEN);
+    else      lv_obj_add_flag(g_batt_bolt, LV_OBJ_FLAG_HIDDEN);
+    if (b.percent < 0) {
+        lv_obj_set_width(g_batt_fill, 0);
+        lv_label_set_text(g_batt_text, "--%");
+        return;
+    }
+    const int inner_w = BATT_BODY_W - 2 * BATT_PAD - 2;
+    lv_obj_set_width(g_batt_fill, (inner_w * b.percent) / 100);
+    const uint32_t color = (b.percent < 20) ? COLOR_BAD
+                         : (b.percent < 50) ? COLOR_WARN
+                                            : COLOR_OK;
+    lv_obj_set_style_bg_color(g_batt_fill, lv_color_hex(color), 0);
+    lv_label_set_text_fmt(g_batt_text, "%d%%  %d.%02d V", b.percent, cv / 100, cv % 100);
+}
+
+// Sleep policy follows the detected supply: battery timings only once a
+// step has shown the remote is on battery; Unknown runs USB timings.
+static void apply_power_mode(Supply s) {
+    const bool on_battery = (s == Supply::Battery);
+    if (on_battery == screen_is_battery_mode()) return;
+    screen_set_battery_mode(on_battery);
+    if (on_battery) {
+        rlog("[power] on battery: dim after %lus, light sleep after %lus (BOOT wakes)",
+             (unsigned long)(SCREEN_DIM_AFTER_MS_BATTERY / 1000),
+             (unsigned long)(SCREEN_SLEEP_AFTER_MS_BATTERY / 1000));
+    } else {
+        rlog("[power] on USB: dim after %lus, light sleep %s",
+             (unsigned long)(SCREEN_DIM_AFTER_MS / 1000),
+             SCREEN_SLEEP_AFTER_MS > 0 ? "enabled" : "off (a tap always wakes)");
+    }
+}
 
 static void note_token(const char *token) {
     g_token_count++;
@@ -107,6 +224,8 @@ static void build_ui() {
     lv_obj_set_style_text_color(title, lv_color_hex(0xE8EAED), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
+
+    build_battery_widget(scr);
 
     g_status_label = lv_label_create(scr);
     lv_label_set_text(g_status_label, "touch a button - tokens log to serial");
@@ -177,25 +296,48 @@ void setup() {
     indev_drv.read_cb = touch_read;
     lv_indev_drv_register(&indev_drv);
 
-    // Bring-up runs USB-powered: pin the screen subsystem to USB idle
-    // timings explicitly. The ported battery timings (2 min dim / 10 min
-    // sleep) stay dormant until the battery stage adds supply detection.
+    // Start on USB timings: battery timings need a plug/unplug step as
+    // evidence (battery.cpp), because a wrongly "on battery" remote would
+    // light-sleep behind the BOOT button.
     screen_set_battery_mode(false);
+    rlog("[power] USB timings until a plug/unplug step shows the supply "
+         "(dim after %lus, light sleep %s)",
+         (unsigned long)(SCREEN_DIM_AFTER_MS / 1000),
+         SCREEN_SLEEP_AFTER_MS > 0 ? "enabled" : "off");
 
     // Stage 2: bring the ESP-NOW link up before the UI so the first tap
     // can already transmit. Init failure is logged and non-fatal — the
     // panel keeps working as a serial-only remote.
     espnow_link_init(rlog);
 
+    // Battery gauge after WiFi is up: the divider ratio was calibrated with
+    // the radio running. On the bench a boot read taken before WiFi started
+    // came out ~5% above every later reading (2026-10-02).
+    battery_init(rlog);
+
     build_ui();
     rlog("[remote] UI built; panel should show the button grid now");
 }
 
 void loop() {
-    static uint32_t last_heartbeat = 0;
+    static uint32_t last_heartbeat  = 0;
+    static uint32_t last_batt_poll  = 0;
+    static bool     was_dimmed      = false;
 
     lv_timer_handler();
-    screen_idle_tick(SCREEN_DIM_AFTER_MS);
+    if (screen_idle_tick(SCREEN_DIM_AFTER_MS)) {
+        // Back from light sleep (battery timings, BOOT pressed). The unit
+        // may have changed channel while we slept: find it again now, so
+        // the first tap is not spent on a stale channel.
+        rlog("[power] woke from light sleep (BOOT)");
+        espnow_link_rescan();
+    }
+    // Backlight on/off is the panel's biggest load step: tell the battery
+    // module before its next poll, so the step is not read as USB.
+    if (screen_is_dimmed() != was_dimmed) {
+        was_dimmed = !was_dimmed;
+        battery_note_load_change(!was_dimmed);  // restored = heavier load
+    }
 
     char rx_frame[ESPNOW_FRAME_MAX + 1];
     while (espnow_link_poll(rx_frame, sizeof(rx_frame))) {
@@ -204,18 +346,34 @@ void loop() {
     }
 
     const uint32_t now = millis();
+    if (now - last_batt_poll >= 1000) {  // battery module assumes ~1 Hz
+        last_batt_poll = now;
+        g_batt = battery_poll();
+        ui_set_battery(g_batt);
+        apply_power_mode(g_batt.supply);
+    }
+
     if (now - last_heartbeat >= 5000) {
         last_heartbeat = now;
         uint32_t tx_sent = 0, tx_acked = 0;
         espnow_link_heartbeat(&tx_sent, &tx_acked);
-        rlog("[remote] alive up=%lus heap=%u psram=%u tokens=%lu espnow=%lu/%lu rt=%lu ch=%u",
+        char batt[24];
+        if (g_batt.percent >= 0) {
+            snprintf(batt, sizeof(batt), "%.3fV/%d%%", (double)g_batt.volts, g_batt.percent);
+        } else {
+            snprintf(batt, sizeof(batt), "--");
+        }
+        rlog("[remote] alive up=%lus heap=%u psram=%u tokens=%lu espnow=%lu/%lu rt=%lu ch=%u "
+             "batt=%s supply=%s%s",
              (unsigned long)(now / 1000),
              (unsigned)esp_get_free_heap_size(),
              (unsigned)ESP.getFreePsram(),
              (unsigned long)g_token_count,
              (unsigned long)tx_acked, (unsigned long)tx_sent,
              (unsigned long)espnow_link_retries(),
-             (unsigned)espnow_link_channel());
+             (unsigned)espnow_link_channel(),
+             batt, battery_supply_str(g_batt.supply),
+             screen_is_battery_mode() ? " (battery timings)" : "");
     }
     delay(5);
 }

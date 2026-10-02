@@ -246,6 +246,10 @@ void espnow_link_heartbeat(uint32_t *sent, uint32_t *acked) {
 
 uint8_t espnow_link_channel() { return g_channel; }
 
+void espnow_link_rescan() {
+    if (g_ready) discover_channel();
+}
+
 uint32_t espnow_link_retries() { return g_retries; }
 
 bool espnow_link_poll(char *out, size_t out_len) {

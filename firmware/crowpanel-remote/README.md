@@ -67,13 +67,40 @@ cd C:\Users\brian\Repos\solar-monitor\firmware\crowpanel-hmi; pio run -t upload 
 (Needs that project's `include/config.h` filled in — see its README — and
 the CH340's current COM number from Device Manager.)
 
-## Power behavior
+## Battery and power
 
-The ported `power`/idle machinery is active and pinned to USB mode
-(`screen_set_battery_mode(false)` in `setup()`): backlight dims after
-10 min, light-sleeps after 30 min, and wakes on the BOOT button (GPIO 0;
-GT911 touch-wake is unreliable across light sleep on this hardware).
-Tapping a dimmed screen only wakes it — the whole wake gesture is swallowed
-until the finger lifts, so no button can fire by accident. The shorter
-battery timings (2 min dim / 10 min sleep) are ported but stay dormant
-until the battery stage adds supply detection.
+The panel keeps its solar-HMI battery setup: a 1S Li-ion cell on the XH
+battery header, charged from USB by the onboard 4054A, and Brian's divider
+`BAT+ → 100 k → IO17 → 100 k → GND` (calibrated ratio 2.485 in
+`platformio.ini`). `battery.cpp`, ported from the solar HMI's
+`hmi_battery.cpp`, reads it at 1 Hz: a 32-sample trimmed mean (reads that
+collide with the radio on ADC2 are dropped), the 1S OCV curve, and a
+rate-limited display. The header shows `98%  4.12 V`, with a bolt while
+charging.
+
+The detected supply picks the sleep policy:
+
+| Supply | Screen dims after | Light sleep |
+|---|---|---|
+| USB, or not known yet | 10 min | never: a tap always wakes the screen |
+| Battery | 2 min | after 10 min idle; press BOOT to wake |
+
+- **Detection.** The charger's CHRG pin isn't wired on this board
+  revision, so the supply is learned from plug/unplug voltage steps
+  (≥ 40 mV between polls, or ≥ 40 mV over 15 s). The backlight switching
+  moves the voltage too, so across a dim or wake only the step direction
+  the load change could not cause is trusted.
+- **Unknown at boot.** The remote runs USB timings until a step shows it's
+  on battery. A remote reset while unplugged therefore stays on USB timings
+  until the next plug/unplug, which costs battery but never strands it
+  behind the BOOT button.
+- **Light sleep** (battery only). Touch can't wake it (the GT911
+  misbehaves across light sleep, see `power.h`), so press BOOT. After
+  waking, touches are ignored until the finger lifts, so a phantom touch
+  can't fire a button, and the remote rescans for the audio unit's channel.
+  Plugging USB into a sleeping remote doesn't wake it; after BOOT it
+  switches to USB timings from the voltage step.
+- **Dim.** Tapping a dimmed screen only wakes it: the whole wake gesture
+  is swallowed until the finger lifts, so no button can fire by accident.
+- **Tuning.** The heartbeat logs `batt=<V>/<pct> supply=<usb|bat|?>`, and
+  every supply change logs the rule and step that caused it.

@@ -43,9 +43,11 @@ void touch_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
 //   screen_idle_tick(timeout_ms) is called from the main loop; if no touch
 //   has happened in `timeout_ms`, it dims the backlight to 0. Next touch
 //   wakes it back to full and the touch is swallowed (no accidental
-//   relay/button trigger).
+//   relay/button trigger). Returns true on the call that comes back from
+//   light sleep (battery mode, BOOT pressed), so the caller can resync.
 void set_backlight(uint8_t pwm_value);
-void screen_idle_tick(uint32_t timeout_ms);
+bool screen_idle_tick(uint32_t timeout_ms);
+bool screen_is_dimmed();
 
 // Default backlight-dim timeout. Override via a -D build flag in
 // platformio.ini (e.g. -DSCREEN_DIM_AFTER_MS=300000) — the #ifndef
@@ -67,9 +69,11 @@ void screen_idle_tick(uint32_t timeout_ms);
 // dim to ESP32 light sleep. While in light sleep the chip draws ~1-2 mA
 // vs ~30 mA in plain dim. Wake requires a press of the BOOT button (GPIO 0)
 // on the back of the panel — touch-wake is unreliable here (see power.h).
-// Set to 0 to disable the escalation entirely and stay in dim-only mode.
+// 0 disables the escalation. On USB it is 0 by default: there is no energy
+// to save, and a remote whose taps stop working until BOOT is pressed looks
+// broken. The solar HMI used 30 min here.
 #ifndef SCREEN_SLEEP_AFTER_MS
-#define SCREEN_SLEEP_AFTER_MS (30UL * 60UL * 1000UL)        // 30 minutes
+#define SCREEN_SLEEP_AFTER_MS 0UL                           // USB: never
 #endif
 
 // Battery-mode equivalent — escalates sooner since battery is precious.
@@ -78,6 +82,7 @@ void screen_idle_tick(uint32_t timeout_ms);
 #endif
 
 // Tell the screen subsystem we're on battery (true) or USB (false). On
-// battery, screen_idle_tick uses the shorter timeout above. Default: USB.
+// battery, screen_idle_tick uses the battery timings above. Default: USB.
+// main.cpp switches it from the battery module's supply detection.
 void screen_set_battery_mode(bool on_battery);
 bool screen_is_battery_mode();

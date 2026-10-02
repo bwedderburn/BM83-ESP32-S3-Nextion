@@ -55,6 +55,11 @@ void espnow_link_heartbeat(uint32_t *sent, uint32_t *acked);
 // Channel the audio unit was found on; 0 while it has not been found.
 uint8_t espnow_link_channel();
 
+// Re-run channel discovery now (blocks ~0.3 s, up to ~2.5 s with the unit
+// absent). Used after the remote wakes from light sleep, so the first tap
+// does not land on a channel the unit has left. No-op before init.
+void espnow_link_rescan();
+
 // Extra send attempts beyond the first, lifetime (link-quality signal).
 uint32_t espnow_link_retries();
 
