@@ -226,3 +226,31 @@ def test_power_off_hold_is_full_1500ms(clock):
     bm.tick_power()
     assert bm._power_state is None
     assert Bm83.MMI_POWER_OFF_RELEASE in uart.writes[1]
+
+
+def test_nextion_boot_sync_then_tick_sends(clock, monkeypatch):
+    """boot_sync() must leave TX pacing on integer ticks (PR #154 review)."""
+    from nextion.display import Nextion
+
+    class UART:
+        def __init__(self):
+            self.written = []
+            self.in_waiting = 0
+
+        def write(self, data):
+            self.written.append(data)
+
+        def read(self, n):
+            return b""
+
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    uart = UART()
+    nx = Nextion(uart)
+    nx.boot_sync()
+    queued = len(nx.tx_queue)
+    assert queued > 0
+    nx.tick()                  # raised TypeError when boot_sync reset to 0.0
+    assert len(uart.written) == 1
+    clock.advance_ms(35)
+    nx.tick()
+    assert len(uart.written) == min(2, queued)

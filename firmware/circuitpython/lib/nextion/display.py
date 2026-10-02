@@ -123,7 +123,7 @@ class Nextion:
         self._tx_head = 0
         self.current_page = None
         self._last_sendme_at = 0.0
-        self._last_tx_at = 0.0
+        self._last_tx_at = None  # ticks_ms() value; None = nothing sent yet
         self.enqueue("bkcmd=3")
         self.enqueue("sendme")
 
