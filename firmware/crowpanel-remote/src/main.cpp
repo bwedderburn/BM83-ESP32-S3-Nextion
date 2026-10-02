@@ -56,8 +56,8 @@ static uint32_t  g_token_count  = 0;
 static void note_token(const char *token) {
     g_token_count++;
     espnow_send_token(token);
-    // The send callback is async, so the status shown here is the last
-    // COMPLETED send — one tap behind, which is fine for a glanceable UI.
+    // Sends are synchronous with bounded retries, so this is THIS token's
+    // delivery status (ok = the unit's radio ACKed one of the attempts).
     rlog("[TOKEN] %s (#%lu) | link %s", token, (unsigned long)g_token_count,
          espnow_link_status_str());
     if (g_status_label) {
@@ -208,12 +208,14 @@ void loop() {
         last_heartbeat = now;
         uint32_t tx_sent = 0, tx_acked = 0;
         espnow_link_heartbeat(&tx_sent, &tx_acked);
-        rlog("[remote] alive up=%lus heap=%u psram=%u tokens=%lu espnow=%lu/%lu",
+        rlog("[remote] alive up=%lus heap=%u psram=%u tokens=%lu espnow=%lu/%lu rt=%lu ch=%u",
              (unsigned long)(now / 1000),
              (unsigned)esp_get_free_heap_size(),
              (unsigned)ESP.getFreePsram(),
              (unsigned long)g_token_count,
-             (unsigned long)tx_acked, (unsigned long)tx_sent);
+             (unsigned long)tx_acked, (unsigned long)tx_sent,
+             (unsigned long)espnow_link_retries(),
+             (unsigned)espnow_link_channel());
     }
     delay(5);
 }

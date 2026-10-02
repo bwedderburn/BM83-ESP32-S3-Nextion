@@ -14,22 +14,31 @@ sends over UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for
 hold-and-repeat, single tokens otherwise — see `../../NEXTION_SETUP.md`).
 
 Every token is logged to serial AND transmitted over ESP-NOW, unicast to
-the audio unit on WiFi channel 1 (unassociated STA mode, power-save off):
+the audio unit (unassociated STA mode, power-save off). The unit's WiFi
+channel isn't fixed, so the remote finds it at boot by probing every
+channel 1–13 three times for a hardware ACK and taking the centre of the
+best-scoring run (neighbouring channels sometimes ACK at bench range):
+`[espnow] audio unit found on chN (acks per ch1-13: ...)`. Each token is
+retried up to 4× until ACKed (same `<seq>`, so the receiver drops repeats);
+two undelivered tokens in a row trigger a rescan (at most every 10 s). The
+heartbeat shows `espnow=<delivered>/<sent> rt=<retries> ch=<channel>`
+(`ch=0` = not found).
 
 - token frame, remote → unit: `BMR1:<seq>:<token>`
 - state frame, unit → remote: `BMS1:<seq>:<key>=<val>` (reserved — Stage 3)
 
-`<seq>` lets the receiver drop MAC-layer duplicates. The status line shows
-the last completed send: `link: ok` / `no-ack` / `off`. **Until the Stage 3
-receiver lands on the audio unit, `no-ack` is the expected state** — it
-proves the TX path runs against a silent peer. The peer MAC in
-`espnow_link.cpp` is the audio unit's base MAC (read 2026-10-01); confirm
-the STA MAC matches during Stage 3 bring-up. The heartbeat line reports
-`espnow=<acked>/<sent>`.
+`<seq>` lets the receiver drop duplicates. The status line shows each
+token's delivery: `link: ok` (the unit's radio ACKed it) / `no-ack` (the
+unit is off, out of range, or running firmware without the receiver, whose
+radio stays off) / `off` (ESP-NOW failed to start here). The peer MAC in
+`espnow_link.cpp` is the audio unit's WiFi STA MAC (`DC:B4:D9:0C:6E:8C`,
+printed by the unit's `[REMOTE] ESP-NOW receiver up: own-sta=...` boot
+line) — not the `MAC:` value in its `boot_out.txt`, which differs.
 
-**Next stage (3):** CircuitPython `espnow` receiver on the audio unit
-feeding the exact Nextion token dispatch in `main.py` (hardware-gated PR
-with host tests), plus state/metadata frames back to the remote.
+**Audio-unit side (Stage 3):** the CircuitPython receiver
+(`firmware/circuitpython/lib/remote`) merges these tokens into the exact
+Nextion dispatch in `main.py`. Next: state/metadata frames back to the
+remote so its screen can show what is playing.
 
 ## Build & flash
 
