@@ -58,7 +58,7 @@ volatile bool g_waiting   = false;
 volatile bool g_wait_ack  = false;
 
 portMUX_TYPE  g_rx_mux       = portMUX_INITIALIZER_UNLOCKED;
-char          g_rx_frame[64] = {0};
+char          g_rx_frame[ESPNOW_FRAME_MAX + 1] = {0};
 volatile bool g_rx_pending   = false;
 
 void on_sent(const uint8_t * /*mac*/, esp_now_send_status_t status) {
@@ -67,12 +67,10 @@ void on_sent(const uint8_t * /*mac*/, esp_now_send_status_t status) {
 }
 
 void on_recv(const uint8_t * /*mac*/, const uint8_t *data, int len) {
-    if (len <= 0) return;
+    if (len <= 0 || len > ESPNOW_FRAME_MAX) return;  // reject, never truncate
     portENTER_CRITICAL(&g_rx_mux);
-    const int cap = (int)sizeof(g_rx_frame) - 1;
-    const int n   = (len < cap) ? len : cap;
-    memcpy(g_rx_frame, data, n);
-    g_rx_frame[n] = '\0';
+    memcpy(g_rx_frame, data, len);
+    g_rx_frame[len] = '\0';
     g_rx_pending  = true;  // one-slot mailbox: newest frame wins
     portEXIT_CRITICAL(&g_rx_mux);
 }
@@ -113,7 +111,10 @@ void discover_channel() {
     }
     if (best == 0) {
         g_channel = 0;
-        esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+        if (esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE) != ESP_OK &&
+            g_log) {
+            g_log("[espnow] could not return to home ch%d", ESPNOW_CHANNEL);
+        }
         if (g_log) g_log("[espnow] audio unit not found on ch1-13 (off or out of range?)");
         return;
     }
@@ -128,9 +129,17 @@ void discover_channel() {
             run_len = 0;
         }
     }
-    g_channel = best_start + (best_len - 1) / 2;
+    const uint8_t chosen = best_start + (best_len - 1) / 2;
+    if (esp_wifi_set_channel(chosen, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
+        // Not actually on the unit's channel: report "not found" rather than
+        // claim a channel we cannot use; the next rescan retries.
+        g_channel = 0;
+        if (g_log) g_log("[espnow] found the unit on ch%u but could not switch to it",
+                         (unsigned)chosen);
+        return;
+    }
+    g_channel = chosen;
     g_fail_streak = 0;
-    esp_wifi_set_channel(g_channel, WIFI_SECOND_CHAN_NONE);
     if (g_log) {
         char map[14];
         for (uint8_t ch = 1; ch <= 13; ch++) map[ch - 1] = (char)('0' + score[ch]);
@@ -148,8 +157,12 @@ bool espnow_link_init(espnow_log_fn logf) {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();  // unassociated STA: radio on, no AP
     // Modem power-save makes an idle unassociated STA miss ESP-NOW frames;
-    // the remote must hear state frames, and it runs on USB.
-    esp_wifi_set_ps(WIFI_PS_NONE);
+    // the remote must hear state frames, and it runs on USB. Not fatal if
+    // refused: token TX does not depend on it, only future state-frame RX,
+    // so log it and keep the link up (PR #151 review).
+    if (esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK && g_log) {
+        g_log("[espnow] power-save-off refused; state-frame RX may be unreliable");
+    }
 
     esp_err_t err = esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
     if (err != ESP_OK) {
@@ -197,10 +210,10 @@ void espnow_send_token(const char *token) {
                          (unsigned)g_fail_streak);
         discover_channel();
     }
-    char frame[64];
+    char frame[ESPNOW_FRAME_MAX + 1];
     const int n = snprintf(frame, sizeof(frame), "BMR1:%lu:%s",
                            (unsigned long)++g_seq, token);
-    if (n <= 0 || n >= (int)sizeof(frame)) return;  // oversized: drop
+    if (n <= 0 || n > ESPNOW_FRAME_MAX) return;  // over the protocol limit: drop
     g_sent++;
     for (uint8_t attempt = 0; attempt < TOKEN_TRIES; attempt++) {
         if (attempt > 0) {

@@ -25,6 +25,11 @@
 
 #define ESPNOW_CHANNEL 1
 
+// Largest frame on the wire (protocol limit above). Local buffers are one
+// byte larger for the NUL terminator; anything longer is rejected, never
+// truncated (PR #151 review).
+#define ESPNOW_FRAME_MAX 64
+
 typedef void (*espnow_log_fn)(const char *fmt, ...);
 
 // Bring WiFi up in unassociated STA mode, register the audio-unit peer and

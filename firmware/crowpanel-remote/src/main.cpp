@@ -197,7 +197,7 @@ void loop() {
     lv_timer_handler();
     screen_idle_tick(SCREEN_DIM_AFTER_MS);
 
-    char rx_frame[64];
+    char rx_frame[ESPNOW_FRAME_MAX + 1];
     while (espnow_link_poll(rx_frame, sizeof(rx_frame))) {
         // Stage 3 will carry audio-unit state/metadata here; log for now.
         rlog("[ESPNOW RX] %s", rx_frame);
