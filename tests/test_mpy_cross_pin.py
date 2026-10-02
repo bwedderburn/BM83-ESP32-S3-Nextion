@@ -19,7 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PIN_FILE = REPO_ROOT / "tools" / "mpy_cross_pin.env"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build-circuitpython-dist.yml"
 
-needs_bash = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+BASH = shutil.which("bash")
+needs_bash = pytest.mark.skipif(BASH is None, reason="bash not available")
 
 
 def _read_pin():
@@ -75,7 +76,7 @@ def _run_build(root, stub, **extra_env):
     env.pop("MPY_CROSS_ALLOW_UNPINNED", None)
     env.update(MPY_CROSS=str(stub), **extra_env)
     return subprocess.run(
-        ["bash", str(root / "build_mpy.sh")], cwd=root, env=env, capture_output=True, text=True
+        [BASH, str(root / "build_mpy.sh")], cwd=root, env=env, capture_output=True, text=True
     )
 
 
