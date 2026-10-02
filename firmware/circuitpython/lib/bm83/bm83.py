@@ -111,6 +111,14 @@ class Bm83:
     EVT_AVC_VENDOR_RSP = const(0x1A)
     EVT_AVRCP_VENDOR_DEP_RSP = const(0x5D)
 
+    # Ceiling on a reassembled GetElementAttributes (0x5D) response. The wire
+    # total_len is 16-bit, so without this a malformed header could make the
+    # fragment buffer grow toward 64 KiB across otherwise-valid frames. We ask
+    # for 7 attributes (8-byte header each) and the panel keeps ~48 chars per
+    # field, so 2 KiB leaves ~280 bytes of value per attribute — far above any
+    # real title/artist/album — while staying under the 4 KiB RX cap.
+    GEA_MAX_LEN = const(2048)
+
     MMI_POWER_ON_PRESS = const(0x51)
     MMI_POWER_ON_RELEASE = const(0x52)
     MMI_POWER_OFF_PRESS = const(0x53)
@@ -1343,6 +1351,16 @@ class Bm83:
             self._gea_expect_len = None
             self._gea_frag_at = 0.0
             dprint("[META] drop empty GEA response")
+            return None
+        if total_len > self.GEA_MAX_LEN:
+            # Reject before buffering anything, and drop any partial
+            # reassembly so the next in-bounds response starts clean. Every
+            # fragment of the oversized response repeats the same header, so
+            # each one is rejected here too.
+            self._gea_frag = bytearray()
+            self._gea_expect_len = None
+            self._gea_frag_at = 0.0
+            print("[META] drop oversize GEA total_len=%d>%d" % (total_len, self.GEA_MAX_LEN))
             return None
         now = time.monotonic()
         # Age out a fragment that was never completed — a dropped final packet
