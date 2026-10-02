@@ -16,30 +16,33 @@
 BM83-ESP32-S3-Nextion/
 ├── firmware/circuitpython/         # CircuitPython firmware for ESP32-S3
 │   ├── main.py                     # Main application entry point
-│   ├── settings.toml               # CircuitPython configuration
-│   ├── bm83/                       # BM83 Bluetooth module interface
-│   │   ├── __init__.py             # Module exports (Bm83, EQ constants)
-│   │   └── bm83.py                 # BM83 UART protocol implementation
-│   ├── nextion/                    # Nextion HMI display interface
-│   │   ├── __init__.py             # Module exports (Nextion, constants)
-│   │   └── display.py              # Nextion UART protocol & UI updates
-│   ├── blehid/                     # BLE HID ConsumerControl (volume/mute)
-│   │   ├── __init__.py             # Empty module marker
-│   │   └── ble.py                  # BLE HID implementation
-│   ├── utils/                      # Shared utility functions
-│   │   ├── __init__.py             # Module exports (sanitize, fmt_ms, etc.)
-│   │   └── common.py               # Text sanitization, time formatting
-│   └── lib/                        # CircuitPython libraries (adafruit_ble, etc.)
+│   └── lib/                        # Project modules (external libraries are deployed separately)
+│       ├── bm83/                   # BM83 Bluetooth module interface
+│       │   ├── __init__.py         # Module exports (Bm83, EQ constants)
+│       │   └── bm83.py             # BM83 UART protocol implementation
+│       ├── nextion/                # Nextion HMI display interface
+│       │   ├── __init__.py         # Module exports (Nextion, constants)
+│       │   └── display.py          # Nextion UART protocol & UI updates
+│       ├── blehid/                 # BLE HID ConsumerControl (volume/mute)
+│       │   ├── __init__.py         # Empty module marker
+│       │   └── ble.py              # BLE HID implementation
+│       └── utils/                  # Shared utility functions
+│           ├── __init__.py         # Module exports (sanitize, fmt_ms, etc.)
+│           ├── common.py           # Text sanitization, time formatting
+│           └── compat.py           # Compatibility helpers
 ├── tests/                          # Unit tests (pytest)
-│   ├── __init__.py
-│   ├── conftest.py                 # Test configuration & fixtures
 │   ├── test_avrcp_metadata.py      # AVRCP metadata parsing tests
-│   ├── test_blehid.py              # BLE HID basic tests
-│   ├── test_blehid_advanced.py     # BLE HID advanced scenarios
-│   ├── test_bm83.py                # BM83 module tests
+│   ├── test_blehid.py              # BLE HID tests
+│   ├── test_bm83.py                # BM83 behavior and state-machine tests
 │   ├── test_bm83_uart.py           # BM83 UART protocol tests
-│   ├── test_modules.py             # Module import/structure tests
+│   ├── test_host_artifact_parity.py # Generated host artifact parity
+│   ├── test_main_structure.py      # Main entrypoint structure
+│   ├── test_main_volume.py         # Volume handling
+│   ├── test_main_volume_cap.py     # Volume-repeat limits
+│   ├── test_modules.py             # Module imports and structure
+│   ├── test_mpy_build.py           # Optional mpy build checks
 │   ├── test_nextion.py             # Nextion display tests
+│   ├── test_parser_stress.py       # Fragmented/noisy parser tests
 │   └── test_utils.py               # Utility function tests
 ├── Documents/                      # Vendor datasheets & reference PDFs
 │   ├── AudioUARTCommandSet_v2.09.pdf
@@ -51,8 +54,8 @@ BM83-ESP32-S3-Nextion/
 │   ├── copilot-instructions.md     # GitHub Copilot instructions
 │   └── workflows/                  # CI/CD workflows
 │       └── python-package.yml      # Lint & test automation
-├── setup.py                        # Python package setup
-├── pyproject.toml                  # Project metadata & dependencies
+├── setup.py                        # Python package metadata
+├── pyproject.toml                  # CircuitPython bundle and Bandit configuration
 ├── pytest.ini                      # pytest configuration
 ├── README.md                       # Project overview & setup instructions
 ├── SECURITY.md                     # Security policy
@@ -72,7 +75,7 @@ BM83-ESP32-S3-Nextion/
 
 **Key Components**:
 - **Hardware Configuration**:
-  - Nextion UART: TX=IO43, RX=IO44, Baud=9600
+  - Nextion UART: TX=IO15, RX=IO16, Baud=9600
   - BM83 UART: TX=IO17, RX=IO18, Baud=115200
   - BLE HID: Optional volume/mute control
 
@@ -280,7 +283,6 @@ All tests use `pytest` and can be run in a standard Python environment (not Circ
 - **`test_avrcp_metadata.py`**: Tests AVRCP metadata extraction and parsing
 - **`test_nextion.py`**: Tests Nextion display class and token parsing
 - **`test_blehid.py`**: Tests BLE HID basic functionality
-- **`test_blehid_advanced.py`**: Tests BLE HID advanced scenarios
 - **`test_utils.py`**: Tests utility functions (`sanitize_text`, `fmt_ms`, etc.)
 
 **Running Tests**:
@@ -306,14 +308,11 @@ pytest --cov=firmware/circuitpython
 
 ## Configuration Files
 
-### `firmware/circuitpython/settings.toml`
-CircuitPython configuration file for environment variables and settings.
+No `settings.toml` is currently tracked in `firmware/circuitpython/`.
 
 ### `pyproject.toml`
-Python project metadata and build configuration:
-- Project name, version, description
-- Dependencies and development dependencies
-- Build system configuration
+Contains the CircuitPython bundle setting and Bandit configuration. Package
+metadata remains in `setup.py`.
 
 ### `setup.py`
 Alternative Python package setup configuration:
@@ -398,7 +397,7 @@ flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statist
    - `adafruit_hid`
 4. Connect hardware:
    - BM83 UART: IO17 (TX), IO18 (RX)
-   - Nextion UART: IO43 (TX), IO44 (RX)
+   - Nextion UART: IO15 (TX), IO16 (RX)
 5. Reset board; `main.py` executes automatically
 
 ---
