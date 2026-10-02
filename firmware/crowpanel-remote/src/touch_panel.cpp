@@ -117,24 +117,26 @@ bool screen_idle_tick(uint32_t timeout_ms) {
     }
 
     // Stage 2 — escalate from dim to ESP32 light sleep after a longer
-    // idle window. Only reachable from the dimmed state. Blocks here
-    // until the BOOT button (GPIO 0) is pressed; touch cannot wake light
-    // sleep on this hardware (power.h). That is why it is battery-only by
-    // default: SCREEN_SLEEP_AFTER_MS (USB) is 0, so on USB the remote stays
-    // in dim and a tap always wakes it.
+    // idle window. Only reachable from the dimmed state. Only BOOT (GPIO 0)
+    // wakes it; touch cannot wake light sleep on this hardware (power.h).
+    // That is why it is battery-only by default: SCREEN_SLEEP_AFTER_MS (USB)
+    // is 0, so on USB the remote stays in dim and a tap always wakes it.
+    // This only reports that sleep is due: the caller refreshes the supply
+    // first (USB may have been plugged in since its last sample) and then
+    // commits with screen_light_sleep() (PR #157 review).
     const uint32_t sleep_after = g_battery_mode ? SCREEN_SLEEP_AFTER_MS_BATTERY
                                                 : SCREEN_SLEEP_AFTER_MS;
-    if (sleep_after > 0 && g_screen_dimmed && since_activity > sleep_after) {
-        enter_light_sleep_until_boot();
-        // On return: BOOT was pressed, backlight is back. Count it as fresh
-        // activity so the dim timer restarts, and swallow touches until the
-        // controller first reports no-touch: the GT911 reports phantom
-        // touches for a few samples after light sleep (power.h), and on a
-        // remote a phantom press could fire E-Bind or Power.
-        g_screen_dimmed      = false;
-        g_last_activity_ms   = millis();
-        g_wake_ignore_active = true;
-        return true;
-    }
-    return false;
+    return sleep_after > 0 && g_screen_dimmed && since_activity > sleep_after;
+}
+
+void screen_light_sleep() {
+    enter_light_sleep_until_boot();
+    // On return: BOOT was pressed, backlight is back. Count it as fresh
+    // activity so the dim timer restarts, and swallow touches until the
+    // controller first reports no-touch: the GT911 reports phantom touches
+    // for a few samples after light sleep (power.h), and on a remote a
+    // phantom press could fire E-Bind or Power.
+    g_screen_dimmed      = false;
+    g_last_activity_ms   = millis();
+    g_wake_ignore_active = true;
 }

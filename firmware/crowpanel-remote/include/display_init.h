@@ -43,10 +43,13 @@ void touch_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
 //   screen_idle_tick(timeout_ms) is called from the main loop; if no touch
 //   has happened in `timeout_ms`, it dims the backlight to 0. Next touch
 //   wakes it back to full and the touch is swallowed (no accidental
-//   relay/button trigger). Returns true on the call that comes back from
-//   light sleep (battery mode, BOOT pressed), so the caller can resync.
+//   relay/button trigger). Returns true once light sleep is due; it does
+//   not sleep by itself. The caller re-checks what could veto it (the
+//   supply) and commits with screen_light_sleep(), which blocks until BOOT
+//   is pressed and returns with the screen on.
 void set_backlight(uint8_t pwm_value);
 bool screen_idle_tick(uint32_t timeout_ms);
+void screen_light_sleep();
 bool screen_is_dimmed();
 
 // Default backlight-dim timeout. Override via a -D build flag in

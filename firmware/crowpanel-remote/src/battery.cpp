@@ -66,7 +66,10 @@ constexpr int   SOC_TOPOFF_PCT_THRESHOLD = 85;
 //         (fall). The solar HMI used 60 mV; unplugging a dimmed, full remote
 //         only moves the light standby load onto the cell, so its step is
 //         smaller.
-//   TREND >= 40 mV over 15 s, for a plug event spread over several polls.
+//   TREND >= 40 mV across a rolling 15 s window (the last 16 polls), for a
+//         plug event spread over several polls. Rolling, not tumbling: a
+//         fixed window could split a rise into two sub-threshold halves
+//         (PR #157 review).
 // The panel's own load changes are the confounder: the backlight alone moves
 // the terminal voltage tens of mV. On a known load change
 // (battery_note_load_change) the next STEP is trusted in one direction only
@@ -82,23 +85,39 @@ constexpr int   SOC_TOPOFF_PCT_THRESHOLD = 85;
 // there is no step to see. It never decides the sleep policy, and a step
 // overrides it, because a full cell under the light dimmed load reads above
 // 4.05 V on battery too.
-constexpr float    STEP_DV_V       = 0.040f;
-constexpr float    TREND_DV_V      = 0.040f;
-constexpr uint32_t TREND_WINDOW_MS = 15000;
-constexpr float    FLOAT_ON_V      = 4.05f;
-constexpr float    FLOAT_OFF_V     = 4.03f;
+constexpr float STEP_DV_V     = 0.040f;
+constexpr float TREND_DV_V    = 0.040f;
+constexpr int   TREND_SAMPLES = 16;     // 1 Hz polls: oldest is ~15 s back
+constexpr float FLOAT_ON_V    = 4.05f;
+constexpr float FLOAT_OFF_V   = 4.03f;
 
 enum class StepIgnore : uint8_t { None, Rise, Fall };
 
-bool       g_initialized    = false;
-float      g_last_v         = -1.0f;   // previous plausible reading (STEP)
-uint32_t   g_last_poll_ms   = 0;       // previous poll (dt for the rate limits)
-float      g_soc_tracked    = -1.0f;   // displayed SOC; < 0 until seeded
-Supply     g_supply         = Supply::Unknown;
-bool       g_at_float       = false;
-StepIgnore g_step_ignore    = StepIgnore::None;  // applies to the next poll
-float      g_trend_start_v  = -1.0f;
-uint32_t   g_trend_start_ms = 0;
+bool       g_initialized  = false;
+float      g_last_v       = -1.0f;   // previous plausible reading (STEP)
+uint32_t   g_last_poll_ms = 0;       // previous poll (dt for the rate limits)
+float      g_soc_tracked  = -1.0f;   // displayed SOC; < 0 until seeded
+Supply     g_supply       = Supply::Unknown;
+bool       g_at_float     = false;
+StepIgnore g_step_ignore  = StepIgnore::None;  // applies to the next poll
+float      g_trend[TREND_SAMPLES];             // rolling window of readings
+int        g_trend_count  = 0;
+int        g_trend_head   = 0;                 // next slot = oldest once full
+
+void trend_reset() {
+    g_trend_count = 0;
+    g_trend_head  = 0;
+}
+
+// Add a reading; once the window is full, return the change across it
+// (newest minus the reading 15 polls back). 0 while it is still filling.
+float trend_push(float v) {
+    g_trend[g_trend_head] = v;
+    g_trend_head = (g_trend_head + 1) % TREND_SAMPLES;
+    if (g_trend_count < TREND_SAMPLES) g_trend_count++;
+    if (g_trend_count < TREND_SAMPLES) return 0.0f;
+    return v - g_trend[g_trend_head];  // head is now the oldest kept reading
+}
 
 float read_battery_volts() {
 #if BATTERY_ADC_PIN > 0
@@ -186,8 +205,8 @@ void battery_init(battery_log_fn logf) {
 }
 
 void battery_note_load_change(bool load_increased) {
-    g_step_ignore   = load_increased ? StepIgnore::Fall : StepIgnore::Rise;
-    g_trend_start_v = -1.0f;  // restart the trend window after the step
+    // Read by the next poll, which also restarts the trend window.
+    g_step_ignore = load_increased ? StepIgnore::Fall : StepIgnore::Rise;
 }
 
 BatteryState battery_poll() {
@@ -204,36 +223,33 @@ BatteryState battery_poll() {
     if (v < PLAUSIBLE_MIN_V || v > PLAUSIBLE_MAX_V) {
         // No usable reading: keep the supply, restart the detectors so the
         // next good reading is not compared against a stale one.
-        s.volts         = v;
-        g_last_v        = -1.0f;
-        g_trend_start_v = -1.0f;
-        g_at_float      = false;
+        s.volts    = v;
+        g_last_v   = -1.0f;
+        g_at_float = false;
+        trend_reset();
         return s;
     }
     s.volts = v;
 
     // --- Supply evidence ---
+    bool stepped = false;
     if (g_last_v > 0.0f) {
         const float step = v - g_last_v;
         if (step >= STEP_DV_V && ignore != StepIgnore::Rise) {
             set_supply(Supply::Usb, "step", step);
-            g_trend_start_v = -1.0f;
+            stepped = true;
         } else if (step <= -STEP_DV_V && ignore != StepIgnore::Fall) {
             set_supply(Supply::Battery, "step", step);
-            g_trend_start_v = -1.0f;
+            stepped = true;
         }
     }
     g_last_v = v;
-    if (g_trend_start_v < 0.0f) {
-        g_trend_start_v  = v;
-        g_trend_start_ms = now;
-    } else if (now - g_trend_start_ms >= TREND_WINDOW_MS) {
-        const float dv = v - g_trend_start_v;
-        if (dv >= TREND_DV_V)       set_supply(Supply::Usb, "trend", dv);
-        else if (dv <= -TREND_DV_V) set_supply(Supply::Battery, "trend", dv);
-        g_trend_start_v  = v;
-        g_trend_start_ms = now;
-    }
+    // A step, the supply's or the panel's own load, restarts the trend
+    // window at the new level.
+    if (stepped || ignore != StepIgnore::None) trend_reset();
+    const float dv = trend_push(v);
+    if (dv >= TREND_DV_V)       set_supply(Supply::Usb, "trend", dv);
+    else if (dv <= -TREND_DV_V) set_supply(Supply::Battery, "trend", dv);
     if (v >= FLOAT_ON_V)      g_at_float = true;
     else if (v < FLOAT_OFF_V) g_at_float = false;
 

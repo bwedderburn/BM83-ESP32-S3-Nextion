@@ -51,8 +51,8 @@ BatteryState battery_poll();
 
 // The panel's own load just changed: true = heavier (backlight restored,
 // woke from light sleep), false = lighter (backlight dimmed). Call it before
-// the next battery_poll(). The next step is then trusted only in the
-// direction the load change could not have caused.
+// the next battery_poll(). That poll trusts a step only in the direction
+// the load change could not have caused, and restarts the trend window.
 void battery_note_load_change(bool load_increased);
 
 // "usb" / "bat" / "?" for logs.

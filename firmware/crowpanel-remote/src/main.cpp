@@ -319,24 +319,46 @@ void setup() {
     rlog("[remote] UI built; panel should show the button grid now");
 }
 
-void loop() {
-    static uint32_t last_heartbeat  = 0;
-    static uint32_t last_batt_poll  = 0;
-    static bool     was_dimmed      = false;
+// Backlight on/off is the panel's biggest load step: report every change to
+// the battery module before its next sample, so the step is not read as a
+// plug or unplug.
+static void report_backlight_change() {
+    static bool was_dimmed = false;
+    if (screen_is_dimmed() == was_dimmed) return;
+    was_dimmed = !was_dimmed;
+    battery_note_load_change(!was_dimmed);  // restored = heavier load
+}
 
-    lv_timer_handler();
-    if (screen_idle_tick(SCREEN_DIM_AFTER_MS)) {
-        // Back from light sleep (battery timings, BOOT pressed). The unit
-        // may have changed channel while we slept: find it again now, so
-        // the first tap is not spent on a stale channel.
-        rlog("[power] woke from light sleep (BOOT)");
-        espnow_link_rescan();
-    }
-    // Backlight on/off is the panel's biggest load step: tell the battery
-    // module before its next poll, so the step is not read as USB.
-    if (screen_is_dimmed() != was_dimmed) {
-        was_dimmed = !was_dimmed;
-        battery_note_load_change(!was_dimmed);  // restored = heavier load
+static uint32_t g_last_batt_poll = 0;
+
+static void poll_battery() {  // the battery module assumes ~1 Hz
+    g_last_batt_poll = millis();
+    g_batt = battery_poll();
+    ui_set_battery(g_batt);
+    apply_power_mode(g_batt.supply);
+}
+
+void loop() {
+    static uint32_t last_heartbeat = 0;
+
+    lv_timer_handler();  // a tap may wake the dimmed screen here
+    report_backlight_change();
+    const bool sleep_due = screen_idle_tick(SCREEN_DIM_AFTER_MS);  // may dim
+    report_backlight_change();
+    if (sleep_due) {
+        // Battery timings say light sleep. USB may have been plugged in
+        // since the last 1 Hz sample, and a USB-powered remote must never
+        // end up asleep behind BOOT: sample again and re-apply the supply
+        // before committing (PR #157 review).
+        poll_battery();
+        if (screen_is_battery_mode()) {
+            screen_light_sleep();       // blocks until BOOT is pressed
+            report_backlight_change();  // the backlight is back on
+            rlog("[power] woke from light sleep (BOOT)");
+            // The unit may have changed channel while we slept: find it
+            // again now, so the first tap is not spent on a stale channel.
+            espnow_link_rescan();
+        }
     }
 
     char rx_frame[ESPNOW_FRAME_MAX + 1];
@@ -346,12 +368,7 @@ void loop() {
     }
 
     const uint32_t now = millis();
-    if (now - last_batt_poll >= 1000) {  // battery module assumes ~1 Hz
-        last_batt_poll = now;
-        g_batt = battery_poll();
-        ui_set_battery(g_batt);
-        apply_power_mode(g_batt.supply);
-    }
+    if (now - g_last_batt_poll >= 1000) poll_battery();
 
     if (now - last_heartbeat >= 5000) {
         last_heartbeat = now;
