@@ -4,7 +4,8 @@
 // for the BM83-ESP32-S3-Nextion audio unit. This build proves panel, touch,
 // and the button/token semantics only:
 //
-//   - splash + six stub buttons (Prev / Play-Pause / Next / Vol- / Vol+ / EQ)
+//   - splash + nine stub buttons (Prev / Play-Pause / Next / Vol- / Vol+ /
+//     EQ / Power / Pair / E-Bind)
 //   - buttons emit the SAME token vocabulary the Nextion sends over UART
 //     (see NEXTION_SETUP.md): volume uses press/release pairs (BT_VOLUP_P /
 //     BT_VOLUP_R, ...) for hold-and-repeat; the rest are single tokens
@@ -103,10 +104,10 @@ static void build_ui() {
     lv_obj_set_style_text_color(g_status_label, lv_color_hex(0x9AA0A6), 0);
     lv_obj_align(g_status_label, LV_ALIGN_TOP_MID, 0, 58);
 
-    // 2 rows x 3 columns on the 800x480 panel.
-    const int W = 236, H = 150;
+    // 3 rows x 3 columns on the 800x480 panel.
+    const int W = 236, H = 112;
     const int X0 = 20, X1 = 282, X2 = 544;
-    const int Y0 = 110, Y1 = 292;
+    const int Y0 = 100, Y1 = 222, Y2 = 344;
 
     lv_obj_add_event_cb(make_button(LV_SYMBOL_PREV "  Prev", X0, Y0, W, H),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_PREV");
@@ -127,6 +128,17 @@ static void build_ui() {
 
     lv_obj_add_event_cb(make_button(LV_SYMBOL_SETTINGS "  EQ", X2, Y1, W, H),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_EQ");
+
+    // Row 3 — power/pairing controls. Single-click tokens, exactly as the
+    // Nextion sends them; main.py owns the behavior (MMI hold timing for
+    // BT_POWER, pairing mode for BT_PAIR) and already debounces repeated
+    // BT_EBIND bond-wipe presses firmware-side.
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_POWER "  Power", X0, Y2, W, H),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_POWER");
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_BLUETOOTH "  Pair", X1, Y2, W, H),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_PAIR");
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_TRASH "  E-Bind", X2, Y2, W, H),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_EBIND");
 }
 
 // ----- Arduino entry points ---------------------------------------------------

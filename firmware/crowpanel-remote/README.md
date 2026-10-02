@@ -8,8 +8,9 @@ solar firmware stays recoverable from that repo at any time.
 
 ## Current stage: bring-up
 
-This build renders a six-button remote layout (Prev / Play-Pause / Next /
-Vol- / Vol+ / EQ) and logs the **same token vocabulary the Nextion emits
+This build renders a nine-button remote layout (Prev / Play-Pause / Next /
+Vol- / Vol+ / EQ / Power / Pair / E-Bind) and logs the **same token
+vocabulary the Nextion emits
 over UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for
 hold-and-repeat, single tokens otherwise — see `../../NEXTION_SETUP.md`).
 Tokens go to serial only. A heartbeat line prints every 5 s.
