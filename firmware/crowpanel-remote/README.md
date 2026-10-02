@@ -1,4 +1,4 @@
-# crowpanel-remote — BM83 wireless remote (bring-up stage)
+# crowpanel-remote — BM83 wireless remote
 
 The solar-monitor wall HMI (Elecrow CrowPanel 7.0", ESP32-S3-WROOM-1-N4R8,
 800x480 RGB, GT911 touch) repurposed as a wireless remote for the BM83 audio
@@ -6,18 +6,30 @@ unit. Display/touch/power bring-up is copied verbatim from
 `solar-monitor/firmware/crowpanel-hmi` — same physical panel; the previous
 solar firmware stays recoverable from that repo at any time.
 
-## Current stage: bring-up
+## Current stage: Stage 2 — ESP-NOW sender
 
-This build renders a nine-button remote layout (Prev / Play-Pause / Next /
-Vol- / Vol+ / EQ / Power / Pair / E-Bind) and logs the **same token
-vocabulary the Nextion emits
-over UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for
+Nine-button remote layout (Prev / Play-Pause / Next / Vol- / Vol+ / EQ /
+Power / Pair / E-Bind) emitting the **same token vocabulary the Nextion
+sends over UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for
 hold-and-repeat, single tokens otherwise — see `../../NEXTION_SETUP.md`).
-Tokens go to serial only. A heartbeat line prints every 5 s.
 
-**Next stage:** carry those tokens over ESP-NOW to the audio unit
-(CircuitPython has native `espnow`), plus metadata/state pushed back to the
-remote. The audio-unit side lands as its own hardware-gated PR.
+Every token is logged to serial AND transmitted over ESP-NOW, unicast to
+the audio unit on WiFi channel 1 (unassociated STA mode, power-save off):
+
+- token frame, remote → unit: `BMR1:<seq>:<token>`
+- state frame, unit → remote: `BMS1:<seq>:<key>=<val>` (reserved — Stage 3)
+
+`<seq>` lets the receiver drop MAC-layer duplicates. The status line shows
+the last completed send: `link: ok` / `no-ack` / `off`. **Until the Stage 3
+receiver lands on the audio unit, `no-ack` is the expected state** — it
+proves the TX path runs against a silent peer. The peer MAC in
+`espnow_link.cpp` is the audio unit's base MAC (read 2026-10-01); confirm
+the STA MAC matches during Stage 3 bring-up. The heartbeat line reports
+`espnow=<acked>/<sent>`.
+
+**Next stage (3):** CircuitPython `espnow` receiver on the audio unit
+feeding the exact Nextion token dispatch in `main.py` (hardware-gated PR
+with host tests), plus state/metadata frames back to the remote.
 
 ## Build & flash
 

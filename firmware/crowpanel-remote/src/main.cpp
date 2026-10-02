@@ -1,26 +1,29 @@
-// BM83 wireless remote — CrowPanel ESP32 7" — BRING-UP build.
+// BM83 wireless remote — CrowPanel ESP32 7" — Stage 2: ESP-NOW sender.
 //
-// Stage 1 of repurposing the solar-monitor wall HMI as a remote controller
-// for the BM83-ESP32-S3-Nextion audio unit. This build proves panel, touch,
-// and the button/token semantics only:
+// Repurposes the solar-monitor wall HMI as a remote controller for the
+// BM83-ESP32-S3-Nextion audio unit:
 //
-//   - splash + nine stub buttons (Prev / Play-Pause / Next / Vol- / Vol+ /
+//   - splash + nine buttons (Prev / Play-Pause / Next / Vol- / Vol+ /
 //     EQ / Power / Pair / E-Bind)
 //   - buttons emit the SAME token vocabulary the Nextion sends over UART
 //     (see NEXTION_SETUP.md): volume uses press/release pairs (BT_VOLUP_P /
 //     BT_VOLUP_R, ...) for hold-and-repeat; the rest are single tokens
-//   - tokens are LOGGED to serial for now; the ESP-NOW link to the audio
-//     unit is the next stage and will carry exactly these strings
+//   - every token is logged to serial AND transmitted over ESP-NOW to the
+//     audio unit as "BMR1:<seq>:<token>" (see espnow_link.h). The audio-unit
+//     receiver is Stage 3 — until it lands, sends report no-ack, which is
+//     the expected bench state and proves the TX path runs.
 //   - heartbeat line every 5 s so a silent panel is never ambiguous
 //
 // Display/touch/power bring-up comes verbatim from the solar HMI firmware
-// (same physical hardware). No WiFi, no ESP-NOW, no SD in this build.
+// (same physical hardware). WiFi runs in unassociated STA mode for ESP-NOW
+// only — no AP association, no SD in this build.
 
 #include <Arduino.h>
 #include <lvgl.h>
 #include <stdarg.h>
 
 #include "display_init.h"
+#include "espnow_link.h"
 
 // ----- logging ---------------------------------------------------------------
 // ARDUINO_USB_CDC_ON_BOOT=1 makes `Serial` the native USB CDC and `Serial0`
@@ -52,10 +55,16 @@ static uint32_t  g_token_count  = 0;
 
 static void note_token(const char *token) {
     g_token_count++;
-    rlog("[TOKEN] %s (#%lu)", token, (unsigned long)g_token_count);
+    espnow_send_token(token);
+    // The send callback is async, so the status shown here is the last
+    // COMPLETED send — one tap behind, which is fine for a glanceable UI.
+    rlog("[TOKEN] %s (#%lu) | link %s", token, (unsigned long)g_token_count,
+         espnow_link_status_str());
     if (g_status_label) {
-        lv_label_set_text_fmt(g_status_label, "last token: %s   (%lu sent)",
-                              token, (unsigned long)g_token_count);
+        lv_label_set_text_fmt(g_status_label,
+                              "last token: %s   (%lu sent)   link: %s",
+                              token, (unsigned long)g_token_count,
+                              espnow_link_status_str());
     }
 }
 
@@ -173,6 +182,11 @@ void setup() {
     // sleep) stay dormant until the battery stage adds supply detection.
     screen_set_battery_mode(false);
 
+    // Stage 2: bring the ESP-NOW link up before the UI so the first tap
+    // can already transmit. Init failure is logged and non-fatal — the
+    // panel keeps working as a serial-only remote.
+    espnow_link_init(rlog);
+
     build_ui();
     rlog("[remote] UI built; panel should show the button grid now");
 }
@@ -183,14 +197,23 @@ void loop() {
     lv_timer_handler();
     screen_idle_tick(SCREEN_DIM_AFTER_MS);
 
+    char rx_frame[64];
+    while (espnow_link_poll(rx_frame, sizeof(rx_frame))) {
+        // Stage 3 will carry audio-unit state/metadata here; log for now.
+        rlog("[ESPNOW RX] %s", rx_frame);
+    }
+
     const uint32_t now = millis();
     if (now - last_heartbeat >= 5000) {
         last_heartbeat = now;
-        rlog("[remote] alive up=%lus heap=%u psram=%u tokens=%lu",
+        uint32_t tx_sent = 0, tx_acked = 0;
+        espnow_link_heartbeat(&tx_sent, &tx_acked);
+        rlog("[remote] alive up=%lus heap=%u psram=%u tokens=%lu espnow=%lu/%lu",
              (unsigned long)(now / 1000),
              (unsigned)esp_get_free_heap_size(),
              (unsigned)ESP.getFreePsram(),
-             (unsigned long)g_token_count);
+             (unsigned long)g_token_count,
+             (unsigned long)tx_acked, (unsigned long)tx_sent);
     }
     delay(5);
 }
