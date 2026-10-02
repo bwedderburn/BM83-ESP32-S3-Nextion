@@ -76,21 +76,22 @@ The repository includes a `build_mpy.sh` script to compile Python modules into b
 
 #### Prerequisites
 
-You need `mpy-cross` installed:
+The build uses CircuitPython's `mpy-cross`, pinned to an exact version and sha256 in
+[`tools/mpy_cross_pin.env`](tools/mpy_cross_pin.env) so dist builds are reproducible.
+`build_mpy.sh` refuses any other version (set `MPY_CROSS_ALLOW_UNPINNED=1` to experiment).
 
 ```bash
-# Install via pip
-pip install mpy-cross
-
-# Or download from CircuitPython releases
-# https://github.com/adafruit/circuitpython/releases
+# Download + verify the pinned compiler (linux-amd64 / WSL) into tools/mpy-cross/
+./scripts/fetch_mpy_cross.sh
 ```
+
+Do not use `pip install mpy-cross` — that is MicroPython's compiler, not CircuitPython's.
 
 #### Building with bash (Linux/macOS/Git Bash)
 
 ```bash
-# Run the build script
-./build_mpy.sh
+# Run the build script with the pinned compiler
+MPY_CROSS=tools/mpy-cross/mpy-cross ./build_mpy.sh
 
 # Output will be in dist/circuitpython/
 # ├── main.py           (kept as .py - entry point must not be compiled)
@@ -116,11 +117,11 @@ pip install mpy-cross
 # Open WSL terminal (Ubuntu, Debian, etc.)
 cd /mnt/c/path/to/BM83-ESP32-S3-Nextion
 
-# Install mpy-cross if not already installed
-pip install mpy-cross
+# Fetch the pinned mpy-cross if not already present
+./scripts/fetch_mpy_cross.sh
 
 # Run the build script
-./build_mpy.sh
+MPY_CROSS=tools/mpy-cross/mpy-cross ./build_mpy.sh
 
 # The output in dist/circuitpython/ can be copied to your CIRCUITPY drive
 # from Windows Explorer at the WSL path shown after build completes
@@ -139,7 +140,7 @@ pip install mpy-cross
 
 **Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All modules under `firmware/circuitpython/lib/` are compiled to `.mpy` and placed in `dist/circuitpython/lib/`.
 
-**Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. If you encounter `ValueError: incompatible .mpy file` errors, reinstall `mpy-cross` matching your CircuitPython version.
+**Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. The pin in `tools/mpy_cross_pin.env` records which version that is; when the device's CircuitPython is upgraded, bump the pin in the same change. If you encounter `ValueError: incompatible .mpy file` errors, check the device version against the pin.
 
 **Quick rollback (.mpy → .py)**:
 1. Delete deployed project folders/files from `CIRCUITPY` (`lib/bm83`, `lib/nextion`, `lib/blehid`, `lib/utils`, and project `main.py` if needed).
