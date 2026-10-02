@@ -289,6 +289,26 @@ def test_duplicate_delivery_is_dropped():
     assert remote.poll() == [b"BT_PLAY"]
 
 
+def test_late_retry_after_a_newer_frame_is_dropped():
+    # Copilot (PR #155): with only the LAST seq remembered, a retry of
+    # 1:BT_VOLUP_P arriving after 2:BT_VOLUP_R was accepted again and
+    # restarted the volume hold after the release.
+    remote, radio, clock, _logs = make_remote()
+    radio.queue.append(FakePacket(REMOTE_MAC_B, frame(1, b"BT_VOLUP_P")))
+    radio.queue.append(FakePacket(REMOTE_MAC_B, frame(2, b"BT_VOLUP_R")))
+    radio.queue.append(FakePacket(REMOTE_MAC_B, frame(1, b"BT_VOLUP_P")))
+    assert remote.poll() == [b"BT_VOLUP_P", b"BT_VOLUP_R"]
+    assert remote.rx_dup == 1
+
+
+def test_seq_history_is_bounded():
+    remote, radio, clock, _logs = make_remote()
+    for seq in range(1, espnow_rx.MAX_RECENT_SEQS + 6):
+        radio.queue.append(FakePacket(REMOTE_MAC_B, frame(seq, b"BT_NEXT")))
+        remote.poll()
+    assert len(remote._recent_seqs) == espnow_rx.MAX_RECENT_SEQS
+
+
 def test_same_seq_after_window_is_a_new_press():
     # The remote rebooted and restarted its counter: not a duplicate.
     remote, radio, clock, _logs = make_remote()

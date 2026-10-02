@@ -40,9 +40,13 @@ PROBE_FRAME = b"BMP1"
 MAX_FRAME_LEN = 64
 MAX_SEQ = 0xFFFFFFFF
 # A radio-level duplicate lands milliseconds after the original; a remote
-# reboot (seq restarts at 1) takes seconds. Only an identical seq inside
-# this window counts as a duplicate.
+# reboot (seq restarts at 1) takes seconds. A seq already accepted inside
+# this window counts as a duplicate - ANY recent seq, not just the last one,
+# so a late retry of 1:BT_VOLUP_P landing after 2:BT_VOLUP_R cannot restart
+# the volume hold (PR #155 review).
 DUP_WINDOW_S = 2.0
+# Bound on remembered seqs; human-rate taps never approach it in 2 s.
+MAX_RECENT_SEQS = 16
 # After a radio error, stop polling for this long, then try again.
 ERROR_BACKOFF_S = 5.0
 # Counter summary at most this often, and only when something changed.
@@ -162,8 +166,7 @@ class EspNowRemote:
         self.rx_bad = 0
         self.rx_err = 0
         self.rx_probe = 0
-        self._last_seq = None
-        self._last_seq_at = 0.0
+        self._recent_seqs = []  # [(seq, accepted_at)], newest last
         self._paused_until = 0.0
         self._foreign_seen = []
         self._stats_at = 0.0
@@ -268,17 +271,27 @@ class EspNowRemote:
             self.rx_bad += 1
             return None
         seq, token = parsed
-        if seq == self._last_seq and (now - self._last_seq_at) < DUP_WINDOW_S:
+        if self._seen_recently(seq, now):
             self.rx_dup += 1
             return None
-        self._last_seq = seq
-        self._last_seq_at = now
+        self._recent_seqs.append((seq, now))
+        if len(self._recent_seqs) > MAX_RECENT_SEQS:
+            self._recent_seqs.pop(0)
         self.rx_ok += 1
         if rssi is None:
             self._log("[REMOTE] %s seq=%d" % (token.decode(), seq))
         else:
             self._log("[REMOTE] %s seq=%d rssi=%d" % (token.decode(), seq, rssi))
         return token
+
+    def _seen_recently(self, seq, now):
+        # Expire entries older than the window first, so a remote reboot
+        # (seq restarting at 1 seconds later) is accepted as a new press.
+        self._recent_seqs = [e for e in self._recent_seqs if now - e[1] < DUP_WINDOW_S]
+        for s, _t in self._recent_seqs:
+            if s == seq:
+                return True
+        return False
 
     def _note_foreign(self, mac):
         mac = bytes(mac)
