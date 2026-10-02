@@ -26,7 +26,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+try:  # mcp 1.x
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError:  # mcp 2.x renamed FastMCP to MCPServer
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
 mcp = FastMCP("repo_health_mcp")
 
