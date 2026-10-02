@@ -12,6 +12,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PIN_FILE="${ROOT_DIR}/tools/mpy_cross_pin.env"
 OUT="${1:-${ROOT_DIR}/tools/mpy-cross/mpy-cross}"
+# Absolute, so the final "${OUT}" --version runs this file, not a PATH lookup.
+[[ "${OUT}" == /* ]] || OUT="${PWD}/${OUT}"
 S3_BASE="https://adafruit-circuit-python.s3.amazonaws.com"
 
 # shellcheck source=../tools/mpy_cross_pin.env
