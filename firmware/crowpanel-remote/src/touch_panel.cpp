@@ -26,23 +26,19 @@ constexpr int   MAP_Y2  = 0;
 constexpr int   PANEL_W = 800;
 constexpr int   PANEL_H = 480;
 
-// After a wake-from-dim touch, swallow further touches for this many ms so
-// the user's "tap to wake" doesn't also activate a button under the finger.
-constexpr uint32_t WAKE_DEBOUNCE_MS = 300;
-
 TAMC_GT911 g_ts(PIN_SDA, PIN_SCL, PIN_INT, PIN_RST,
                 max(MAP_X1, MAP_X2),
                 max(MAP_Y1, MAP_Y2));
 
 uint32_t g_last_activity_ms     = 0;
 bool     g_screen_dimmed        = false;
-// Wake-debounce window: armed-flag + start-time, NOT an absolute deadline.
-// The F4 fix compared a deadline with the signed idiom, which re-arms once
-// the deadline is >2^31 ms stale — with dimming disabled that latched touch
-// OFF for uptime 24.8→49.7 d (review 2026-07-25 M8). An armed flag plus
-// elapsed-since compare is wrap-safe AND can't go stale.
+// Wake-gesture suppression: a plain armed flag, no time compare at all.
+// Armed by the touch that wakes a dimmed screen, cleared on the first
+// no-touch report, so the ENTIRE wake gesture is swallowed however long
+// the finger stays down. History: a deadline + signed-compare version
+// re-armed when stale (review 2026-07-25 M8), and a 300 ms window leaked
+// the tail of a held wake-touch to LVGL as a fresh press (PR #150 review).
 bool     g_wake_ignore_active   = false;
-uint32_t g_wake_ignore_since_ms = 0;
 bool     g_battery_mode         = false;
 
 }  // namespace
@@ -62,6 +58,10 @@ void touch_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
     const uint32_t now = millis();
 
     if (!g_ts.isTouched) {
+        // First no-touch report ends any wake gesture: the finger that
+        // woke the screen has lifted, so stop suppressing from the next
+        // contact onward.
+        g_wake_ignore_active = false;
         data->state = LV_INDEV_STATE_REL;
         return;
     }
@@ -71,25 +71,22 @@ void touch_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
     g_last_activity_ms = now;
 
     if (g_screen_dimmed) {
-        // Wake the screen and start the debounce window. Don't let this
+        // Wake the screen and arm the gesture suppression. Don't let this
         // touch propagate — otherwise tapping the dark panel to wake it
         // would also fire the button under the user's finger.
         set_backlight(255);
         g_screen_dimmed = false;
-        g_wake_ignore_active   = true;
-        g_wake_ignore_since_ms = now;
+        g_wake_ignore_active = true;
         data->state = LV_INDEV_STATE_REL;
         return;
     }
 
     if (g_wake_ignore_active) {
-        if (now - g_wake_ignore_since_ms < WAKE_DEBOUNCE_MS) {
-            // Still inside the wake-debounce window; user is probably
-            // still lifting their finger from the wake-tap. Suppress.
-            data->state = LV_INDEV_STATE_REL;
-            return;
-        }
-        g_wake_ignore_active = false;
+        // The contact that woke the screen is still down. Suppress until
+        // the controller first reports no touch — clearing on a timer here
+        // handed the tail of a held wake-touch to LVGL as a fresh press.
+        data->state = LV_INDEV_STATE_REL;
+        return;
     }
 
     data->state = LV_INDEV_STATE_PR;
@@ -123,7 +120,7 @@ void screen_idle_tick(uint32_t timeout_ms) {
     // until the BOOT button (GPIO 0) is pressed; on return the screen
     // is back on and we reset idle tracking so the dim timer starts
     // fresh. Touch-wake is bypassed (the GT911 misbehaves across light
-    // sleep on this hardware), so the wake-debounce window isn't armed.
+    // sleep on this hardware), so the wake-gesture suppression isn't armed.
 #if SCREEN_SLEEP_AFTER_MS > 0
     const uint32_t sleep_after = g_battery_mode ? SCREEN_SLEEP_AFTER_MS_BATTERY
                                                 : SCREEN_SLEEP_AFTER_MS;

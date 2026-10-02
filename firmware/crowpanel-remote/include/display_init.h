@@ -47,8 +47,10 @@ void touch_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data);
 void set_backlight(uint8_t pwm_value);
 void screen_idle_tick(uint32_t timeout_ms);
 
-// Default backlight-dim timeout. Users can override in include/config.h.
-// Wrapped in #ifndef so an explicit per-install value wins.
+// Default backlight-dim timeout. Override via a -D build flag in
+// platformio.ini (e.g. -DSCREEN_DIM_AFTER_MS=300000) — the #ifndef
+// wrappers let an explicit build-flag value win. (The include/config.h
+// mechanism belongs to the solar repo; this project has no such file.)
 #ifndef SCREEN_DIM_AFTER_MS
 #define SCREEN_DIM_AFTER_MS (10UL * 60UL * 1000UL)   // 10 minutes (USB powered)
 #endif

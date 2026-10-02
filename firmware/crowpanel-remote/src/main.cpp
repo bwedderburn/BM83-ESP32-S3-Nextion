@@ -168,6 +168,11 @@ void setup() {
     indev_drv.read_cb = touch_read;
     lv_indev_drv_register(&indev_drv);
 
+    // Bring-up runs USB-powered: pin the screen subsystem to USB idle
+    // timings explicitly. The ported battery timings (2 min dim / 10 min
+    // sleep) stay dormant until the battery stage adds supply detection.
+    screen_set_battery_mode(false);
+
     build_ui();
     rlog("[remote] UI built; panel should show the button grid now");
 }
