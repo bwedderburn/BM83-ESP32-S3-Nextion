@@ -208,9 +208,48 @@ volume hold caps. `test_parser_stress.py` currently has two tests. Prioritize:
 4. An end-to-end AUX reconnect sequence test only if it can preserve the current
    hardware-derived `source_ever_seen` guard.
 
-Do not edit CI in this audit; it is explicitly read-only. Follow-up proposal: dedupe
-flake8 from the Python matrix, add pip caching, update supported Python versions, and
-add concurrency controls where helpful.
+Do not edit CI in this audit; it is explicitly read-only. The following ready-to-apply
+proposal deduplicates flake8 from the Python matrix, adds pip caching, updates supported
+Python versions, and cancels superseded runs. It is a proposal only; no workflow file
+was changed:
+
+```diff
+diff --git a/.github/workflows/python-package.yml b/.github/workflows/python-package.yml
+--- a/.github/workflows/python-package.yml
++++ b/.github/workflows/python-package.yml
+@@ -10,5 +10,8 @@
+     branches: [ "main" ]
+   pull_request:
+     branches: [ "main" ]
+-
++concurrency:
++  group: ${{ github.workflow }}-${{ github.ref }}
++  cancel-in-progress: true
++
+ jobs:
+@@ -18,6 +21,5 @@
+     strategy:
+       fail-fast: false
+       matrix:
+-        python-version: ["3.9", "3.10", "3.11"]
++        python-version: ["3.11", "3.12", "3.13"]
+-
+     steps:
+@@ -26,5 +28,7 @@
+         uses: actions/setup-python@v7
+         with:
+           python-version: ${{ matrix.python-version }}
++          cache: pip
++          cache-dependency-path: pyproject.toml
+       - name: Install dependencies
+         run: |
+@@ -33,4 +37,5 @@
+           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+           pip install -e .
+       - name: Lint with flake8
++        if: matrix.python-version == '3.11'
+         run: |
+```
 
 ## Phase 6 — Documentation drift
 
@@ -228,7 +267,7 @@ behavioral contracts already exist and should be reproduced without reinterpreta
 
 ### Phase A — safe now
 
-- **Implemented (D-01):** corrected source layout, test inventory, current
+- **Implemented (R-06):** corrected source layout, test inventory, current
   configuration description, deployed module paths, and Nextion pin references in
   `CODE_REFERENCE.md`, `README.md`, and `DEPLOYMENT.md`.
 - No firmware files, generated artifacts, dependency versions, or workflows changed.
@@ -260,7 +299,8 @@ Open issues were checked before drafting these themes; the visible open list con
 this audit issue (#142), with no separate open issue matching the themes above. This
 session's GitHub tool set provides issue listing/reading but no issue-creation
 operation. Consequently, the issues above are ready-to-file drafts, not completed
-GitHub issues.
+GitHub issues. Issue #142 remains open to track this unfinished filing work and
+should not be closed by this PR.
 
 ## Verification summary
 

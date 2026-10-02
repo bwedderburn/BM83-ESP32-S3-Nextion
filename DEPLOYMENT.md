@@ -239,13 +239,15 @@ If you're still seeing tokens like `b'BT_POWERf\x00'` after updating:
    
    You should see recent commits with message "Fix token parsing to extract clean tokens without garbage bytes"
 
-4. **Clear any cached bytecode:**
-   Sometimes CircuitPython caches compiled code. Delete the `.mpy` files if present:
+4. **Restore the deployed modules:**
+   In optimized mode, `lib/nextion/*.mpy` files are live modules, not a cache. Rebuild
+   and redeploy the optimized artifacts:
    ```bash
-   # On the CIRCUITPY drive
-   rm -rf lib/nextion/__pycache__
-   rm -f lib/nextion/*.mpy
+   ./build_mpy.sh
+   cp -r dist/circuitpython/* /path/to/CIRCUITPY/
    ```
+   Or switch to baseline mode by copying `firmware/circuitpython/*` over the existing
+   files on `CIRCUITPY`.
 
 ### Buttons Still Don't Work
 
@@ -290,7 +292,7 @@ CIRCUITPY/
 ├── main.py              # Main entry point
 ├── lib/                 # CircuitPython libraries
 │   ├── adafruit_ble/
-│   └── adafruit_hid/
+│   ├── adafruit_hid/
 │   ├── nextion/
 │   │   └── display.py   # ← TOKEN PARSING FIX HERE
 │   ├── bm83/

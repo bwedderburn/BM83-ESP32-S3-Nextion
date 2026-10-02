@@ -283,7 +283,6 @@ All tests use `pytest` and can be run in a standard Python environment (not Circ
 - **`test_avrcp_metadata.py`**: Tests AVRCP metadata extraction and parsing
 - **`test_nextion.py`**: Tests Nextion display class and token parsing
 - **`test_blehid.py`**: Tests BLE HID basic functionality
-- **`test_blehid_advanced.py`**: Tests BLE HID advanced scenarios
 - **`test_utils.py`**: Tests utility functions (`sanitize_text`, `fmt_ms`, etc.)
 
 **Running Tests**:
