@@ -1,5 +1,6 @@
 import time
 from utils.common import dprint, _sanitize_text
+from utils.ticks import ticks_ms, ticks_recent
 
 TERM = b"\xFF\xFF\xFF"
 
@@ -75,7 +76,7 @@ class Nextion:
         "_txq",
         "_tx_head",
         "_last_tx_at",
-        "_tx_interval_s",
+        "_tx_interval_ms",
         "_max_queue_size",
         "_last_token_at",
         "_token_throttle_s",
@@ -91,8 +92,12 @@ class Nextion:
 
         self._txq = []
         self._tx_head = 0
-        self._last_tx_at = 0.0
-        self._tx_interval_s = 0.035
+        # TX pacing runs on wrap-safe ms ticks, not time.monotonic(): after
+        # ~1.5 days of uptime the float clock's step passes 35 ms and this
+        # gap would quantise to 62/125/250 ms, throttling every page flush
+        # (issue #149, R-03). None = nothing sent yet.
+        self._last_tx_at = None
+        self._tx_interval_ms = 35
         self._max_queue_size = 50  # Prevent unbounded growth
 
         self._last_token_at = -1.0  # Initialize to past to allow first token
@@ -138,8 +143,10 @@ class Nextion:
 
     def tick(self):
         self.sendme_tick()
-        now = time.monotonic()
-        if (len(self._txq) - self._tx_head) <= 0 or (now - self._last_tx_at) < self._tx_interval_s:
+        if (len(self._txq) - self._tx_head) <= 0:
+            return
+        now = ticks_ms()
+        if ticks_recent(now, self._last_tx_at, self._tx_interval_ms):
             return
         cmd = self._txq[self._tx_head]
         self._tx_head += 1
