@@ -1,7 +1,12 @@
 import time
 from bm83.bm83 import Bm83
-from utils.ticks import ticks_add, ticks_ms
+from utils.ticks import ticks_add, ticks_diff, ticks_ms
 from tests.test_bm83_uart import MockUART, frame_to_bytes
+
+
+def _ms_ago(ms):
+    """A ticks_ms() stamp ``ms`` milliseconds in the past."""
+    return ticks_add(ticks_ms(), -ms)
 
 
 def test_checksum():
@@ -185,7 +190,7 @@ def test_eq_throttle():
     assert len(uart.writes) == 1  # No new command sent
 
     # Simulate time passing beyond throttle window
-    bm._last_eq_cmd_at = time.monotonic() - 1.0  # Force past throttle
+    bm._last_eq_cmd_at = _ms_ago(1000)  # Force past throttle
     # eq_index: 1 -> 2, returns EQ_SEQ[2] (BASS)
     mode3 = bm.next_eq()
     assert bm.eq_index == 2
@@ -209,7 +214,7 @@ def test_track_changed_reregister_throttle():
     assert len(uart.writes) == 1  # No new command
 
     # Simulate time passing beyond throttle window (2s)
-    bm._last_track_changed_reg_at = time.monotonic() - 3.0
+    bm._last_track_changed_reg_at = _ms_ago(3000)
     result3 = bm.avrcp_reregister_track_changed()
     assert result3 is True
     assert len(uart.writes) == 2  # New command sent
@@ -219,18 +224,18 @@ def test_schedule_attrs_force_bypasses_throttle():
     uart = MockUART()
     bm = Bm83(uart)
 
-    bm._last_attrs_req_at = time.monotonic()
+    bm._last_attrs_req_at = ticks_ms()
     assert bm.schedule_attrs(0.2) is False
-    assert bm._next_attrs_at == 0.0
+    assert bm._next_attrs_at is None
 
     assert bm.schedule_attrs(0.2, force=True) is True
-    assert bm._next_attrs_at > 0.0
+    assert bm._next_attrs_at is not None
 
 
 def test_tick_avrcp_attrs_drains_pending_attrs_only_when_connected():
     uart = MockUART()
     bm = Bm83(uart)
-    bm._next_attrs_at = time.monotonic() - 0.1
+    bm._next_attrs_at = _ms_ago(100)
 
     assert bm.tick_avrcp_attrs() is False
     assert uart.writes == []
@@ -239,24 +244,25 @@ def test_tick_avrcp_attrs_drains_pending_attrs_only_when_connected():
     assert bm.tick_avrcp_attrs() is True
     assert len(uart.writes) == 1
     assert uart.writes[0][3] == Bm83.OP_AVRCP_VENDOR_DEP_CMD
-    assert bm._next_attrs_at == 0.0
+    assert bm._next_attrs_at is None
 
 
-def test_tick_avrcp_attrs_uses_supplied_now_without_monotonic(monkeypatch):
+def test_tick_avrcp_attrs_uses_supplied_now_without_reading_clock(monkeypatch):
     uart = MockUART()
     bm = Bm83(uart)
     bm.connected = True
-    now = time.monotonic()
-    bm._next_attrs_at = now - 0.1
+    now = ticks_ms()
+    bm._next_attrs_at = ticks_add(now, -100)
 
-    def fail_monotonic():
+    def fail_clock():
         raise AssertionError("tick_avrcp_attrs should reuse the supplied timestamp")
 
-    monkeypatch.setattr("bm83.bm83.time.monotonic", fail_monotonic)
+    monkeypatch.setattr("bm83.bm83.time.monotonic", fail_clock)
+    monkeypatch.setattr("bm83.bm83.ticks_ms", fail_clock)
 
     assert bm.tick_avrcp_attrs(now) is True
     assert len(uart.writes) == 1
-    assert bm._next_attrs_at == 0.0
+    assert bm._next_attrs_at is None
 
 
 def test_connection_watchdog_no_trip_before_timeout():
@@ -454,7 +460,7 @@ def test_status_changed_reregister_throttle():
     assert len(uart.writes) == 1
 
     # After the throttle window, allowed again.
-    bm._last_status_changed_reg_at = time.monotonic() - (bm._status_reg_throttle_s + 0.1)
+    bm._last_status_changed_reg_at = _ms_ago(bm._status_reg_throttle_ms + 100)
     assert bm.avrcp_reregister_status_changed() is True
     assert len(uart.writes) == 2
 
@@ -470,7 +476,7 @@ def test_position_changed_reregister_throttle():
     assert bm.avrcp_reregister_position_changed() is False
     assert len(uart.writes) == 1
 
-    bm._last_pos_changed_reg_at = time.monotonic() - (bm._pos_reg_throttle_s + 0.1)
+    bm._last_pos_changed_reg_at = _ms_ago(bm._pos_reg_throttle_ms + 100)
     assert bm.avrcp_reregister_position_changed() is True
     assert len(uart.writes) == 2
 
@@ -736,15 +742,15 @@ def test_schedule_attrs_quiet_window_cannot_be_undercut(monkeypatch):
     floor = bm.defer_attrs(1.0)
     assert bm.schedule_attrs(1.0, force=True) is True
     first_deadline = bm._next_attrs_at
-    assert first_deadline >= floor
+    assert ticks_diff(first_deadline, floor) >= 0
 
     t[0] += 0.05
     bm.schedule_attrs(0.15)
     assert bm._next_attrs_at == first_deadline
 
-    assert bm.tick_avrcp_attrs(first_deadline - 0.001) is False
+    assert bm.tick_avrcp_attrs(ticks_add(first_deadline, -1)) is False
     assert uart.writes == []
-    assert bm.tick_avrcp_attrs(first_deadline + 0.001) is True
+    assert bm.tick_avrcp_attrs(ticks_add(first_deadline, 1)) is True
     assert len(uart.writes) == 1
 
 
@@ -765,7 +771,7 @@ def test_tick_notif_regs_never_catches_up_as_burst(monkeypatch):
 
     bm.tick_notif_regs()
     assert len(uart.writes) == 1
-    t[0] += bm._notif_reg_min_gap_s - 0.01
+    t[0] += (bm._notif_reg_min_gap_ms - 10) / 1000.0
     bm.tick_notif_regs()
     assert len(uart.writes) == 1
 
@@ -880,7 +886,7 @@ def test_poll_rejects_impossible_length_and_resyncs():
 def test_set_eq_selects_explicit_mode_and_syncs_index():
     uart = MockUART()
     bm = Bm83(uart)
-    bm._last_eq_cmd_at = time.monotonic() - 1.0
+    bm._last_eq_cmd_at = _ms_ago(1000)
 
     assert bm.set_eq(5) == 5
     assert bm.EQ_SEQ[bm.eq_index] == 5
