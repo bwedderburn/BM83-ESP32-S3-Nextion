@@ -20,7 +20,7 @@ Responsibilities kept:
     * Auto-advertise when not connected, back off on Nimble OOM
     * Passively observe c.paired and log encryption when it lands
     * Send VOLUME_INCREMENT / VOLUME_DECREMENT / MUTE on demand
-    * Deferred erase_bonds (via request_erase_bonds, serviced in tick)
+    * Deferred erase_bonds (via request_erase_bonds, staged across ticks)
     * BLE name counter cycling on successful bond wipe
     * NVM/filesystem persistence of the bond counter
 
@@ -39,13 +39,24 @@ The public surface used by main.py is:
 import time
 import gc
 from utils.common import dprint
+from utils.ticks import ticks_add, ticks_less, ticks_ms, ticks_recent
 
 
 # NimBLE on ESP32-S3 can hard-crash if heavy BLE operations run back to
-# back without letting the stack settle. A short sleep between stop_adv,
-# disconnect, erase_bonding, and start_adv avoids "out of memory" and
-# "stack busy" failures observed during bond-wipe.
-_BLE_STABILIZE_S = 0.05
+# back without letting the stack settle. A short settle between stop_adv,
+# GC, erase_bonding, and start_adv avoids "out of memory" and "stack
+# busy" failures observed during bond-wipe. The settles used to be
+# time.sleep() calls inside tick(), stalling the UART/display loop for
+# ~150 ms; they are now non-blocking stage deadlines (issue #149, R-02).
+# Each gap is still at least this long -- never shorter.
+_BLE_STABILIZE_MS = 50
+
+# Bond-erase stages, advanced at most one per tick() and only once the
+# previous stage's settle deadline has passed. 0 = idle.
+_ERASE_IDLE = 0
+_ERASE_GC = 1        # stop_adv done; next: GC x2
+_ERASE_WIPE = 2      # GC done; next: erase_bonding + name cycle
+_ERASE_READV = 3     # erase done; next: GC + restart advertising
 
 
 # Persistent counter file for BLE name cycling.
@@ -104,13 +115,15 @@ class BleHid:
         "_adv_kick_period_s",
         "_last_adv_kick_at",
         "_last_cc_at",
-        "_cc_min_interval_s",
+        "_cc_min_interval_ms",
         "_need_pairing_check",
         "_last_pair_try_at",
         "_pair_retry_s",
         "_pair_attempts",
         "_pair_attempt_limit",
         "_erase_pending",
+        "_erase_stage",
+        "_erase_due",
         "_last_erase_at",
         "_erase_cooldown_s",
         "_connected_at",
@@ -161,8 +174,12 @@ class BleHid:
         # Minimum gap between Consumer Control sends — the HID pipe on
         # iOS can drop very fast bursts. 60 ms matches the repeat cadence
         # of a held hardware volume key.
-        self._last_cc_at = 0.0
-        self._cc_min_interval_s = 0.06
+        #
+        # Kept on wrap-safe ms ticks rather than time.monotonic(): after a
+        # few days of uptime the float clock's step exceeds 60 ms, which
+        # would quantise this limiter (issue #149, R-03). None = never sent.
+        self._last_cc_at = None
+        self._cc_min_interval_ms = 60
 
         # Pairing state — passive observer only. See _ensure_paired
         # for why we no longer call c.pair() from the peripheral side.
@@ -185,6 +202,10 @@ class BleHid:
         # actively advertising has been observed to hard-crash NimBLE,
         # so the request is buffered until we're in a quiet state.
         self._erase_pending = False
+        # Staged-erase state machine (see _tick_erase). _erase_due is a
+        # ticks_ms() deadline, only meaningful while _erase_stage != idle.
+        self._erase_stage = _ERASE_IDLE
+        self._erase_due = 0
         # Rate-limit repeat erases. Each wipe rewrites NVS and cycles
         # the radio; doing it back-to-back is what crashed the stack in
         # earlier hardware runs. 30s between successful erases is
@@ -507,6 +528,13 @@ class BleHid:
     def tick(self):
         if not self._ready or not self._ble:
             return
+        if self._erase_stage != _ERASE_IDLE:
+            # A staged bond wipe owns the radio until it finishes: no
+            # advertising kicks and no edge handling mid-sequence. Edges
+            # are level-compared against _was_connected, so one that
+            # arrives meanwhile is processed on the first tick after.
+            self._tick_erase()
+            return
         now = time.monotonic()
         connected = bool(getattr(self._ble, "connected", False))
         if connected != self._was_connected:
@@ -516,11 +544,11 @@ class BleHid:
             else:
                 self._on_disconnect()
         if not connected:
-            # Service a pending bond wipe in the disconnected/quiet
-            # window before re-kicking advertising. _do_erase_bonds
-            # handles its own start_adv on the way out.
+            # Start a pending bond wipe in the disconnected/quiet window
+            # before re-kicking advertising. The staged sequence restarts
+            # advertising itself on the way out.
             if self._erase_pending:
-                self._do_erase_bonds()
+                self._begin_erase()
                 return
             if not self._is_advertising():
                 self._start_adv(force=False)
@@ -566,14 +594,18 @@ class BleHid:
         else:
             print("[BLE] erase_bonds: queued — will run on next tick")
 
-    def _do_erase_bonds(self):
-        """Perform the actual bond-store wipe. tick() only.
+    def _begin_erase(self):
+        """Start the staged bond-store wipe. tick() only, while disconnected.
 
-        Sequence is modelled on the recovered_source flow that worked
-        on this hardware: stop advertising, GC, sleep, attempt erase
-        via adafruit_ble first then _bleio.adapter as fallback, sleep,
-        kick advertising back up. Every step is wrapped because any
-        of them can throw on Nimble under memory pressure.
+        Sequence is modelled on the recovered_source flow that worked on
+        this hardware: stop advertising, settle, GC, settle, attempt the
+        erase via adafruit_ble first then _bleio.adapter as fallback,
+        settle, GC, kick advertising back up. The order and the >= 50 ms
+        settles are unchanged from the old synchronous version; only the
+        waiting moved out of time.sleep() and into per-tick deadlines,
+        so the BM83/Nextion UARTs keep being serviced in between.
+        Every step is wrapped because any of them can throw on NimBLE
+        under memory pressure.
         """
         self._erase_pending = False
         self._last_erase_at = time.monotonic()
@@ -583,11 +615,45 @@ class BleHid:
             self._stop_adv()
         except Exception as e:
             dprint("[BLE] erase_bonds stop_adv err:", e)
-        # 2. Settle + GC so NVS write has headroom
-        time.sleep(_BLE_STABILIZE_S)
-        gc.collect()
-        gc.collect()
-        time.sleep(_BLE_STABILIZE_S)
+        self._erase_next(_ERASE_GC)
+
+    def _erase_next(self, stage):
+        self._erase_stage = stage
+        self._erase_due = ticks_add(ticks_ms(), _BLE_STABILIZE_MS)
+
+    def _tick_erase(self):
+        """Advance the staged bond wipe by at most one step."""
+        if ticks_less(ticks_ms(), self._erase_due):
+            return
+        stage = self._erase_stage
+        if stage == _ERASE_GC:
+            # 2. Settle + GC so the NVS write has headroom
+            gc.collect()
+            gc.collect()
+            self._erase_next(_ERASE_WIPE)
+        elif stage == _ERASE_WIPE:
+            if getattr(self._ble, "connected", False):
+                # Advertising was stopped, so this should not happen; but
+                # erase_bonding with a live link has hard-crashed NimBLE,
+                # so never run it here. Re-queue for the next quiet window.
+                print("[BLE] erase_bonds: central connected mid-sequence, re-queued")
+                self._erase_stage = _ERASE_IDLE
+                self._erase_pending = True
+                return
+            self._erase_wipe()
+            self._erase_next(_ERASE_READV)
+        else:
+            # 5. Settled after the erase: GC and re-advertise so the next
+            # central sees a clean radio.
+            self._erase_stage = _ERASE_IDLE
+            gc.collect()
+            try:
+                self._start_adv(force=True)
+            except Exception as e:
+                dprint("[BLE] erase_bonds restart adv err:", e)
+
+    def _erase_wipe(self):
+        """Steps 3-4: erase the bond store, then cycle the advertised name."""
         # 3. Attempt the erase. Try adafruit_ble's wrapper first; if
         # it doesn't exist on this build, fall back to the underlying
         # _bleio.adapter call.
@@ -626,14 +692,6 @@ class BleHid:
                 self._update_ble_name(counter)
             except Exception as e:
                 dprint("[BLE] name-cycle err:", e)
-        # 5. Settle again before re-advertising so the next central
-        # sees a clean radio.
-        time.sleep(_BLE_STABILIZE_S)
-        gc.collect()
-        try:
-            self._start_adv(force=True)
-        except Exception as e:
-            dprint("[BLE] erase_bonds restart adv err:", e)
 
     def _update_ble_name(self, counter):
         """Rewrite the advertised BLE name to base_name + counter.
@@ -674,8 +732,8 @@ class BleHid:
             return
         if not getattr(self._ble, "connected", False):
             return
-        now = time.monotonic()
-        if (now - self._last_cc_at) < self._cc_min_interval_s:
+        now = ticks_ms()
+        if ticks_recent(now, self._last_cc_at, self._cc_min_interval_ms):
             return
         self._last_cc_at = now
         if self._need_pairing_check:

@@ -29,7 +29,8 @@ BM83-ESP32-S3-Nextion/
 │       └── utils/                  # Shared utility functions
 │           ├── __init__.py         # Module exports (sanitize, fmt_ms, etc.)
 │           ├── common.py           # Text sanitization, time formatting
-│           └── compat.py           # Compatibility helpers
+│           ├── compat.py           # Compatibility helpers
+│           └── ticks.py            # Wrap-safe ms ticks (supervisor.ticks_ms)
 ├── tests/                          # Unit tests (pytest)
 │   ├── test_avrcp_metadata.py      # AVRCP metadata parsing tests
 │   ├── test_blehid.py              # BLE HID tests
@@ -236,6 +237,23 @@ Empty module marker (no exports).
 **Exports**: `hexdump`, `sanitize_text`, `fmt_ms`, `_sanitize_text`, `_fmt_ms`, `dprint`
 
 Package-level exports for utility functions.
+
+#### `utils/ticks.py`
+**Purpose**: Wrap-safe millisecond timing for sub-second timers (issue #149).
+
+`time.monotonic()` is a float on CircuitPython and its step grows with uptime
+(~62 ms after 1.5 days, ~250 ms after 6 days), so short timers built on it fire
+early or late. Timers that need sub-second accuracy use `supervisor.ticks_ms()`
+(wraps every 2**29 ms; the first wrap is ~65 s after boot) through:
+
+- `ticks_ms()`, `ticks_add(t, ms)`, `ticks_diff(t1, t2)`, `ticks_less(t1, t2)`
+- `ticks_recent(now, then, window_ms)`: rate-limit check that treats `None` as
+  "never" and an aliased (> ~3.1 day old) timestamp as long ago
+
+Current users: Nextion TX pacing (35 ms), BLE Consumer Control limiter (60 ms),
+BLE bond-erase stage settles (50 ms), BM83 MMI power press/release holds
+(2.2 s / 1.5 s / 0.5 s), main-loop volume hold-and-repeat (850 / 200 ms).
+Everything else still uses `time.monotonic()`; never mix the two on one timer.
 
 #### `utils/common.py`
 **Purpose**: Shared utility functions for text processing and debugging.
