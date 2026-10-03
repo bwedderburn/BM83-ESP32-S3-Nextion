@@ -250,10 +250,27 @@ early or late. Timers that need sub-second accuracy use `supervisor.ticks_ms()`
 - `ticks_recent(now, then, window_ms)`: rate-limit check that treats `None` as
   "never" and an aliased (> ~3.1 day old) timestamp as long ago
 
-Current users: Nextion TX pacing (35 ms), BLE Consumer Control limiter (60 ms),
-BLE bond-erase stage settles (50 ms), BM83 MMI power press/release holds
-(2.2 s / 1.5 s / 0.5 s), main-loop volume hold-and-repeat (850 / 200 ms).
-Everything else still uses `time.monotonic()`; never mix the two on one timer.
+- `ticks_due(now, deadline, horizon_ms)`: deadline check where `None` means
+  "due now" and a deadline further ahead than `horizon_ms` (an aliased stale
+  stamp) also counts as due, so a scheduler can never stall for days
+
+Current users:
+- Nextion: TX pacing (35 ms), duplicate-token dedupe (150 ms)
+- BLE: Consumer Control limiter (60 ms), bond-erase stage settles (50 ms)
+- BM83: MMI power press/release holds (2.2 s / 1.5 s / 0.5 s); AVRCP
+  register-notification queue and its 450 ms minimum gap (contract 5);
+  status/position/track re-registration throttles (0.5 / 0.5 / 2 s); EQ
+  throttle (250 ms); play-status poll (1 s) and metadata scheduling
+  (`schedule_attrs` / `defer_attrs` quiet window, 1.5 s throttle). BM83
+  scheduler deadlines use a 60 s `ticks_due` horizon.
+- main.py: volume hold-and-repeat (850 / 200 ms)
+
+Multi-second timers (disconnect hold, silence watchdog, heartbeat, link
+probe, AVRCP suspend, power-confirm, stream kick, boot init, GEA fragment
+timeout, GC interval) still use `time.monotonic()`: their step error stays
+small relative to the interval for weeks of uptime, and several compare
+against timestamps that can legitimately be days old. Never mix the two
+clocks on one timer; a float reaching tick arithmetic raises `TypeError`.
 
 #### `utils/common.py`
 **Purpose**: Shared utility functions for text processing and debugging.

@@ -302,7 +302,7 @@ def main():
         # Service deferred AVRCP notification registrations (see the
         # CONNECTED handler below for why these are staggered), and the
         # deferred PLAY half of the stream-restart kick.
-        bm_tick_notif_regs(now)
+        bm_tick_notif_regs()  # reads ticks_ms() itself (contract 5 stagger)
         bm_tick_stream_kick(now)
 
         # Self-healing: lift a stale AVRCP suspension, and probe the chip
