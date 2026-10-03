@@ -15,6 +15,7 @@ from utils.common import (
 from nextion.display import Nextion, NX_RUNTIME, EQ_MAP, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
+from utils.ticks import ticks_diff, ticks_ms
 
 NX_BAUD = 9600
 BM83_BAUD = 115200
@@ -131,13 +132,17 @@ def main():
     last_total_ms = None
     last_play_status = None
 
-    # Hold-and-repeat state for volume controls
+    # Hold-and-repeat state for volume controls. Timestamps are ticks_ms()
+    # values, not time.monotonic(): after a few days of uptime the float
+    # clock's step reaches 125-250 ms and would make a 200 ms repeat
+    # cadence lurch (issue #149, R-03).
     vol_hold_active = None        # None, "up", or "down"
-    vol_hold_start_at = 0.0       # When the button was first pressed
-    vol_last_repeat_at = 0.0      # When we last sent a repeat
+    vol_hold_start_at = 0         # ticks_ms() when the button was first pressed
+    vol_last_repeat_at = 0        # ticks_ms() when we last sent a repeat
     vol_repeat_count = 0          # How many steps have been sent in this hold
-    vol_initial_delay_s = 0.85    # 850ms before repeat starts
-    vol_repeat_interval_s = 0.20  # 200ms between repeats (snappier than 350ms)
+    vol_initial_delay_ms = 850    # 850ms before repeat starts
+    vol_repeat_interval_ms = 200  # 200ms between repeats (snappier than 350ms)
+    vol_hold_max_ms = int(VOL_HOLD_MAX_S * 1000)
 
     # EBIND (bond-wipe) UI debounce. The Nextion touch panel can repeat
     # the BT_EBIND token if the user mashes the button or sits on it,
@@ -549,8 +554,8 @@ def main():
                 # or BM83 Line_In gain (AUX mode), then start hold tracking.
                 volume_step(True)
                 vol_hold_active = "up"
-                vol_hold_start_at = now
-                vol_last_repeat_at = now
+                vol_hold_start_at = ticks_ms()
+                vol_last_repeat_at = vol_hold_start_at
                 vol_repeat_count = 1
             elif tok == b"BT_VOLUP_R":
                 # Volume up released - stop hold-and-repeat
@@ -561,8 +566,8 @@ def main():
                 # Volume down pressed - smart-route and start hold tracking
                 volume_step(False)
                 vol_hold_active = "down"
-                vol_hold_start_at = now
-                vol_last_repeat_at = now
+                vol_hold_start_at = ticks_ms()
+                vol_last_repeat_at = vol_hold_start_at
                 vol_repeat_count = 1
             elif tok == b"BT_VOLDN_R":
                 # Volume down released - stop hold-and-repeat
@@ -596,24 +601,26 @@ def main():
 
         # Handle volume hold-and-repeat
         if vol_hold_active is not None:
-            # How long this button has been considered "held"
-            hold_elapsed = now - vol_hold_start_at
+            # How long this button has been considered "held" (ms). A hold
+            # is capped at VOL_HOLD_MAX_S, far inside ticks_diff's range.
+            tnow = ticks_ms()
+            hold_elapsed_ms = ticks_diff(tnow, vol_hold_start_at)
             # Only start repeating after the initial delay has passed
-            if hold_elapsed >= vol_initial_delay_s:
+            if hold_elapsed_ms >= vol_initial_delay_ms:
                 # Safety cap: stop repeating after a maximum hold duration.
                 # VOL_HOLD_MAX_S and VOL_REPEAT_MAX are tuned to expire at
                 # roughly the same moment — see top of file.
-                if hold_elapsed > VOL_HOLD_MAX_S or vol_repeat_count >= VOL_REPEAT_MAX:
+                if hold_elapsed_ms > vol_hold_max_ms or vol_repeat_count >= VOL_REPEAT_MAX:
                     vol_hold_active = None
                     vol_repeat_count = 0
                 else:
                     # Check if it's time for another repeat step
-                    if (now - vol_last_repeat_at) >= vol_repeat_interval_s:
+                    if ticks_diff(tnow, vol_last_repeat_at) >= vol_repeat_interval_ms:
                         if vol_hold_active == "up":
                             volume_step(True)
                         elif vol_hold_active == "down":
                             volume_step(False)
-                        vol_last_repeat_at = now
+                        vol_last_repeat_at = tnow
                         vol_repeat_count += 1
 
         sleep(0.005)
