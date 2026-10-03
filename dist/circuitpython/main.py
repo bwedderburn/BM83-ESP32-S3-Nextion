@@ -13,6 +13,7 @@ from utils.common import (
     _sanitize_text,
 )
 from nextion.display import Nextion, NX_RUNTIME, EQ_MAP, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
+from remote import EspNowRemote
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
 from utils.ticks import ticks_diff, ticks_ms
@@ -37,6 +38,18 @@ VOL_HOLD_MAX_S = 6.65
 BLE_ENABLED = True
 BLE_NAME = "B's Groovy BT CTRL"
 
+# Wireless remote: the CrowPanel 7" running firmware/crowpanel-remote sends
+# ESP-NOW frames carrying the exact Nextion token vocabulary. They join the
+# panel's token list right before the dispatch, so aux_mode gating, the EBIND
+# debounce and volume hold-and-repeat apply to them unchanged. Only frames
+# from REMOTE_MAC (the remote's WiFi STA MAC, printed at its boot) are
+# accepted. ESP-NOW switches this board's WiFi radio on (unassociated, no
+# AP); REMOTE_ENABLED = False keeps the radio off entirely. Needs
+# CircuitPython 10.1+ while BLE is enabled - on 10.0.x the receiver refuses
+# to start (BLE coexistence fault, see lib/remote/espnow_rx.py).
+REMOTE_ENABLED = True
+REMOTE_MAC = "44:1B:F6:8A:C1:7C"
+
 # Experimental: automatic A2DP stream-restart kick after a BT reconnect
 # (AVRCP pause -> 2.5s -> play at the first "playing" status). Hardware
 # trial 2026-08-02: fired exactly as designed but did NOT un-mute the
@@ -57,6 +70,13 @@ def main():
 
     ble = BleHid(BLE_ENABLED, BLE_NAME)
     ble.setup()
+
+    # Never raises: a missing espnow module or a radio bring-up failure
+    # just leaves the remote off and the panel working as before.
+    remote = EspNowRemote(enabled=REMOTE_ENABLED, peer_mac=REMOTE_MAC,
+                          ble_active=BLE_ENABLED)
+    remote.setup()
+    remote_poll = remote.poll
 
     # Local bindings for speed/low allocation on mpy
     monotonic = time.monotonic
@@ -504,6 +524,13 @@ def main():
                             else:
                                 dprint("[META] ignore duration attr", attrs[7], "baseline=", last_total_ms)
                     push_meta_updates(changed)
+
+        # Wireless-remote tokens join the panel's list here, so every gate in
+        # the dispatch below (aux_mode, EBIND debounce, hold-and-repeat)
+        # applies to them unchanged.
+        remote_tokens = remote_poll()
+        if remote_tokens:
+            tokens = list(tokens) + list(remote_tokens)
 
         for tok in tokens:
             dprint("[NX] Token:", tok)
