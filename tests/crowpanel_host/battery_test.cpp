@@ -174,9 +174,19 @@ void implausible_reading() {
     poll(4.00f, 3);
     BatteryState s = poll(0.0f);
     expect(s.percent == -1, "0 V: no reading");
-    expect(s.supply == Supply::Battery, "supply held through a bad reading");
+    expect(s.supply == Supply::Unknown, "a bad reading drops to Unknown (USB timings)");
     s = poll(4.10f);
-    expect(s.supply == Supply::Battery, "recovery is not compared against the bad reading");
+    expect(s.supply == Supply::Unknown, "recovery is not compared against the bad reading");
+}
+
+void usb_plugged_during_bad_reading() {
+    // PR #157 review: Battery at 4.05 V -> invalid -> steady USB at 4.17 V.
+    // With no step after the gap, a held Battery would light-sleep on USB.
+    boot_then_unplug();
+    poll(4.05f, 3);
+    BatteryState s = poll(0.0f);
+    s = poll(4.17f, 30);
+    expect(s.supply != Supply::Battery, "steady USB after a bad reading never runs battery timings");
 }
 
 void unplug_artifact_bleeds_off() {
@@ -213,6 +223,7 @@ const Scenario SCENARIOS[] = {
     {"noise_never_flips", noise_never_flips},
     {"slow_drift_is_not_evidence", slow_drift_is_not_evidence},
     {"implausible_reading", implausible_reading},
+    {"usb_plugged_during_bad_reading", usb_plugged_during_bad_reading},
     {"unplug_artifact_bleeds_off", unplug_artifact_bleeds_off},
     {"high_voltage_on_battery_no_bolt", high_voltage_on_battery_no_bolt},
 };

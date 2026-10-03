@@ -221,12 +221,18 @@ BatteryState battery_poll() {
     const StepIgnore ignore = g_step_ignore;
     g_step_ignore = StepIgnore::None;
     if (v < PLAUSIBLE_MIN_V || v > PLAUSIBLE_MAX_V) {
-        // No usable reading: keep the supply, restart the detectors so the
-        // next good reading is not compared against a stale one.
+        // No usable reading: restart the detectors so the next good reading
+        // is not compared against a stale one. Dropping the baselines also
+        // drops the evidence behind the current supply: USB plugged in during
+        // the gap would show no step afterwards, and a held "battery" would
+        // strand a USB-powered remote in light sleep behind BOOT. Fall back
+        // to Unknown, which runs USB timings (PR #157 review).
         s.volts    = v;
         g_last_v   = -1.0f;
         g_at_float = false;
         trend_reset();
+        set_supply(Supply::Unknown, "invalid", 0.0f);
+        s.supply = g_supply;
         return s;
     }
     s.volts = v;

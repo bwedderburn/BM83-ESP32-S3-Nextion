@@ -346,12 +346,15 @@ void loop() {
     const bool sleep_due = screen_idle_tick(SCREEN_DIM_AFTER_MS);  // may dim
     report_backlight_change();
     if (sleep_due) {
-        // Battery timings say light sleep. USB may have been plugged in
+        // The current timings say light sleep. USB may have been plugged in
         // since the last 1 Hz sample, and a USB-powered remote must never
-        // end up asleep behind BOOT: sample again and re-apply the supply
-        // before committing (PR #157 review).
+        // end up asleep behind BOOT: sample again, re-apply the supply, and
+        // ask again under the refreshed timings before committing. Asking
+        // again (rather than checking battery mode) also honours a positive
+        // SCREEN_SLEEP_AFTER_MS override on USB instead of re-sampling the
+        // battery every loop (PR #157 review).
         poll_battery();
-        if (screen_is_battery_mode()) {
+        if (screen_idle_tick(SCREEN_DIM_AFTER_MS)) {
             screen_light_sleep();       // blocks until BOOT is pressed
             report_backlight_change();  // the backlight is back on
             rlog("[power] woke from light sleep (BOOT)");
