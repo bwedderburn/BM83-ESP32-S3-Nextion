@@ -1381,9 +1381,9 @@ def test_boot_init_deferred_during_confirmation_window(monkeypatch):
     second init_link burst into the chip's boot window right after on_init.
     """
     uart = MockUART()
-    bm = Bm83(uart)
     t = [67000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm = Bm83(uart)
     bm.power_on_cmd()
     t[0] += 2.3; bm.tick_power()
     t[0] += 0.55; bm.tick_power()        # confirmation armed
