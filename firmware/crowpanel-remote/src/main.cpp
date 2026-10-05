@@ -3,15 +3,15 @@
 // Repurposes the solar-monitor wall HMI as a remote controller for the
 // BM83-ESP32-S3-Nextion audio unit:
 //
-//   - splash + nine buttons (Prev / Play-Pause / Next / Vol- / Vol+ /
-//     EQ / Power / Pair / E-Bind)
+//   - compact transport/settings buttons and a bottom playback/volume row
+//     with a center-return relative-volume slider
 //   - buttons emit the SAME token vocabulary the Nextion sends over UART
 //     (see NEXTION_SETUP.md): volume uses press/release pairs (BT_VOLUP_P /
 //     BT_VOLUP_R, ...) for hold-and-repeat; the rest are single tokens
 //   - every token is logged to serial AND transmitted over ESP-NOW to the
 //     audio unit as "BMR1:<seq>:<token>" (see espnow_link.h). The audio-unit
-//     receiver is Stage 3 — until it lands, sends report no-ack, which is
-//     the expected bench state and proves the TX path runs.
+//     receiver shares the Nextion dispatch path. A radio ACK confirms
+//     delivery to the peer radio, not playback or resulting source volume.
 //   - heartbeat line every 5 s so a silent panel is never ambiguous
 //   - battery gauge (top right) from the panel's Li-ion cell, and supply
 //     detection that picks the sleep policy: on USB the screen only dims
@@ -29,6 +29,7 @@
 #include "battery.h"
 #include "display_init.h"
 #include "espnow_link.h"
+#include "volume_adjustment.h"
 
 // ----- logging ---------------------------------------------------------------
 // ARDUINO_USB_CDC_ON_BOOT=1 makes `Serial` the native USB CDC and `Serial0`
@@ -57,11 +58,14 @@ static lv_indev_drv_t     indev_drv;
 // ----- UI state ---------------------------------------------------------------
 static lv_obj_t *g_status_label = nullptr;
 static uint32_t  g_token_count  = 0;
+static lv_obj_t *g_volume_hint = nullptr;
+static VolumeAdjustment g_volume_adjustment;
+static bool g_slider_dragging = false;
 
 // ----- battery widget (the solar HMI header icon, scaled for the remote) -----
 // [body with fill + charging bolt][tip]  "98%  4.12 V"
-constexpr int      BATT_BODY_W = 40;
-constexpr int      BATT_BODY_H = 20;
+constexpr int      BATT_BODY_W = 32;
+constexpr int      BATT_BODY_H = 16;
 constexpr int      BATT_TIP_W  = 4;
 constexpr int      BATT_TIP_H  = 8;
 constexpr int      BATT_PAD    = 2;  // gap between the body's border and the fill
@@ -89,7 +93,7 @@ static void build_battery_widget(lv_obj_t *scr) {
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, 8, 0);
-    lv_obj_align(row, LV_ALIGN_TOP_RIGHT, -16, 22);
+    lv_obj_align(row, LV_ALIGN_TOP_RIGHT, -24, 22);
 
     lv_obj_t *icon = make_plain(row, BATT_BODY_W + BATT_TIP_W, BATT_BODY_H);
 
@@ -121,7 +125,7 @@ static void build_battery_widget(lv_obj_t *scr) {
     g_batt_text = lv_label_create(row);
     lv_label_set_text(g_batt_text, "--%");
     lv_obj_set_style_text_color(g_batt_text, lv_color_hex(COLOR_FG), 0);
-    lv_obj_set_style_text_font(g_batt_text, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(g_batt_text, &lv_font_montserrat_14, 0);
 }
 
 // Repaint only on a change: percent, bolt, or the voltage at 10 mV.
@@ -170,23 +174,40 @@ static void apply_power_mode(Supply s) {
     }
 }
 
-static void note_token(const char *token) {
+static const char *action_name(const char *token) {
+    if (strcmp(token, "BT_PREV") == 0) return "Previous track";
+    if (strcmp(token, "BT_NEXT") == 0) return "Next track";
+    if (strcmp(token, "BT_PLAY") == 0) return "Play/Pause";
+    if (strncmp(token, "BT_VOLUP", 8) == 0) return "Volume up";
+    if (strncmp(token, "BT_VOLDN", 8) == 0) return "Volume down";
+    if (strcmp(token, "BT_EQ") == 0) return "EQ";
+    if (strcmp(token, "BT_POWER") == 0) return "Power";
+    if (strcmp(token, "BT_PAIR") == 0) return "Pair";
+    if (strcmp(token, "BT_EBIND") == 0) return "Erase BLE bonds";
+    return "Control";
+}
+
+static bool note_token(const char *token) {
     g_token_count++;
     espnow_send_token(token);
     // Sends are synchronous with bounded retries, so this is THIS token's
     // delivery status (ok = the unit's radio ACKed one of the attempts).
     rlog("[TOKEN] %s (#%lu) | link %s", token, (unsigned long)g_token_count,
          espnow_link_status_str());
+    const bool delivered = strcmp(espnow_link_status_str(), "ok") == 0;
     if (g_status_label) {
         lv_label_set_text_fmt(g_status_label,
-                              "last token: %s   (%lu sent)   link: %s",
-                              token, (unsigned long)g_token_count,
-                              espnow_link_status_str());
+                              "%s - %s", action_name(token),
+                              delivered ? "sent" : "no response; check the audio unit");
+        lv_obj_set_style_text_color(g_status_label,
+                                    lv_color_hex(delivered ? 0x9AAAB8 : COLOR_WARN), 0);
     }
+    return delivered;
 }
 
 // Single-shot buttons: one token on click.
 static void cb_click(lv_event_t *e) {
+    g_volume_adjustment.cancel();
     note_token(static_cast<const char *>(lv_event_get_user_data(e)));
 }
 
@@ -195,6 +216,7 @@ static void cb_press_release(lv_event_t *e) {
     const char *base = static_cast<const char *>(lv_event_get_user_data(e));
     char token[32];
     if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+        g_volume_adjustment.cancel();
         snprintf(token, sizeof(token), "%s_P", base);
         note_token(token);
     } else if (lv_event_get_code(e) == LV_EVENT_RELEASED ||
@@ -204,13 +226,77 @@ static void cb_press_release(lv_event_t *e) {
     }
 }
 
-static lv_obj_t *make_button(const char *text, int x, int y, int w, int h) {
+// A drag requests up to five relative steps when released. The thumb never
+// represents the phone/PC's current volume, which the BLE HID keys cannot read.
+static void cb_volume_slider(lv_event_t *e) {
+    lv_obj_t *slider = lv_event_get_target(e);
+    switch (lv_event_get_code(e)) {
+        case LV_EVENT_PRESSED:
+            g_volume_adjustment.cancel();
+            g_slider_dragging = true;
+            break;
+        case LV_EVENT_VALUE_CHANGED: {
+            const int value = lv_slider_get_value(slider);
+            if (value == 0) lv_label_set_text(g_volume_hint, "Slide to adjust volume");
+            else lv_label_set_text_fmt(g_volume_hint, "%d step%s %s on release",
+                                       abs(value), abs(value) == 1 ? "" : "s",
+                                       value < 0 ? "down" : "up");
+            break;
+        }
+        case LV_EVENT_RELEASED:
+            if (g_slider_dragging) {
+                g_volume_adjustment.request(lv_slider_get_value(slider), millis());
+            }
+            g_slider_dragging = false;
+            lv_slider_set_value(slider, 0, LV_ANIM_OFF);
+            lv_label_set_text(g_volume_hint, "Slide to adjust volume");
+            break;
+        case LV_EVENT_PRESS_LOST:
+            g_slider_dragging = false;
+            g_volume_adjustment.cancel();
+            lv_slider_set_value(slider, 0, LV_ANIM_OFF);
+            lv_label_set_text(g_volume_hint, "Slide to adjust volume");
+            break;
+        default:
+            break;
+    }
+}
+
+static lv_obj_t *make_label(const char *text, int x, int y,
+                            const lv_font_t *font, uint32_t color) {
+    lv_obj_t *label = lv_label_create(lv_scr_act());
+    lv_label_set_text(label, text);
+    lv_obj_set_pos(label, x, y);
+    lv_obj_set_style_text_font(label, font, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    return label;
+}
+
+static void cb_cancel_adjustment(lv_event_t *) {
+    g_volume_adjustment.cancel();
+}
+
+static lv_obj_t *make_button(const char *text, int x, int y, int w, int h,
+                             bool primary = false) {
     lv_obj_t *btn = lv_btn_create(lv_scr_act());
     lv_obj_set_pos(btn, x, y);
     lv_obj_set_size(btn, w, h);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(primary ? 0x267BE8 : 0x203246), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(primary ? 0x4698FF : 0x304A65), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_grad_dir(btn, LV_GRAD_DIR_NONE, 0);
+    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(primary ? 0x4698FF : 0x344A60), 0);
+    lv_obj_set_style_shadow_width(btn, 0, LV_STATE_DEFAULT);
+    lv_obj_set_style_shadow_width(btn, 0, LV_STATE_PRESSED);
+    lv_obj_set_style_transform_width(btn, 0, LV_STATE_PRESSED);
+    lv_obj_set_style_transform_height(btn, 0, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_all(btn, 8, 0);
+    lv_obj_add_event_cb(btn, cb_cancel_adjustment, LV_EVENT_PRESSED, nullptr);
     lv_obj_t *label = lv_label_create(btn);
     lv_label_set_text(label, text);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(COLOR_FG), 0);
     lv_obj_center(label);
     return btn;
 }
@@ -218,55 +304,82 @@ static lv_obj_t *make_button(const char *text, int x, int y, int w, int h) {
 static void build_ui() {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
-
-    lv_obj_t *title = lv_label_create(scr);
-    lv_label_set_text(title, "BM83 Remote  -  bring-up build");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xE8EAED), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
-
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    make_label("BM83 Remote", 24, 18, &lv_font_montserrat_20, COLOR_FG);
+    make_label("Wireless audio controls", 24, 50, &lv_font_montserrat_14, 0x9AAAB8);
     build_battery_widget(scr);
+    lv_obj_t *divider = make_plain(scr, 752, 1);
+    lv_obj_set_pos(divider, 24, 82);
+    lv_obj_set_style_bg_color(divider, lv_color_hex(0x293846), 0);
+    lv_obj_set_style_bg_opa(divider, LV_OPA_COVER, 0);
 
-    g_status_label = lv_label_create(scr);
-    lv_label_set_text(g_status_label, "touch a button - tokens log to serial");
-    lv_obj_set_style_text_color(g_status_label, lv_color_hex(0x9AA0A6), 0);
-    lv_obj_align(g_status_label, LV_ALIGN_TOP_MID, 0, 58);
-
-    // 3 rows x 3 columns on the 800x480 panel.
-    const int W = 236, H = 112;
-    const int X0 = 20, X1 = 282, X2 = 544;
-    const int Y0 = 100, Y1 = 222, Y2 = 344;
+    make_label("TRACK & SOUND", 76, 96, &lv_font_montserrat_12, 0x9AAAB8);
+    make_label("DEVICE", 76, 194, &lv_font_montserrat_12, 0x9AAAB8);
+    const int W = 200, H = 64;
+    const int X0 = 76, X1 = 300, X2 = 524;
+    const int Y0 = 120, Y1 = 218;
 
     lv_obj_add_event_cb(make_button(LV_SYMBOL_PREV "  Prev", X0, Y0, W, H),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_PREV");
-    lv_obj_add_event_cb(make_button(LV_SYMBOL_PLAY "  Play/Pause", X1, Y0, W, H),
-                        cb_click, LV_EVENT_CLICKED, (void *)"BT_PLAY");
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_SETTINGS "  EQ", X1, Y0, W, H),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_EQ");
     lv_obj_add_event_cb(make_button(LV_SYMBOL_NEXT "  Next", X2, Y0, W, H),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_NEXT");
 
-    lv_obj_t *vdn = make_button(LV_SYMBOL_VOLUME_MID "  Vol -", X0, Y1, W, H);
+    // Persistent bottom row: Play/Pause, Vol-, relative slider, Vol+.
+    lv_obj_t *strip = make_plain(scr, 784, 124);
+    lv_obj_set_pos(strip, 8, 324);
+    lv_obj_set_style_bg_color(strip, lv_color_hex(0x17212C), 0);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(strip, 14, 0);
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_PLAY "  Play/Pause", 24, 376, 168, 64, true),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_PLAY");
+    lv_obj_t *vdn = make_button("Vol -", 208, 376, 96, 64);
     lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLDN");
     lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLDN");
     lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLDN");
 
-    lv_obj_t *vup = make_button(LV_SYMBOL_VOLUME_MAX "  Vol +", X1, Y1, W, H);
+    lv_obj_t *vup = make_button("Vol +", 680, 376, 96, 64);
     lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLUP");
     lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLUP");
     lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLUP");
 
-    lv_obj_add_event_cb(make_button(LV_SYMBOL_SETTINGS "  EQ", X2, Y1, W, H),
-                        cb_click, LV_EVENT_CLICKED, (void *)"BT_EQ");
-
-    // Row 3 — power/pairing controls. Single-click tokens, exactly as the
+    // Device controls. Single-click tokens, exactly as the
     // Nextion sends them; main.py owns the behavior (MMI hold timing for
     // BT_POWER, pairing mode for BT_PAIR) and already debounces repeated
     // BT_EBIND bond-wipe presses firmware-side.
-    lv_obj_add_event_cb(make_button(LV_SYMBOL_POWER "  Power", X0, Y2, W, H),
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_POWER "  Power", X0, Y1, W, H),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_POWER");
-    lv_obj_add_event_cb(make_button(LV_SYMBOL_BLUETOOTH "  Pair", X1, Y2, W, H),
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_BLUETOOTH "  Pair", X1, Y1, W, H),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_PAIR");
-    lv_obj_add_event_cb(make_button(LV_SYMBOL_TRASH "  E-Bind", X2, Y2, W, H),
+    lv_obj_add_event_cb(make_button(LV_SYMBOL_TRASH "  E-Bind", X2, Y1, W, H),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_EBIND");
+
+    g_volume_hint = make_label("Slide to adjust volume", 324, 344,
+                               &lv_font_montserrat_14, 0xBAC7D3);
+    lv_obj_set_width(g_volume_hint, 336);
+    lv_obj_set_style_text_align(g_volume_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_t *slider = lv_slider_create(scr);
+    lv_obj_set_pos(slider, 340, 403);
+    lv_obj_set_size(slider, 304, 10);
+    lv_slider_set_range(slider, -5, 5);
+    lv_slider_set_value(slider, 0, LV_ANIM_OFF);
+    lv_obj_set_ext_click_area(slider, 20);
+    lv_obj_add_flag(slider, LV_OBJ_FLAG_PRESS_LOCK);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(0x415468), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(0x415468), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(slider, lv_color_hex(0xE8EAED), LV_PART_KNOB);
+    lv_obj_set_style_pad_all(slider, 10, LV_PART_KNOB);
+    lv_obj_set_style_shadow_width(slider, 0, LV_PART_KNOB);
+    lv_obj_set_style_border_width(slider, 0, LV_PART_KNOB);
+    lv_obj_add_event_cb(slider, cb_volume_slider, LV_EVENT_ALL, nullptr);
+    make_label("-", 320, 398, &lv_font_montserrat_18, 0x9AAAB8);
+    make_label("+", 660, 398, &lv_font_montserrat_18, 0x9AAAB8);
+
+    g_status_label = make_label("Ready. Slide left or right, then release.", 24, 456,
+                                &lv_font_montserrat_12, 0x9AAAB8);
+    lv_obj_set_width(g_status_label, 752);
+    lv_label_set_long_mode(g_status_label, LV_LABEL_LONG_DOT);
 }
 
 // ----- Arduino entry points ---------------------------------------------------
@@ -275,7 +388,7 @@ void setup() {
     Serial0.begin(115200);
     delay(200);
     rlog("");
-    rlog("[remote] BM83 remote bring-up booting (built %s %s)", __DATE__, __TIME__);
+    rlog("[remote] BM83 Remote booting (built %s %s)", __DATE__, __TIME__);
 
     display_init();
     rlog("[remote] display_init ok");
@@ -316,7 +429,7 @@ void setup() {
     battery_init(rlog);
 
     build_ui();
-    rlog("[remote] UI built; panel should show the button grid now");
+    rlog("[remote] UI built; compact controls and relative-volume slider ready");
 }
 
 // Backlight on/off is the panel's biggest load step: report every change to
@@ -342,6 +455,13 @@ void loop() {
     static uint32_t last_heartbeat = 0;
 
     lv_timer_handler();  // a tap may wake the dimmed screen here
+    const int volume_direction = g_volume_adjustment.direction_due(millis());
+    if (volume_direction != 0) {
+        const bool delivered = note_token(volume_direction > 0 ? "BT_VOLUP" : "BT_VOLDN");
+        // Use completion time: radio retries/rescans can take much longer
+        // than a normal send. Never catch up by bursting delayed HID keys.
+        g_volume_adjustment.on_sent(millis(), delivered);
+    }
     report_backlight_change();
     const bool sleep_due = screen_idle_tick(SCREEN_DIM_AFTER_MS);  // may dim
     report_backlight_change();
@@ -355,6 +475,7 @@ void loop() {
         // battery every loop (PR #157 review).
         poll_battery();
         if (screen_idle_tick(SCREEN_DIM_AFTER_MS)) {
+            g_volume_adjustment.cancel();
             screen_light_sleep();       // blocks until BOOT is pressed
             report_backlight_change();  // the backlight is back on
             rlog("[power] woke from light sleep (BOOT)");
