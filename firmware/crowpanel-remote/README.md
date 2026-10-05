@@ -59,15 +59,20 @@ remote so its screen can show what is playing.
 
 ## Build & flash
 
+Identify the CrowPanel's current COM port from its CH340 (`1A86:7523`)
+before uploading. The example uses the verified bench port `COM3`; replace
+it if the panel's current port differs.
+
 shell (PowerShell, B-Intel)
 ```
-cd C:\Users\brian\Repos\BM83-ESP32-S3-Nextion\firmware\crowpanel-remote; pio run -t upload
+cd C:\Users\brian\Repos\BM83-ESP32-S3-Nextion\firmware\crowpanel-remote
+pio run -t upload --upload-port COM3
 ```
 
 - Flash from Windows, not WSL (COM access; old apt platformio is broken).
-- `select_port.py` resolves a single CH340 (`1A86:7523`) automatically.
-  Confirm that this adapter is the CrowPanel before uploading, and use
-  `--upload-port COMx` explicitly. If no CH340 or multiple adapters are
+- Although `select_port.py` can select a single adapter automatically,
+  explicitly specifying the verified port is recommended. If no CH340
+  or multiple adapters are
   found, stop and identify the panel rather than relying on PlatformIO's
   fallback discovery. The audio board's native CircuitPython console
   uses a different VID:PID (`303A:7003`).

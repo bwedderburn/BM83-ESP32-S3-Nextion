@@ -194,11 +194,16 @@ static bool note_token(const char *token) {
     // delivery status (ok = the unit's radio ACKed one of the attempts).
     rlog("[TOKEN] %s (#%lu) | link %s", token, (unsigned long)g_token_count,
          espnow_link_status_str());
-    const bool delivered = strcmp(espnow_link_status_str(), "ok") == 0;
+    const char *status = espnow_link_status_str();
+    const bool delivered = strcmp(status, "ok") == 0;
+    const char *message = delivered ? "sent"
+                        : strcmp(status, "off") == 0
+                            ? "remote wireless unavailable; restart remote"
+                            : "no response; check the audio unit";
     if (g_status_label) {
         lv_label_set_text_fmt(g_status_label,
                               "%s - %s", action_name(token),
-                              delivered ? "sent" : "no response; check the audio unit");
+                              message);
         lv_obj_set_style_text_color(g_status_label,
                                     lv_color_hex(delivered ? 0x9AAAB8 : COLOR_WARN), 0);
     }
