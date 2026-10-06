@@ -20,7 +20,7 @@ oversize/reset/recovery test and parser fix are already recorded in the open
 `code-health` issue #146; this audit does not duplicate that issue.
 
 This remains a firmware behavior change and must be verified with BM83 serial
-captures before deployment.
+captures on the unit before merge.
 
 ### P-02 — Non-ASCII sanitizer fallback
 
@@ -33,14 +33,17 @@ that its output stays within ASCII.
 
 The normal firmware token parser is bounded and tolerant of fragmentation:
 `read()` consumes only available bytes, limits UART reads to 256 bytes, caps the
-RX buffer, and accepts only exact allowlisted tokens or a token at a NUL
-boundary. No additional token-parsing weakness was confirmed. The separate
+RX buffer, and accepts only allowlisted tokens. A token is accepted either
+exactly or after a NUL boundary, after at most one known status byte is
+stripped from each edge (`_extract_token()`), and with an optional trailing
+`0x66` + page-id page-return sequence removed (`_is_token_frame()`). No additional token-parsing weakness was confirmed. The separate
 `process_bytes()` helper is only called by host tests and is not a runtime UART
 input path.
 
-#### Proposed `code-health` issue
+#### `code-health` issue
 
-**Title:** `utils: keep sanitized fallback text within ASCII`
+Filed as [#165](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/issues/165)
+(`utils: keep sanitized fallback text within ASCII`).
 
 **Failing-test sketch:**
 
@@ -62,13 +65,9 @@ minimal proposed fix is to use an ASCII fallback in both early/empty cases:
 +        s = "-"
 ```
 
-Retain the behavior change behind the normal review/test gate; it does not
-require protocol hardware validation, but verify the emitted command stays
-ASCII in a host test.
-
-The available GitHub tools in this session support listing and reading issues,
-but not creating them. Thus P-02 is a ready-to-file issue draft, not a filed
-issue.
+This changes firmware under `firmware/circuitpython/lib/`, so it stays behind
+the normal gate: rerun `build_mpy.sh`, verify in a host test that the emitted
+command stays ASCII, and check the display on the unit before merge.
 
 ## Verification
 
