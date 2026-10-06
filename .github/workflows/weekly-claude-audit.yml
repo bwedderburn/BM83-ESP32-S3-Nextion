@@ -54,7 +54,7 @@ jobs:
           python -m pip install -r tools/mcp/repo_health/requirements.txt
 
       - name: Run Claude audit
-        uses: anthropics/claude-code-action@12dd8d74c712f5f3669365b2369b558c495b1104 # v1
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1
         env:
           GH_TOKEN: ${{ secrets.GH_AGENT_PAT || github.token }}
         with:
