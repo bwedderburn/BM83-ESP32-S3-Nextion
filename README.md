@@ -29,7 +29,8 @@ firmware/circuitpython/
     │   └── display.py       # Nextion screen interface
     └── utils/
         ├── common.py        # Shared helpers (dprint, formatting)
-        └── compat.py        # Compatibility helpers
+        ├── compat.py        # Compatibility helpers
+        └── ticks.py         # Wrap-safe ms ticks for sub-second timers
 
 dist/circuitpython/
 ├── main.py                  # Optimized deployment entry point (.py)
@@ -214,6 +215,8 @@ The mitigations below are already in code and should be treated as current prote
   - Critical-section windows gate overlapping heavy BLE operations.
   - Pairing/advertising/erase paths use retry accounting and bounded backoff.
   - E-BIND handling is deferred/throttled (`request_erase_bonds`) to avoid re-entrant erase flow.
+  - The erase itself is staged across `tick()` calls (>= 50 ms settle per step) instead of
+    sleeping inside the main loop, so the UARTs keep being serviced during a bond wipe.
 
 - **Metadata scheduling guard during BLE-critical windows** in `firmware/circuitpython/main.py`.
   - `schedule_attrs_with_ble_guard(...)` delays AVRCP attribute requests when BLE is in a critical section.
