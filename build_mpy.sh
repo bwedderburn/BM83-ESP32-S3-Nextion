@@ -20,7 +20,12 @@ SRC_LIB_DIR="${SRC_DIR}/lib"
 DIST_DIR="${ROOT_DIR}/dist/circuitpython"
 DIST_LIB_DIR="${DIST_DIR}/lib"
 
-# Allow override (CI will set MPY_CROSS explicitly)
+# Allow override (CI will set MPY_CROSS explicitly). Otherwise prefer the
+# compiler scripts/fetch_mpy_cross.sh installs, then fall back to PATH.
+FETCHED_MPY_CROSS="${ROOT_DIR}/tools/mpy-cross/mpy-cross"
+if [[ -z "${MPY_CROSS:-}" && -x "${FETCHED_MPY_CROSS}" ]]; then
+  MPY_CROSS="${FETCHED_MPY_CROSS}"
+fi
 MPY_CROSS="${MPY_CROSS:-mpy-cross}"
 
 # mpy-cross optimization level. -O2 strips docstrings and asserts which
@@ -82,6 +87,9 @@ fi
 # -------------------------
 # Clean + create dist dirs
 # -------------------------
+# BUILD_INFO.txt goes too: a build that fails part-way must not leave the
+# previous build's metadata describing a half-written dist/circuitpython.
+rm -f "${BUILD_INFO_FILE}"
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}" "${DIST_LIB_DIR}"
 
@@ -141,7 +149,9 @@ while IFS= read -r -d '' py_file; do
 
   out_file="${DIST_LIB_DIR}/${rel_path%.py}.mpy"
   mkdir -p "$(dirname "${out_file}")"
-  "${MPY_CROSS}" -O"${MPY_CROSS_OPT_LEVEL}" -o "${out_file}" "${py_file}"
+  # -s: embed the device-relative name, not the absolute host path, so the
+  # output does not depend on where the repo is checked out (issue #148).
+  "${MPY_CROSS}" -O"${MPY_CROSS_OPT_LEVEL}" -s "lib/${rel_path}" -o "${out_file}" "${py_file}"
 done < <(find "${SRC_LIB_DIR}" -type f -name "*.py" -print0)
 
 # -------------------------

@@ -1,13 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-# Download the pinned CircuitPython mpy-cross (tools/mpy_cross_pin.env) and
-# verify its sha256 and reported version before it is used.
+# Download the pinned CircuitPython mpy-cross (tools/mpy_cross_pin.env),
+# verify its sha256 before installing it, then print its reported version
+# (build_mpy.sh is what enforces that version).
 #
 # Usage: scripts/fetch_mpy_cross.sh [output_path]
 #   output_path defaults to tools/mpy-cross/mpy-cross
 #
-# Then build with:  MPY_CROSS=tools/mpy-cross/mpy-cross ./build_mpy.sh
+# Then build with:  ./build_mpy.sh  (it picks up tools/mpy-cross/mpy-cross)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PIN_FILE="${ROOT_DIR}/tools/mpy_cross_pin.env"
