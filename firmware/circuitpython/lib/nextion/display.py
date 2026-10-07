@@ -79,7 +79,7 @@ class Nextion:
         "_tx_interval_ms",
         "_max_queue_size",
         "_last_token_at",
-        "_token_throttle_s",
+        "_token_throttle_ms",
         "_last_token",
     )
     def __init__(self, uart=None):
@@ -100,8 +100,9 @@ class Nextion:
         self._tx_interval_ms = 35
         self._max_queue_size = 50  # Prevent unbounded growth
 
-        self._last_token_at = -1.0  # Initialize to past to allow first token
-        self._token_throttle_s = 0.15  # Duplicate tokens within this window are dropped
+        # Duplicate-token dedupe on ticks_ms(), like TX pacing (issue #149).
+        self._last_token_at = None  # ticks_ms() of the last accepted token; None = none yet
+        self._token_throttle_ms = 150  # Duplicate tokens within this window are dropped
         self._last_token = None  # Track last token value for smarter throttling
 
     # Properties for test compatibility
@@ -253,10 +254,10 @@ class Nextion:
 
             clean_token = self._is_token_frame(frame)
             if clean_token:
-                now = time.monotonic()
+                now = ticks_ms()
                 # Throttle only duplicate tokens within the window.
                 if (
-                    (now - self._last_token_at) < self._token_throttle_s
+                    ticks_recent(now, self._last_token_at, self._token_throttle_ms)
                     and clean_token == self._last_token
                 ):
                     continue
