@@ -72,9 +72,15 @@ temporary `code.py` that runs the unchanged production `main.main()` with DEBUG
 logging. It adds device millisecond tick timestamps to debug messages. Back up any
 existing `code.py` and `main.py`, explicitly reload to start the wrapper, then
 restore the original entrypoint state and reload again when finished. The wrapper
-disables autoreload during capture. Logging changes allocation and execution timing,
-so use this mode for protocol/state evidence rather than a production performance
-verdict. Tick values wrap at `2**29` ms; use `utils.ticks.ticks_diff()` for intervals.
+sets `supervisor.runtime.autoreload = False`. CircuitPython keeps that setting
+across soft reloads (Ctrl-D or `supervisor.reload()`) and turns autoreload back on
+only after a hard reset or power-up. So a soft reload after restoration leaves
+production running with "Auto-reload is off", and later `deploy.sh` copies are not
+picked up. After restoring, either set `supervisor.runtime.autoreload = True` in
+the REPL before the final Ctrl-D, or finish with an ESP32 hard reset (source paused).
+Logging changes allocation and execution timing, so use this mode for
+protocol/state evidence rather than a production performance verdict. Tick values
+wrap at `2**29` ms; use `utils.ticks.ticks_diff()` for intervals.
 
 `tools/bench_a2dp_reconnect_entrypoint.py` is a separate, experimental temporary
 `code.py` for one unit-initiated A2DP recovery trial. Pause source playback before
@@ -96,9 +102,16 @@ an unexpected power transition. It holds ordinary AVRCP and probe traffic during
 the deliberate disconnect. It never initiates pairing, bond erase, AUX gain,
 PLAY, or a power cycle. Command acceptance and fresh profile events are recorded
 separately from the participant's audible result. Even a `Read_Link_Status`
-streaming flag does not prove sound output. Both wrappers use CircuitPython's
-`supervisor.runtime.autoreload = False`; restore the prior entrypoint state and
-deliberately reload after testing.
+streaming flag does not prove sound output. All four temporary entrypoints use
+CircuitPython's `supervisor.runtime.autoreload = False`; restore the prior
+entrypoint state, re-enable autoreload as described above, and deliberately reload
+after testing.
+
+`deploy.sh` copies only `main.py` and `lib/`. It neither removes nor warns about
+a leftover `code.py`, and CircuitPython runs the first of `code.txt`, `code.py`,
+`main.py`, and `main.txt` it finds. A forgotten bench `code.py` therefore keeps
+wrapping every later deploy. Confirm that `code.py` is absent, or back to its
+backed-up content, before deploying or ending a session.
 
 `tools/bench_clean_shutdown_entrypoint.py` tests a separate prevention hypothesis.
 One qualifying user OFF initiates a fresh single-source A2DP/AVRCP snapshot,

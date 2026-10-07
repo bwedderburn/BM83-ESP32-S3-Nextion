@@ -129,9 +129,15 @@ class CleanShutdownTrial:
                 self.failure = "invalid snapshot length"
             else:
                 self.snapshot_data = bytes(params)
-        elif op == 0x00 and len(params) >= 2:
+        elif op == 0x00 and params:
             expected = {"snapshot": 0x0D, "pause_ack": 0x04, "disconnect": 0x18}.get(self.phase)
             if params[0] != expected:
+                return
+            if len(params) != 2:
+                # Command_ACK is exactly [command, status]; poll() checks only
+                # framing/checksum. Latch so a valid ACK in the batch cannot win.
+                self.log("command ACK: 0x%02X invalid raw:" % params[0], " ".join("%02X" % b for b in params))
+                self.failure = "invalid command 0x%02X ACK length" % params[0]
                 return
             self.log("command ACK: 0x%02X status=0x%02X" % (params[0], params[1]))
             if params[1] != 0:

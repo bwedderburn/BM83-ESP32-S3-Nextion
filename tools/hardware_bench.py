@@ -30,6 +30,13 @@ BAUDRATE = 115200
 READ_TIMEOUT_S = 0.2
 MAX_LINE_CHARS = 16384
 MAX_EVIDENCE_SAMPLES = 50
+# C0 (except TAB), DEL and C1 controls: ESC/OSC/CSI, BEL, CR and 8-bit CSI.
+_TERMINAL_CONTROLS = re.compile(r"[\x00-\x08\x0a-\x1f\x7f-\x9f]")
+
+
+def inert_echo_text(text):
+    """Escape terminal controls for the operator echo; logs keep raw text."""
+    return _TERMINAL_CONTROLS.sub(lambda m: "\\x%02x" % ord(m.group()), text)
 
 
 def utc_timestamp():
@@ -150,7 +157,10 @@ def capture(device, duration_s, serial_factory, log_file, marker_queue=None,
                     event, operation=operation, error="%s: %s" % (type(exc).__name__, exc)))
         if echo is not None:
             try:
-                echo(rendered.rstrip("\n"))
+                # Device text must not drive the operator's terminal (OSC 52
+                # clipboard, CSI redraws, mid-line CR overwrite). Only the
+                # CRLF terminator is dropped; the evidence log stays raw.
+                echo(inert_echo_text(rendered.rstrip("\r\n")))
             except Exception:
                 # A cp1252 console or closed stdout pipe must not stop the
                 # UTF-8 log or get misclassified as a device disconnect.

@@ -197,6 +197,56 @@ def test_command_rejection_aborts_without_retry(bench, command):
     assert bench.uart.writes == sent
 
 
+def reach_command_phase(bench, phase):
+    """Reach each phase with every non-ACK precondition already satisfied."""
+    if phase == "snapshot":
+        user_cycle(bench)
+        event(bench, 0x1E, b"\x02\x02\x00\x00\x00\x00\x00")
+    elif phase == "disconnect":
+        user_cycle(bench)
+        valid_snapshot(bench)
+        event(bench, 0x01, b"\x08\x00")
+    else:
+        enter_quiet(bench)
+        advance(bench, 10000)
+    assert bench.trial.phase == phase
+
+
+@pytest.mark.parametrize("valid_in_batch", ["none", "after", "before"])
+@pytest.mark.parametrize("tail", [b"", b"\x00\xFF"])
+@pytest.mark.parametrize("phase,command", [("snapshot", 0x0D), ("disconnect", 0x18), ("relink", 0x17)])
+def test_malformed_command_ack_length_aborts_each_phase(bench, phase, command, tail, valid_in_batch):
+    reach_command_phase(bench, phase)
+    before = [item for item in bench.uart.writes if item[0] in (0x0D, 0x17, 0x18)]
+    events = [(0x00, bytes((command,)) + tail)]
+    if valid_in_batch != "none":
+        events.insert(len(events) if valid_in_batch == "after" else 0, (0x00, bytes((command, 0x00))))
+    if phase == "relink":
+        events.append((0x01, b"\x06\x00"))
+    event_batch(bench, events)
+    assert bench.trial.phase == "aborted"
+    assert bench.trial.outcome == "invalid command ACK length"
+    advance(bench, 40000)
+    assert [item for item in bench.uart.writes if item[0] in (0x0D, 0x17, 0x18)] == before
+
+
+@pytest.mark.parametrize("state", [0x06, 0x0B, 0x15])
+@pytest.mark.parametrize("batched", [False, True])
+def test_fresh_establishment_during_snapshot_aborts_before_disconnect(bench, state, batched):
+    user_cycle(bench)
+    events = [(0x1E, b"\x02\x02\x00\x00\x00\x00\x00"), (0x01, bytes((state, 0x00))),
+              (0x00, b"\x0D\x00")]
+    if batched:
+        event_batch(bench, events)
+    else:
+        for item in events:
+            event(bench, *item)
+    assert bench.trial.phase == "aborted"
+    assert bench.trial.outcome == "fresh link establishment during snapshot"
+    advance(bench, 40000)
+    assert not any(op in (0x17, 0x18) for op, _ in bench.uart.writes)
+
+
 def test_auto_reconnect_completes_quiet_gap_without_redundant_linkback(bench):
     enter_quiet(bench)
     event(bench, 0x01, b"\x06\x00")

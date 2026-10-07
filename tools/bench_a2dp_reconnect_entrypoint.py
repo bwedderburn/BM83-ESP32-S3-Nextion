@@ -103,17 +103,25 @@ class ReconnectTrial:
                     self.snapshot_data = bytes(params)
             elif self.healthy_started is not None:
                 self.healthy_reply = True
-        elif op == 0x00 and len(params) >= 2:
-            self._observe_ack(params[0], params[1])
+        elif op == 0x00 and params:
+            self._observe_ack(params)
         elif op == 0x01 and params:
             self._observe_state(params[0])
         elif op == 0x23 and len(params) >= 2 and self.phase == "relink":
             if params[0] == 0x02 and params[1] != 0x00:
                 self.finish("A2DP linkback reported failure", aborted=True)
 
-    def _observe_ack(self, command, status):
+    def _observe_ack(self, params):
+        # Command_ACK is exactly [command, status]; poll() checks only framing
+        # and checksum, so any other length is malformed and never authorizes.
+        command = params[0]
+        status = params[1] if len(params) == 2 else None
         expected = {"snapshot": 0x0D, "disconnect": 0x18, "relink": 0x17}.get(self.phase)
         if command == expected:
+            if status is None:
+                self.log("command ACK: 0x%02X invalid raw:" % command, " ".join("%02X" % b for b in params))
+                self.finish("invalid command ACK length", aborted=True)
+                return
             self.log("command ACK: 0x%02X status=0x%02X" % (command, status))
             if status != 0:
                 self.finish("command rejected", aborted=True)
@@ -123,7 +131,10 @@ class ReconnectTrial:
                 self.command_ack = True
         elif command == 0x0D and self.healthy_started is not None:
             self.healthy_ack = status == 0
-            if status != 0:
+            if status is None:
+                self.log("boot snapshot ACK has invalid length")
+                self.healthy_started = None
+            elif status != 0:
                 self.log("boot snapshot command rejected:", status)
                 self.healthy_started = None
 
@@ -132,6 +143,11 @@ class ReconnectTrial:
             self.finish("OFF/AUX source observed", aborted=True)
             return
         if not self.exclusive:
+            return
+        if self.phase == "snapshot" and state in (0x06, 0x0B, 0x15):
+            # A2DP/profile/ACL establishment can invalidate the single-database
+            # snapshot, even in its own poll batch. 0x18/0x04 hits every A2DP link.
+            self.finish("fresh link establishment during snapshot", aborted=True)
             return
         if state in (0x08, 0x11):
             self.saw_down = True

@@ -210,6 +210,29 @@ def test_unicode_osc_and_failing_host_echo_do_not_abort_capture():
     assert serial.closed
 
 
+def test_terminal_escapes_stay_in_log_but_are_inert_in_host_echo():
+    clock = Clock()
+    # OSC 52 clipboard write, CSI clear-screen, 8-bit CSI, BEL, and a
+    # mid-line carriage return that could overwrite the displayed line.
+    text = ("\x1b]52;c;cHduZWQ=\x07\x1b[2J\x9b31m\x1b]0;\U0001f40d title\x1b\\"
+            "[BM83 RX] alive\rspoof\x07\r\n")
+    serial = FakeSerial(clock, [text.encode("utf-8")])
+    log = io.StringIO()
+    echoed = []
+    summary = bench.capture(device(), 0.3, lambda **_: serial, log, clock=clock, echo=echoed.append)
+    assert summary["completion"] == "duration_elapsed"
+    assert summary["evidence_counts"]["heartbeat"] == 1
+    # The evidence log keeps every received character unchanged.
+    assert "RX " + text.rstrip("\n") + "\n" in log.getvalue()
+    rx_echo = [line for line in echoed if " RX " in line]
+    assert len(rx_echo) == 1
+    for line in echoed:
+        assert not any(ord(ch) < 0x20 and ch != "\t" or 0x7F <= ord(ch) <= 0x9F for ch in line)
+    assert "\\x1b]52;c;cHduZWQ=\\x07\\x1b[2J\\x9b31m" in rx_echo[0]
+    assert "\U0001f40d title" in rx_echo[0]
+    assert rx_echo[0].endswith("[BM83 RX] alive\\x0dspoof\\x07")
+
+
 def test_classifies_actual_firmware_diagnostic_messages():
     cases = {
         "[BM83 RX] SILENT for 5.0s | free=12000": {"heartbeat", "bm83_rx_silent"},

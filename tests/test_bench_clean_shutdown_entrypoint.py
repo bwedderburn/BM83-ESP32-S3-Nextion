@@ -207,6 +207,27 @@ def test_command_rejection_falls_back_once(bench, phase, command):
     assert bench.uart.writes == sent
 
 
+@pytest.mark.parametrize("valid_in_batch", ["none", "after", "before"])
+@pytest.mark.parametrize("tail", [b"", b"\x00\xFF"])
+@pytest.mark.parametrize("phase,command", [("snapshot", 0x0D), ("pause_ack", 0x04), ("disconnect", 0x18)])
+def test_malformed_command_ack_length_latches_fallback(bench, phase, command, tail, valid_in_batch):
+    reach(bench, phase)
+    before = [item for item in bench.uart.writes if item[0] in (0x04, 0x18)]
+    events = [(0x00, bytes((command,)) + tail)]
+    if valid_in_batch != "none":
+        events.insert(len(events) if valid_in_batch == "after" else 0, (0x00, bytes((command, 0x00))))
+    if phase == "snapshot":
+        events.insert(0, (0x1E, b"\x04\x07\x00\x01\x00\x01\x00"))
+    elif phase == "disconnect":
+        events.insert(0, (0x01, b"\x08\x00"))
+    event_batch(bench, events)
+    assert bench.trial.outcome == "fallback: invalid command 0x%02X ACK length" % command
+    assert bench.trial.prepared is False
+    finish_off(bench)
+    advance(bench, 40000)
+    assert [item for item in bench.uart.writes if item[0] in (0x04, 0x18)] == before
+
+
 @pytest.mark.parametrize("phase", ["snapshot", "pause_ack", "disconnect"])
 def test_phase_timeouts_fall_back_to_original_off(bench, phase):
     reach(bench, phase)
