@@ -5,6 +5,7 @@ compiler in a temporary copy of the source tree, so the tracked dist/ is never
 touched.
 """
 
+import hashlib
 import os
 import re
 import shutil
@@ -215,3 +216,87 @@ def test_build_info_marks_uncommitted_firmware_sources(tmp_path):
         f.write("# local edit\n")
     assert _run_build(root, stub).returncode == 0
     assert "source_commit=%s-dirty\n" % head in info.read_text(encoding="utf-8")
+
+
+SHA256SUM = shutil.which("sha256sum")
+FAKE_KEY = "bin/mpy-cross/linux-amd64/mpy-cross-linux-amd64-0.0.0.static"
+FAKE_PAYLOAD = b"#!/bin/bash\necho 'CircuitPython 0.0.0 fake mpy-cross'\n"
+
+
+def _fetch_tree(tmp_path, pinned_sha):
+    """Copy fetch_mpy_cross.sh beside a pin file, with curl/uname stubbed on PATH."""
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    (root / "tools").mkdir()
+    shutil.copy2(REPO_ROOT / "scripts" / "fetch_mpy_cross.sh", root / "scripts" / "fetch_mpy_cross.sh")
+    (root / "tools" / PIN_FILE.name).write_bytes(
+        (
+            "MPY_CROSS_VERSION=0.0.0\n"
+            "MPY_CROSS_LINUX_AMD64_KEY=%s\n"
+            "MPY_CROSS_LINUX_AMD64_SHA256=%s\n" % (FAKE_KEY, pinned_sha)
+        ).encode("utf-8")
+    )
+    payload = tmp_path / "payload"
+    payload.write_bytes(FAKE_PAYLOAD)
+
+    shims = tmp_path / "shims"
+    shims.mkdir()
+    # Offline: curl records the URL and writes the payload to its -o target.
+    # uname reports linux-amd64 so the platform gate passes on any host.
+    for name, body in (
+        (
+            "curl",
+            'out=""; url=""\n'
+            "while [[ $# -gt 0 ]]; do\n"
+            '  case "$1" in -o) shift; out="$1" ;; -*) ;; *) url="$1" ;; esac\n'
+            "  shift\n"
+            "done\n"
+            'printf "%s" "$url" > "' + str(tmp_path / "curl_url") + '"\n'
+            'cat "' + str(payload) + '" > "$out"\n',
+        ),
+        ("uname", 'case "$1" in -s) echo Linux ;; -m) echo x86_64 ;; esac\n'),
+    ):
+        shim = shims / name
+        shim.write_bytes(("#!/bin/bash\n" + body).encode("utf-8"))
+        shim.chmod(shim.stat().st_mode | stat.S_IXUSR)
+    return root, shims
+
+
+def _run_fetch(root, shims, out):
+    env = os.environ.copy()
+    env["PATH"] = str(shims) + os.pathsep + env.get("PATH", "")
+    return subprocess.run(
+        [BASH, str(root / "scripts" / "fetch_mpy_cross.sh"), str(out)],
+        cwd=root, env=env, capture_output=True, text=True,
+    )
+
+
+@needs_bash
+@pytest.mark.skipif(SHA256SUM is None, reason="sha256sum not available")
+def test_fetch_installs_download_when_sha256_matches(tmp_path):
+    root, shims = _fetch_tree(tmp_path, hashlib.sha256(FAKE_PAYLOAD).hexdigest())
+    out = tmp_path / "bin" / "mpy-cross"
+
+    result = _run_fetch(root, shims, out)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "curl_url").read_text(encoding="utf-8").endswith("/" + FAKE_KEY)
+    assert out.read_bytes() == FAKE_PAYLOAD
+    assert os.access(out, os.X_OK)
+    assert sorted(p.name for p in out.parent.iterdir()) == ["mpy-cross"]
+
+
+@needs_bash
+@pytest.mark.skipif(SHA256SUM is None, reason="sha256sum not available")
+def test_fetch_rejects_sha256_mismatch_without_touching_target(tmp_path):
+    root, shims = _fetch_tree(tmp_path, hashlib.sha256(b"something else").hexdigest())
+    out = tmp_path / "bin" / "mpy-cross"
+    out.parent.mkdir()
+    out.write_bytes(b"previously installed compiler\n")
+
+    result = _run_fetch(root, shims, out)
+
+    assert result.returncode != 0
+    assert "sha256 mismatch" in result.stderr
+    assert out.read_bytes() == b"previously installed compiler\n"
+    assert sorted(p.name for p in out.parent.iterdir()) == ["mpy-cross"]
