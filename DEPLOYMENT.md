@@ -143,14 +143,14 @@ Ensure required libraries are still present in `CIRCUITPY/lib/`:
 
 ### Critical Compatibility Warning (`mpy-cross` vs firmware)
 
-The `mpy-cross` version used to compile `.mpy` files must match the CircuitPython firmware version running on the device.
+The `mpy-cross` version used to compile `.mpy` files must match the CircuitPython firmware version running on the device. The build pins it in `tools/mpy_cross_pin.env` (version + sha256); `build_mpy.sh` rejects any other version, and `dist/BUILD_INFO.txt` records which compiler produced a build.
 
 If versions do not match, you'll typically see:
 - `ValueError: incompatible .mpy file`
 
 If that happens:
-1. Install the matching `mpy-cross` version.
-2. Rebuild with `./build_mpy.sh`.
+1. Check the device's `boot_out.txt` against `MPY_CROSS_VERSION` in `tools/mpy_cross_pin.env`. If the device was upgraded, bump the pin (key + sha256) deliberately.
+2. Fetch the pinned compiler with `./scripts/fetch_mpy_cross.sh`, then rebuild with `MPY_CROSS=tools/mpy-cross/mpy-cross ./build_mpy.sh`.
 3. Redeploy `dist/circuitpython/`.
 
 ## Quick Rollback: Optimized (.mpy) → Baseline (.py)

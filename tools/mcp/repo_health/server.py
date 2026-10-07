@@ -288,7 +288,7 @@ def repo_dependency_report() -> str:
                 report["circuitpython_refs"].append({"file": name, "version": ver})
     report["notes"] = [
         "Dev tools (flake8/pytest/bandit) are installed unpinned in CI — resolve 'current' with pip index/PyPI.",
-        "build-circuitpython-dist.yml fetches the latest mpy-cross from S3 at build time (unpinned).",
+        "mpy-cross is pinned (version + sha256) in tools/mpy_cross_pin.env; it must match the device's CircuitPython.",
         "Python 3.9 reached end-of-life in October 2025.",
     ]
     return _json(report)
