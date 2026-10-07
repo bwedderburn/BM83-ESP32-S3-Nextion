@@ -3,6 +3,7 @@ import gc
 from utils.common import dprint
 from utils import common as _utils_common
 from utils.compat import const
+from utils.ticks import ticks_add, ticks_less, ticks_ms
 
 _AVRCP_ATTR_IDS = (1, 2, 3, 6, 4, 5, 7)
 _AVRCP_ATTR_PAYLOAD = bytes([len(_AVRCP_ATTR_IDS)]) + b"".join(
@@ -209,7 +210,12 @@ class Bm83:
         self._gea_frag_timeout_s = 5.0
         # Non-blocking power state machine
         self._power_state = None  # None, "on_press", "on_init", "off_press"
-        self._power_next_at = 0.0
+        # _power_next_at is a ticks_ms() deadline, not a time.monotonic()
+        # one: the ON press must be held >= ~2 s at the chip (contract 7),
+        # and after days of uptime the float clock's step (0.25-0.5 s)
+        # could cut a 2.2 s hold short enough to abort the boot
+        # (issue #149, R-03). Only read while _power_state is set.
+        self._power_next_at = 0
         # EQ command throttle to prevent rapid-fire from fast button presses
         self._last_eq_cmd_at = 0.0
         self._eq_throttle_s = 0.25  # Min time between EQ commands
@@ -699,7 +705,6 @@ class Bm83:
             # that is actually mid-boot is a no-op, so retrying is safe.
             print("[POWER] retrying ON (previous attempt unconfirmed)")
             self._power_confirm_deadline = 0.0
-        now = time.monotonic()
         self._power_state = "on_press"
         self._explicit_off = False
         # Hold the virtual button through the chip's power-on threshold.
@@ -708,7 +713,7 @@ class Bm83:
         # light) but aborts the boot -- the deterministic two-press
         # pattern reported 2026-08-30. The OFF path always held 1.5s;
         # ON held only 0.2s. 2.2s clears the common 2s threshold.
-        self._power_next_at = now + 2.2
+        self._power_next_at = ticks_add(ticks_ms(), 2200)
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_PRESS]))
 
     def power_off_cmd(self):
@@ -721,9 +726,8 @@ class Bm83:
             # settle the question their way instead of blocking the press.
             print("[POWER] cancelling unconfirmed ON -> powering OFF")
             self._power_confirm_deadline = 0.0
-        now = time.monotonic()
         self._power_state = "off_press"
-        self._power_next_at = now + 1.5  # Wait 1.5s before sending release
+        self._power_next_at = ticks_add(ticks_ms(), 1500)  # Wait 1.5s before sending release
         self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_OFF_PRESS]))
 
     def tick_power(self):
@@ -738,14 +742,15 @@ class Bm83:
                     print("        Check module power; press BT_POWER to retry.")
         if self._power_state is None:
             return
-        now = time.monotonic()
-        if now < self._power_next_at:
+        tnow = ticks_ms()
+        if ticks_less(tnow, self._power_next_at):
             return
+        now = time.monotonic()
         if self._power_state == "on_press":
             # 0.2s elapsed since press, now send release
             self.send(self.OP_MMI_ACTION, bytes([0x00, self.MMI_POWER_ON_RELEASE]))
             self._power_state = "on_init"
-            self._power_next_at = now + 0.5  # Wait 0.5s before init_link
+            self._power_next_at = ticks_add(tnow, 500)  # Wait 0.5s before init_link
         elif self._power_state == "on_init":
             self.init_link()
             # Do NOT claim power_on yet — wait for the chip's own reporting

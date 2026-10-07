@@ -301,7 +301,8 @@ CIRCUITPY/
 │   │   └── ble.py
 │   └── utils/
 │       ├── common.py
-│       └── compat.py
+│       ├── compat.py
+│       └── ticks.py
 ```
 
 ### Serial Terminal Commands

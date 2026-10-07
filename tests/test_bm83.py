@@ -1,5 +1,6 @@
 import time
 from bm83.bm83 import Bm83
+from utils.ticks import ticks_add, ticks_ms
 from tests.test_bm83_uart import MockUART, frame_to_bytes
 
 
@@ -63,7 +64,7 @@ def test_tick_power_on_sequence():
     assert Bm83.MMI_POWER_ON_PRESS in uart.writes[0]
 
     # Simulate 0.2s elapsed, tick should send release and transition to on_init
-    bm._power_next_at = time.monotonic() - 1  # Force immediate
+    bm._power_next_at = ticks_add(ticks_ms(), -1000)  # Force immediate
     bm.tick_power()
     assert bm._power_state == "on_init"
     assert len(uart.writes) == 2  # Release command sent
@@ -71,7 +72,7 @@ def test_tick_power_on_sequence():
     assert Bm83.MMI_POWER_ON_RELEASE in uart.writes[1]
 
     # Simulate 0.5s elapsed, tick should call init_link
-    bm._power_next_at = time.monotonic() - 1
+    bm._power_next_at = ticks_add(ticks_ms(), -1000)
     bm.tick_power()
     assert bm._power_state is None
     # 2026-08-29: power_on is no longer claimed on faith here — the old
@@ -102,7 +103,7 @@ def test_tick_power_off_sequence():
     assert Bm83.MMI_POWER_OFF_PRESS in uart.writes[0]
 
     # Simulate 1.5s elapsed, tick should send release and complete
-    bm._power_next_at = time.monotonic() - 1
+    bm._power_next_at = ticks_add(ticks_ms(), -1000)
     bm.tick_power()
     assert bm._power_state is None
     assert bm.power_on is False
@@ -1380,9 +1381,9 @@ def test_boot_init_deferred_during_confirmation_window(monkeypatch):
     second init_link burst into the chip's boot window right after on_init.
     """
     uart = MockUART()
-    bm = Bm83(uart)
     t = [67000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    bm = Bm83(uart)
     bm.power_on_cmd()
     t[0] += 2.3; bm.tick_power()
     t[0] += 0.55; bm.tick_power()        # confirmation armed
