@@ -158,11 +158,17 @@ done < <(find "${SRC_LIB_DIR}" -type f -name "*.py" -print0)
 # Record build metadata
 # -------------------------
 # Kept beside (not inside) dist/circuitpython so it never lands on CIRCUITPY.
+SOURCE_COMMIT="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
+# Uncommitted firmware sources are what was compiled, so HEAD alone would
+# misattribute the build; mark it.
+if [[ "${SOURCE_COMMIT}" != "unknown" && -n "$(git -C "${ROOT_DIR}" status --porcelain -- firmware/circuitpython 2>/dev/null)" ]]; then
+  SOURCE_COMMIT="${SOURCE_COMMIT}-dirty"
+fi
 {
   echo "mpy_cross_pinned=${MPY_CROSS_VERSION}"
   echo "mpy_cross_version=${MPY_CROSS_VERSION_OUTPUT}"
   echo "mpy_cross_opt_level=${MPY_CROSS_OPT_LEVEL}"
-  echo "source_commit=$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "source_commit=${SOURCE_COMMIT}"
 } > "${BUILD_INFO_FILE}"
 
 echo "✅ MPY build complete: ${DIST_DIR}"

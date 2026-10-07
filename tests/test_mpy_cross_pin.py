@@ -188,3 +188,30 @@ def test_failed_build_does_not_leave_stale_build_info(tmp_path):
 
     assert result.returncode != 0
     assert not (root / "dist" / "BUILD_INFO.txt").exists()
+
+
+GIT = shutil.which("git")
+
+
+@needs_bash
+@pytest.mark.skipif(GIT is None, reason="git not available")
+def test_build_info_marks_uncommitted_firmware_sources(tmp_path):
+    """source_commit gets -dirty when firmware/circuitpython has local edits."""
+    version = _read_pin()["MPY_CROSS_VERSION"]
+    root, stub = _stub_tree(tmp_path, version)
+    git = [GIT, "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run(git + ["init", "-q"], check=True)
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-q", "-m", "base"], check=True)
+    head = subprocess.run(
+        git + ["rev-parse", "HEAD"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    info = root / "dist" / "BUILD_INFO.txt"
+
+    assert _run_build(root, stub).returncode == 0
+    assert "source_commit=%s\n" % head in info.read_text(encoding="utf-8")
+
+    with (root / "firmware" / "circuitpython" / "main.py").open("a", encoding="utf-8") as f:
+        f.write("# local edit\n")
+    assert _run_build(root, stub).returncode == 0
+    assert "source_commit=%s-dirty\n" % head in info.read_text(encoding="utf-8")
