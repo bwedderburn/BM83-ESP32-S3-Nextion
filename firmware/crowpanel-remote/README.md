@@ -8,10 +8,26 @@ solar firmware stays recoverable from that repo at any time.
 
 ## Current stage: Stage 2 — ESP-NOW sender
 
-Nine-button remote layout (Prev / Play-Pause / Next / Vol- / Vol+ / EQ /
-Power / Pair / E-Bind) emitting the **same token vocabulary the Nextion
-sends over UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for
-hold-and-repeat, single tokens otherwise — see `../../NEXTION_SETUP.md`).
+The 800×480 screen is titled **BM83 Remote**. Compact 200×64 secondary
+buttons use 18-pixel labels, with Prev / EQ / Next above Power / Pair /
+E-Bind. The bottom row is **Play/Pause → Vol − → volume slider → Vol +**.
+The 20-pixel title and smaller battery readout have separate header space.
+
+The remote emits the **same token vocabulary the Nextion sends over
+UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for the volume
+buttons' hold-and-repeat, single tokens otherwise — see
+`../../NEXTION_SETUP.md`). Volume buttons release on both finger lift and
+press loss. The existing screen-wake gesture suppression remains in place.
+
+The slider is a **relative adjustment**, not an actual-volume indicator:
+drag left or right to request one to five steps, then release. Its thumb
+returns to center immediately. Standalone `BT_VOLDN` / `BT_VOLUP` tokens
+are sent one at a time, at least 200 ms apart measured from each send's
+completion. New gestures or button presses cancel remaining slider steps;
+press loss cancels the drag. Failed radio delivery or a three-second
+deadline discards unfinished work, so reconnecting cannot replay an old
+queue. The source may still ignore a delivered BLE HID key; counting
+requests cannot establish its actual volume.
 
 Every token is logged to serial AND transmitted over ESP-NOW, unicast to
 the audio unit (unassociated STA mode, power-save off). The unit's WiFi
@@ -27,10 +43,11 @@ heartbeat shows `espnow=<delivered>/<sent> rt=<retries> ch=<channel>`
 - token frame, remote → unit: `BMR1:<seq>:<token>`
 - state frame, unit → remote: `BMS1:<seq>:<key>=<val>` (reserved — Stage 3)
 
-`<seq>` lets the receiver drop duplicates. The status line shows each
-token's delivery: `link: ok` (the unit's radio ACKed it) / `no-ack` (the
-unit is off, out of range, or running firmware without the receiver, whose
-radio stays off) / `off` (ESP-NOW failed to start here). The peer MAC in
+`<seq>` lets the receiver drop duplicates. The footer shows the last
+action and whether it was sent or got no response. Serial logs retain
+the exact token and `ok` / `no-ack` / `off` delivery status. A radio ACK
+only confirms delivery to the peer radio; it does not prove playback,
+audio-unit power state, or a resulting source-volume change. The peer MAC in
 `espnow_link.cpp` is the audio unit's WiFi STA MAC (`DC:B4:D9:0C:6E:8C`,
 printed by the unit's `[REMOTE] ESP-NOW receiver up: own-sta=...` boot
 line) — not the `MAC:` value in its `boot_out.txt`, which differs.
@@ -42,18 +59,23 @@ remote so its screen can show what is playing.
 
 ## Build & flash
 
+Identify the CrowPanel's current COM port from its CH340 (`1A86:7523`)
+before uploading. The example uses the verified bench port `COM3`; replace
+it if the panel's current port differs.
+
 shell (PowerShell, B-Intel)
 ```
-cd C:\Users\brian\Repos\BM83-ESP32-S3-Nextion\firmware\crowpanel-remote; pio run -t upload
+cd C:\Users\brian\Repos\BM83-ESP32-S3-Nextion\firmware\crowpanel-remote
+pio run -t upload --upload-port COM3
 ```
 
 - Flash from Windows, not WSL (COM access; old apt platformio is broken).
-- No `--upload-port` needed: `select_port.py` (wired in via
-  `platformio.ini`) resolves the CrowPanel's CH340 by USB VID:PID
-  (`1A86:7523`) at upload time, so the right port is found wherever it
-  lands — and the BM83 audio board's CircuitPython console
-  (`VID_303A&PID_7003`) can never match. If the panel is unplugged or a
-  second CH340 is attached, the upload refuses to run rather than guess.
+- Although `select_port.py` can select a single adapter automatically,
+  explicitly specifying the verified port is recommended. If no CH340
+  or multiple adapters are
+  found, stop and identify the panel rather than relying on PlatformIO's
+  fallback discovery. The audio board's native CircuitPython console
+  uses a different VID:PID (`303A:7003`).
 - Monitor: `pio device monitor -b 115200`. Logs go to both USB CDC and
   UART0, so the CH340 port always shows them.
 
