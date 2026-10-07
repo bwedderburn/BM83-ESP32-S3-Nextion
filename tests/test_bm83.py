@@ -1602,3 +1602,56 @@ def test_soft_off_reply_events_are_not_power_evidence(monkeypatch):
     bm2 = Bm83(MockUART())
     bm2.note_btm_state(0x06)
     assert bm2.power_on is True
+
+
+def test_empty_metadata_after_reconnect_retries_at_throttle_cadence(monkeypatch):
+    """Pin today's empty-metadata retry cadence after a reconnect (R-09).
+
+    Some centrals answer GetElementAttributes with total_len == 0. main.py then
+    sees primary_metadata_missing() on every 1 Hz GetPlayStatus reply and calls
+    schedule_attrs(0.15). The only brake is _attrs_throttle_s, so the request
+    repeats every ~2 s for as long as the metadata stays empty — there is no
+    backoff yet. This test pins that cadence so a future backoff is a
+    deliberate, visible change (update the expected count when adding one).
+    """
+    uart = MockUART()
+    bm = Bm83(uart)
+    t = [20000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: t[0])
+
+    def gea_requests():
+        return [w for w in uart.writes if w[3] == Bm83.OP_AVRCP_VENDOR_DEP_CMD]
+
+    empty_rsp = bytes([0x20, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00])
+
+    # Reconnect: a teardown clears pending session work, then the link comes back
+    # and main.py's on-connect path schedules the first metadata request at +2.0 s.
+    bm.connected = True
+    bm._next_attrs_at = t[0] + 0.5
+    bm._mark_disconnected()
+    assert bm._next_attrs_at == 0.0
+    assert bm.tick_avrcp_attrs(t[0] + 1.0) is False  # nothing survives the teardown
+    bm.connected = True
+    assert bm.schedule_attrs(2.0) is True
+
+    sent_at = []
+    step = 0.05
+    next_status = t[0] + 1.0
+    end = t[0] + 20.0
+    while t[0] < end:
+        t[0] += step
+        if bm.tick_avrcp_attrs(t[0]):
+            sent_at.append(t[0])
+            # Every request is answered with an empty attribute list.
+            assert bm.parse_gea_0x5d(empty_rsp) is None
+            assert bm._gea_expect_len is None
+        if t[0] >= next_status:
+            next_status += 1.0
+            bm.schedule_attrs(0.15)  # GetPlayStatus reply with title/artist still "—"
+
+    assert len(gea_requests()) == len(sent_at)
+    gaps = [b - a for a, b in zip(sent_at, sent_at[1:])]
+    assert all(g >= bm._attrs_throttle_s for g in gaps)
+    # Current behavior: ~one request every 2 s indefinitely (no backoff).
+    assert len(sent_at) == 10
+    assert all(abs(g - 2.0) < 0.2 for g in gaps)
