@@ -3,7 +3,19 @@ import gc
 from utils.common import dprint
 from utils import common as _utils_common
 from utils.compat import const
-from utils.ticks import ticks_add, ticks_less, ticks_ms
+from utils.ticks import ticks_add, ticks_diff, ticks_due, ticks_less, ticks_ms, ticks_recent
+
+# Every deadline in the AVRCP scheduler families below (notification queue,
+# play-status poll, metadata request) is set at most a few seconds ahead.
+# A ticks_ms() deadline further out than this can only be a stale value that
+# aliased across the 2**29 ms wrap, so ticks_due() treats it as due.
+_SCHED_HORIZON_MS = 60000
+
+
+def _ms(seconds):
+    """Convert a non-negative delay in seconds to whole ms, rounded."""
+    return int(seconds * 1000 + 0.5)
+
 
 _AVRCP_ATTR_IDS = (1, 2, 3, 6, 4, 5, 7)
 _AVRCP_ATTR_PAYLOAD = bytes([len(_AVRCP_ATTR_IDS)]) + b"".join(
@@ -30,10 +42,10 @@ class Bm83:
         "_disconnect_hold_s",
         "_disconnect_deadline",
         "_next_playstatus_at",
-        "_playstatus_period_s",
+        "_playstatus_period_ms",
         "_next_attrs_at",
         "_attrs_not_before",
-        "_attrs_throttle_s",
+        "_attrs_throttle_ms",
         "_last_attrs_req_at",
         "_gea_frag",
         "_gea_expect_len",
@@ -42,16 +54,16 @@ class Bm83:
         "_power_state",
         "_power_next_at",
         "_last_eq_cmd_at",
-        "_eq_throttle_s",
+        "_eq_throttle_ms",
         "_last_track_changed_reg_at",
-        "_track_changed_reg_throttle_s",
+        "_track_changed_reg_throttle_ms",
         "_last_status_changed_reg_at",
-        "_status_reg_throttle_s",
+        "_status_reg_throttle_ms",
         "_last_pos_changed_reg_at",
-        "_pos_reg_throttle_s",
+        "_pos_reg_throttle_ms",
         "_pending_notif_regs",
         "_last_notif_reg_at",
-        "_notif_reg_min_gap_s",
+        "_notif_reg_min_gap_ms",
         "_avrcp_suspended",
         "_avrcp_suspend_at",
         "_avrcp_suspend_max_s",
@@ -186,14 +198,18 @@ class Bm83:
         # _last_connected_seen it is not refreshed by unrelated AVRCP
         # traffic, so a final link-down event cannot leave connected=True.
         self._disconnect_deadline = 0.0
-        self._next_playstatus_at = 0.0
-        self._playstatus_period_s = 1.0
-        self._next_attrs_at = 0.0
+        # AVRCP request scheduling runs on wrap-safe ticks_ms(), not
+        # time.monotonic(): after days of uptime the float clock's step
+        # (125-500 ms) is comparable to these intervals (issue #149, R-03).
+        # None = due now (play status) / nothing pending (attrs) / no floor.
+        self._next_playstatus_at = None
+        self._playstatus_period_ms = 1000
+        self._next_attrs_at = None
         # Hard floor used to protect the A2DP stream-start quiet window.
         # No metadata scheduler is allowed to pull a request before it.
-        self._attrs_not_before = 0.0
-        self._attrs_throttle_s = 1.5
-        self._last_attrs_req_at = 0.0
+        self._attrs_not_before = None
+        self._attrs_throttle_ms = 1500
+        self._last_attrs_req_at = None
         self._gea_frag = bytearray()
         self._gea_expect_len = None
         self._gea_frag_at = 0.0
@@ -208,21 +224,23 @@ class Bm83:
         # could cut a 2.2 s hold short enough to abort the boot
         # (issue #149, R-03). Only read while _power_state is set.
         self._power_next_at = 0
-        # EQ command throttle to prevent rapid-fire from fast button presses
-        self._last_eq_cmd_at = 0.0
-        self._eq_throttle_s = 0.25  # Min time between EQ commands
+        # EQ command throttle to prevent rapid-fire from fast button presses.
+        # This and the re-registration throttles below are ticks_ms()
+        # stamps checked with ticks_recent(); None = never sent.
+        self._last_eq_cmd_at = None
+        self._eq_throttle_ms = 250  # Min time between EQ commands
         # TrackChanged re-registration throttle to prevent feedback loops
-        self._last_track_changed_reg_at = 0.0
-        self._track_changed_reg_throttle_s = 2.0  # Min time between re-registrations
+        self._last_track_changed_reg_at = None
+        self._track_changed_reg_throttle_ms = 2000  # Min time between re-registrations
         # PlaybackStatusChanged / PlaybackPositionChanged re-registration throttles.
         # Some BM83 firmware revs choke on rapid AVRCP register-notification calls
         # during CT-side establishment and silently drop the A2DP profile while
         # leaving the BT link nominally up. Tighter than TrackChanged (2.0 s) since
         # status/position re-arms fire more frequently in steady state.
-        self._last_status_changed_reg_at = 0.0
-        self._status_reg_throttle_s = 0.5
-        self._last_pos_changed_reg_at = 0.0
-        self._pos_reg_throttle_s = 0.5
+        self._last_status_changed_reg_at = None
+        self._status_reg_throttle_ms = 500
+        self._last_pos_changed_reg_at = None
+        self._pos_reg_throttle_ms = 500
         # Deferred AVRCP register-notification queue, serviced by
         # tick_notif_regs(). Filled by schedule_avrcp_notifications() at the
         # CONNECTED edge so the initial registrations go out spaced apart
@@ -231,9 +249,12 @@ class Bm83:
         # silently drop the A2DP profile while leaving the BT link up (the
         # reregister throttles above exist for the same reason; this applies
         # the same medicine to the *initial* burst on connect).
+        # Queue items are (ticks_ms deadline, event_id, interval_s); the
+        # minimum gap is enforced on ticks too (contract 5: the stagger must
+        # survive multi-day uptime, when the float clock steps in 0.25-0.5 s).
         self._pending_notif_regs = []
-        self._last_notif_reg_at = 0.0
-        self._notif_reg_min_gap_s = 0.45
+        self._last_notif_reg_at = None
+        self._notif_reg_min_gap_ms = 450
         # True while a teardown state (AVRCP_DOWN_STATES) has been seen and
         # no connected state has arrived since. Gates tick_avrcp /
         # tick_avrcp_attrs / tick_notif_regs so we stop sending AVRCP
@@ -356,7 +377,7 @@ class Bm83:
         self._hb_silence_warn_s = 3.0   # Mark RX as SILENT after this gap
         # DEGRADED threshold. Must sit ABOVE the steady-state traffic
         # cadence: while connected we poll GetPlayStatus once per second
-        # (_playstatus_period_s), so a healthy window's max inter-byte gap
+        # (_playstatus_period_ms), so a healthy window's max inter-byte gap
         # is ~1.0s by construction. The original 0.2s threshold predated
         # the 1 Hz poll and flagged every healthy playback window as
         # DEGRADED (observed on hardware 2026-08-02). 1.4s = poll period
@@ -839,8 +860,8 @@ class Bm83:
         """Set one explicit EQ preset; return None when invalid or throttled."""
         if mode not in self.EQ_SEQ:
             return None
-        now = time.monotonic()
-        if (now - self._last_eq_cmd_at) < self._eq_throttle_s:
+        now = ticks_ms()
+        if ticks_recent(now, self._last_eq_cmd_at, self._eq_throttle_ms):
             return None
         self._last_eq_cmd_at = now
         for i, value in enumerate(self.EQ_SEQ):
@@ -909,8 +930,8 @@ class Bm83:
         self._kick_armed = False
         self._kick_state = None
         self._pending_notif_regs = []
-        self._next_attrs_at = 0.0
-        self._attrs_not_before = 0.0
+        self._next_attrs_at = None
+        self._attrs_not_before = None
         return "DISCONNECTED"
 
     def note_btm_state(self, state):
@@ -990,8 +1011,8 @@ class Bm83:
             # Session-scoped work is invalid on every teardown indication,
             # even when an earlier teardown code already set the suspend flag.
             self._pending_notif_regs = []
-            self._next_attrs_at = 0.0
-            self._attrs_not_before = 0.0
+            self._next_attrs_at = None
+            self._attrs_not_before = None
             self._kick_state = None
             # Arm once at the first ACL-level teardown event. Later teardown
             # chatter must not keep pushing the debounce window forward, and
@@ -1014,7 +1035,7 @@ class Bm83:
                 # experimental stream kick is enabled, arm it: the first
                 # play after a link bounce is where the muted-path wedge
                 # lives.
-                self._next_playstatus_at = now + 1.5
+                self._next_playstatus_at = ticks_add(ticks_ms(), 1500)
                 if self.stream_kick_enabled:
                     self._kick_armed = True
                     print("[BTM] AVRCP link back -> resume polling in 1.5s, stream kick armed")
@@ -1113,19 +1134,21 @@ class Bm83:
         tick_notif_regs() from the main loop; self-clears if the link drops
         so a pending registration is never fired into a dead link.
         """
-        now = time.monotonic()
+        now = ticks_ms()
         self._pending_notif_regs = [
-            (now + d, event_id, interval_s) for (d, event_id, interval_s) in specs
+            (ticks_add(now, _ms(d)), event_id, interval_s)
+            for (d, event_id, interval_s) in specs
         ]
         # Allow the first due registration immediately; subsequent sends are
         # paced from their actual transmit time, not only their planned time.
-        self._last_notif_reg_at = now - self._notif_reg_min_gap_s
+        self._last_notif_reg_at = None
 
     def tick_notif_regs(self, now=None):
         """Send any due deferred notification registrations.
 
         Cheap no-op while the queue is empty (the common case). Call every
-        main-loop iteration, like the other tick_* methods.
+        main-loop iteration, like the other tick_* methods. ``now``, when
+        given, is a ticks_ms() value (not time.monotonic()).
         """
         pending = self._pending_notif_regs
         if not pending:
@@ -1140,13 +1163,13 @@ class Bm83:
             # note_btm_state already dropped the queue, but guard anyway.
             return
         if now is None:
-            now = time.monotonic()
+            now = ticks_ms()
         # Never "catch up" several overdue registrations in one loop.
         # A delayed main loop must preserve the spacing this queue exists for.
-        if (now - self._last_notif_reg_at) < self._notif_reg_min_gap_s:
+        if ticks_recent(now, self._last_notif_reg_at, self._notif_reg_min_gap_ms):
             return
         item = pending[0]
-        if now < item[0]:
+        if not ticks_due(now, item[0], _SCHED_HORIZON_MS):
             return
         self.avrcp_register_notification(item[1], interval_s=item[2])
         self._last_notif_reg_at = now
@@ -1154,8 +1177,8 @@ class Bm83:
 
     def avrcp_reregister_track_changed(self, db=0):
         """Throttled re-registration for TrackChanged to prevent feedback loops."""
-        now = time.monotonic()
-        if (now - self._last_track_changed_reg_at) < self._track_changed_reg_throttle_s:
+        now = ticks_ms()
+        if ticks_recent(now, self._last_track_changed_reg_at, self._track_changed_reg_throttle_ms):
             return False  # Throttled
         self._last_track_changed_reg_at = now
         self.avrcp_register_notification(0x02, interval_s=0, db=db)
@@ -1168,8 +1191,8 @@ class Bm83:
         during AVRCP CT-side establishment, silently dropping the A2DP
         profile while keeping the link up. Throttle to ~0.5 s.
         """
-        now = time.monotonic()
-        if (now - self._last_status_changed_reg_at) < self._status_reg_throttle_s:
+        now = ticks_ms()
+        if ticks_recent(now, self._last_status_changed_reg_at, self._status_reg_throttle_ms):
             return False
         self._last_status_changed_reg_at = now
         self.avrcp_register_notification(0x01, interval_s=0, db=db)
@@ -1177,8 +1200,8 @@ class Bm83:
 
     def avrcp_reregister_position_changed(self, interval_s=1, db=0):
         """Throttled re-registration for PlaybackPositionChanged. See above."""
-        now = time.monotonic()
-        if (now - self._last_pos_changed_reg_at) < self._pos_reg_throttle_s:
+        now = ticks_ms()
+        if ticks_recent(now, self._last_pos_changed_reg_at, self._pos_reg_throttle_ms):
             return False
         self._last_pos_changed_reg_at = now
         self.avrcp_register_notification(0x05, interval_s=interval_s, db=db)
@@ -1193,25 +1216,41 @@ class Bm83:
         Use this from callers (e.g., the main loop) instead of poking
         ``_next_playstatus_at`` directly.
         """
-        self._next_playstatus_at = time.monotonic() + delay_s
+        self._next_playstatus_at = ticks_add(ticks_ms(), _ms(delay_s))
+
+    def _attrs_floor(self, now):
+        """Return the live quiet-window floor (a ticks_ms value) or None.
+
+        An expired floor, or one implausibly far ahead (an aliased stale
+        stamp), no longer constrains anything and is dropped.
+        """
+        nb = self._attrs_not_before
+        if nb is not None and ticks_due(now, nb, _SCHED_HORIZON_MS):
+            nb = self._attrs_not_before = None
+        return nb
 
     def defer_attrs(self, delay_s):
         """Protect a quiet window in which no metadata request may be sent."""
-        t = time.monotonic() + delay_s
-        if t > self._attrs_not_before:
-            self._attrs_not_before = t
-        if self._next_attrs_at and self._next_attrs_at < self._attrs_not_before:
-            self._next_attrs_at = self._attrs_not_before
-        return self._attrs_not_before
+        now = ticks_ms()
+        t = ticks_add(now, _ms(delay_s))
+        nb = self._attrs_floor(now)
+        if nb is None or ticks_less(nb, t):
+            nb = self._attrs_not_before = t
+        if self._next_attrs_at is not None and ticks_less(self._next_attrs_at, nb):
+            self._next_attrs_at = nb
+        return nb
 
     def schedule_attrs(self, delay_s=0.35, force=False):
-        now = time.monotonic()
-        if (not force) and (now - self._last_attrs_req_at) < self._attrs_throttle_s:
+        now = ticks_ms()
+        if (not force) and ticks_recent(now, self._last_attrs_req_at, self._attrs_throttle_ms):
             return False
-        t = now + delay_s
-        if t < self._attrs_not_before:
-            t = self._attrs_not_before
-        if self._next_attrs_at == 0.0 or t < self._next_attrs_at:
+        t = ticks_add(now, _ms(delay_s))
+        nb = self._attrs_floor(now)
+        if nb is not None and ticks_less(t, nb):
+            t = nb
+        pending = self._next_attrs_at
+        if (pending is None or ticks_less(t, pending)
+                or ticks_diff(pending, now) > _SCHED_HORIZON_MS):
             self._next_attrs_at = t
             return True
         return False
@@ -1239,7 +1278,7 @@ class Bm83:
         if (now - self._avrcp_suspend_at) < self._avrcp_suspend_max_s:
             return False
         self._avrcp_suspended = False
-        self._next_playstatus_at = now
+        self._next_playstatus_at = None  # due immediately
         print("[BTM] AVRCP suspension timed out -> resuming polling")
         return True
 
@@ -1299,21 +1338,22 @@ class Bm83:
     def tick_avrcp(self):
         if (not self.connected) or self._avrcp_suspended:
             return
-        now = time.monotonic()
-        if now >= self._next_playstatus_at:
+        now = ticks_ms()
+        if ticks_due(now, self._next_playstatus_at, _SCHED_HORIZON_MS):
             self.avrcp_get_play_status(0)
-            self._next_playstatus_at = now + self._playstatus_period_s
+            self._next_playstatus_at = ticks_add(now, self._playstatus_period_ms)
         self.tick_avrcp_attrs(now)
 
     def tick_avrcp_attrs(self, now=None):
-        if (not self.connected) or self._avrcp_suspended or (self._next_attrs_at == 0.0):
+        """Send the pending metadata request once due. ``now`` is ticks_ms()."""
+        if (not self.connected) or self._avrcp_suspended or (self._next_attrs_at is None):
             return False
         if now is None:
-            now = time.monotonic()
-        if now >= self._next_attrs_at:
+            now = ticks_ms()
+        if ticks_due(now, self._next_attrs_at, _SCHED_HORIZON_MS):
             self._last_attrs_req_at = now
-            self._next_attrs_at = 0.0
-            self._attrs_not_before = 0.0
+            self._next_attrs_at = None
+            self._attrs_not_before = None
             self.avrcp_get_element_attributes(0)
             return True
         return False
