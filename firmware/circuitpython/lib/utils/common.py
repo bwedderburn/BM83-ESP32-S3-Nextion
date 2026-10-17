@@ -3,6 +3,7 @@ TIME_UNKNOWN = "--:--"
 _MAX_TRACK_TIME_MS = 24 * 60 * 60 * 1000
 
 def dprint(*a):
+    """Print debug arguments only when module debugging is enabled."""
     if DEBUG:
         print(*a)
 
@@ -122,6 +123,7 @@ def _fmt_track_time_ms(raw, ref_ms=None, from_attr=False):
     return _fmt_ms(val)
 
 def hexdump(data, width=16):
+    """Format bytes as uppercase hexadecimal, split into rows of ``width``."""
     if not data:
         return "<empty>"
     hex_strs = ["%02X" % b for b in data]
@@ -134,10 +136,21 @@ def hexdump(data, width=16):
 
 # Public wrapper for sanitize_text with a wider default max_len.
 def sanitize_text(txt, max_len=100):
+    """Return Nextion-safe text: printable ASCII, quotes and backslashes replaced.
+
+    Longer input is cut to ``max_len`` characters ending in "..." (never fewer
+    than those 3). ``None``, or input left empty after cleaning, returns the
+    "—" placeholder, which is not ASCII (see #165).
+    """
     return _sanitize_impl(txt, max_len, "...")
 
 # Public wrapper for fmt_ms with test-compatible formatting
 def fmt_ms(ms):
+    """Format milliseconds as ``MM:SS``, or ``H:MM:SS`` from one hour up.
+
+    ``None`` returns "—"; negative values clamp to ``00:00``; non-numeric
+    input is returned as sanitized text.
+    """
     # Reuse internal _fmt_ms logic to avoid duplication
     base = _fmt_ms(ms)
 
