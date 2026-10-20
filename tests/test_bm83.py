@@ -227,28 +227,49 @@ def test_schedule_attrs_force_bypasses_throttle():
     assert bm._next_attrs_at > 0.0
 
 
-def test_schedule_attrs_throttles_empty_metadata_retries(monkeypatch):
-    """Repeated empty-metadata polls cannot request attributes more than once per throttle window."""
+def test_schedule_attrs_backoff_is_deterministic_and_recovers_after_non_empty_metadata(monkeypatch):
+    """Empty metadata retries honor a deterministic throttle and resume cleanly after metadata appears."""
     uart = MockUART()
     bm = Bm83(uart)
     bm.connected = True
     now = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
 
+    # First request goes out immediately.
     assert bm.schedule_attrs(0.0) is True
     assert bm.tick_avrcp_attrs() is True
     assert len(uart.writes) == 1
+    first_sent_at = bm._last_attrs_req_at
 
+    # Retries before the throttle floor are rejected deterministically.
     now[0] += 1.0
     assert bm.schedule_attrs(0.15) is False
     assert bm.tick_avrcp_attrs() is False
-    now[0] += bm._attrs_throttle_s - 1.01
+    now[0] = first_sent_at + bm._attrs_throttle_s - 0.001
     assert bm.schedule_attrs(0.15) is False
 
-    now[0] += 0.02
+    # At the floor, scheduling is allowed and request timing is exact.
+    now[0] = first_sent_at + bm._attrs_throttle_s
     assert bm.schedule_attrs(0.15) is True
-    assert bm.tick_avrcp_attrs(now[0] + 0.15) is True
+    due = now[0] + 0.15
+    assert abs(bm._next_attrs_at - due) < 1e-9
+    assert bm.tick_avrcp_attrs(due - 0.001) is False
+    assert bm.tick_avrcp_attrs(due) is True
     assert len(uart.writes) == 2
+
+    # A non-empty metadata response should parse cleanly and not poison future polls.
+    title = b"Song"
+    payload = (1).to_bytes(4, "big") + b"\x00\x00" + len(title).to_bytes(2, "big") + title
+    params = bytes([0x20, 0x00, 0x01, 0x01, 0x01]) + len(payload).to_bytes(2, "big") + payload
+    resp, attrs = bm.parse_gea_0x5d(params)
+    assert resp == 0x01
+    assert attrs[1] == "Song"
+
+    # Later retries still resume normally if metadata is needed again.
+    now[0] = bm._last_attrs_req_at + bm._attrs_throttle_s
+    assert bm.schedule_attrs(0.05) is True
+    assert bm.tick_avrcp_attrs(now[0] + 0.05) is True
+    assert len(uart.writes) == 3
 
 
 def test_tick_avrcp_attrs_drains_pending_attrs_only_when_connected():
@@ -1568,14 +1589,16 @@ def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
     t = [71000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
 
-    # Fresh boot, chip off, central flapping -- via BOTH paths.
-    for st in (0x08, 0x0C, 0x15, 0x11, 0x0F):
+    flap_states = (0x08, 0x0C, 0x15, 0x11, 0x0F)
+
+    # Fresh boot, chip off, central flapping must not flip power_on.
+    for st in flap_states:
         bm.note_btm_state(st)
         assert bm.power_on is False, "state 0x%02X faked power_on" % st
     uart.to_read = bytearray(
         b"".join(
             frame_to_bytes(Bm83.EVT_BTM_STATUS, bytes((state,)))
-            for state in (0x08, 0x0C, 0x15, 0x11, 0x0F)
+            for state in flap_states
         )
     )
     uart.in_waiting = len(uart.to_read)
@@ -1594,9 +1617,10 @@ def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
     assert bm.power_on is True
     assert bm._power_confirm_deadline == 0.0
 
-    # And 0x15 while ALREADY on is left alone (no demotion, no churn).
-    bm.note_btm_state(0x15)
-    assert bm.power_on is True
+    # Once on, link-flap edge transitions must keep the state stable.
+    for st in flap_states:
+        bm.note_btm_state(st)
+        assert bm.power_on is True, "state 0x%02X demoted power_on" % st
 
 
 def test_soft_off_reply_events_are_not_power_evidence(monkeypatch):

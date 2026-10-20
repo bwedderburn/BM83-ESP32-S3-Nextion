@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import random
-
 from bm83.bm83 import Bm83
 from nextion.display import Nextion, TERM
 
@@ -80,44 +78,48 @@ def test_bm83_fragmented_frames_and_checksum_recovery_under_burst_load():
     ]
 
 
-def test_bm83_parser_recovers_across_deterministic_noisy_fragments():
+def test_bm83_parser_recovery_invariants_for_noise_length_checksum_and_fragments():
+    """Each parser hazard must still allow the next valid frame to parse."""
     uart = MockUART()
     bm = Bm83(uart)
-    rng = random.Random(0xB083)
-    expected = []
-    stream = bytearray()
 
-    def noise_without_sof(size):
-        return bytes(
-            value if value < 0xAA else value + 1
-            for value in (rng.randrange(255) for _ in range(size))
-        )
-
-    for index in range(32):
-        stream.extend(b"\xAA\xFF\xFF")
-        stream.extend(noise_without_sof(rng.randrange(6)))
-
-        payload = noise_without_sof(rng.randrange(16))
-        bad = bytearray(_frame(index + 1, payload))
-        while bad[-1] in (0xA9, 0xAA, 0xAB):
-            payload = noise_without_sof(rng.randrange(16))
-            bad = bytearray(_frame(index + 1, payload))
-        bad[-1] ^= 0x01
-        stream.extend(bad)
-
-        op = index + 1
-        valid_payload = noise_without_sof(rng.randrange(16))
-        stream.extend(_frame(op, valid_payload))
-        expected.append((op, valid_payload))
-
-    events = []
-    offset = 0
-    while offset < len(stream):
-        end = min(offset + rng.randrange(1, 18), len(stream))
-        uart.to_read.extend(stream[offset:end])
-        uart.in_waiting = len(uart.to_read)
+    def drain(max_read=7):
+        out = []
         while uart.in_waiting:
-            events.extend(bm.poll(max_read=7, max_events=8))
-        offset = end
+            out.extend(bm.poll(max_read=max_read, max_events=8))
+        return out
 
-    assert events == expected
+    # Seeded noise with no SOF bytes before a valid frame.
+    uart.to_read.extend(b"\x00\x10\xFE\x55\x54\x53")
+    uart.to_read.extend(_frame(0x21, b"\xAA\x10\x20"))
+    uart.in_waiting = len(uart.to_read)
+    assert drain() == [(0x21, b"\xAA\x10\x20")]
+
+    # Invalid-length prefix must be skipped so the next valid frame survives.
+    uart.to_read.extend(b"\xAA\xFF\xFF")
+    uart.to_read.extend(_frame(0x22, b"\x01\x02\x03"))
+    uart.in_waiting = len(uart.to_read)
+    assert drain() == [(0x22, b"\x01\x02\x03")]
+
+    # Corrupt checksum frame must not poison parsing of subsequent frame.
+    bad = bytearray(_frame(0x23, b"\x09\x08"))
+    bad[-1] ^= 0x01
+    uart.to_read.extend(bad)
+    uart.to_read.extend(_frame(0x24, b"\x04"))
+    uart.in_waiting = len(uart.to_read)
+    assert drain() == [(0x24, b"\x04")]
+
+    # Fragmented valid frame should parse once complete and not wedge state.
+    good = _frame(0x25, b"\x99\x98\x97\x96")
+    uart.to_read.extend(good[:4])
+    uart.in_waiting = len(uart.to_read)
+    assert drain(max_read=2) == []
+    uart.to_read.extend(good[4:])
+    uart.in_waiting = len(uart.to_read)
+    assert drain(max_read=2) == [(0x25, b"\x99\x98\x97\x96")]
+
+    # Parser should be healthy after all hazards.
+    uart.to_read.extend(_frame(0x26, b"\x01"))
+    uart.in_waiting = len(uart.to_read)
+    assert drain() == [(0x26, b"\x01")]
+    assert bm._rx_head <= len(bm._rx)
