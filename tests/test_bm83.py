@@ -227,8 +227,8 @@ def test_schedule_attrs_force_bypasses_throttle():
     assert bm._next_attrs_at > 0.0
 
 
-def test_schedule_attrs_backoff_is_deterministic_and_recovers_after_non_empty_metadata(monkeypatch):
-    """Empty metadata retries honor a deterministic throttle and resume cleanly after metadata appears."""
+def test_schedule_attrs_throttle_deadline_and_reuse_after_metadata_parse(monkeypatch):
+    """Attribute scheduling respects throttle and due-time boundaries across a parsed response."""
     uart = MockUART()
     bm = Bm83(uart)
     bm.connected = True
@@ -1595,15 +1595,12 @@ def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
     for st in flap_states:
         bm.note_btm_state(st)
         assert bm.power_on is False, "state 0x%02X faked power_on" % st
-    uart.to_read = bytearray(
-        b"".join(
-            frame_to_bytes(Bm83.EVT_BTM_STATUS, bytes((state,)))
-            for state in flap_states
-        )
-    )
-    uart.in_waiting = len(uart.to_read)
-    bm.poll()
-    assert bm.power_on is False
+    for st in flap_states:
+        params = bytes((st,))
+        uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, params))
+        uart.in_waiting = len(uart.to_read)
+        assert bm.poll() == [(Bm83.EVT_BTM_STATUS, params)]
+        assert bm.power_on is False, "parsed state 0x%02X faked power_on" % st
 
     # The first press must therefore send power-ON.
     n = len(uart.writes)
@@ -1621,6 +1618,11 @@ def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
     for st in flap_states:
         bm.note_btm_state(st)
         assert bm.power_on is True, "state 0x%02X demoted power_on" % st
+        params = bytes((st,))
+        uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, params))
+        uart.in_waiting = len(uart.to_read)
+        assert bm.poll() == [(Bm83.EVT_BTM_STATUS, params)]
+        assert bm.power_on is True, "parsed state 0x%02X demoted power_on" % st
 
 
 def test_soft_off_reply_events_are_not_power_evidence(monkeypatch):
