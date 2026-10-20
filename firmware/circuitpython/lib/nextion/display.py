@@ -47,6 +47,7 @@ TOKENS = TOK_BT | TOK_EQ  # Combined token set
 _NX_TOKEN_EDGE_STATUS = (0x00, 0x01, 0x1A)
 
 def ascii_upper_uscore(token):
+    """Return whether a byte token contains only uppercase ASCII token characters."""
     if not token:
         return False
     for b in token:
