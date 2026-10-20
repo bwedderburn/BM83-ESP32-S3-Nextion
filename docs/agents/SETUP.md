@@ -150,6 +150,15 @@ gh workflow disable "Weekly code improvement (Copilot)" --repo bwedderburn/BM83-
 - **repo-health tools missing in a Copilot session** — MCP JSON not saved in repo settings,
   or `copilot-setup-steps` hasn't run green from `main` yet (the `mcp` package would be
   missing). Session logs show MCP server startup under the session's "Copilot" step.
+- **Codex runtime blocked from `ab.chatgpt.com`** — a cloud-agent firewall warning can
+  identify this hostname and the command that attempted the connection. A repository admin
+  can open **Settings → Copilot → Internet access → Cloud agent → Custom allowlist**, add
+  only `ab.chatgpt.com`, and save changes. Keep the firewall enabled and preserve existing
+  rules. **Code review** has a separate section; add the rule there only if its own session
+  reports the same block. Setup steps run before the agent and cannot allow a later runtime
+  connection through this firewall. Start a fresh session after saving and check its logs
+  to verify that the original command no longer produces the warning. See GitHub's
+  [firewall configuration guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-the-firewall).
 - **CI didn't run on the Thursday audit PR** — the run fell back to `github.token`
   (PRs created with it don't trigger workflows). Set `GH_AGENT_PAT`, or close/reopen the PR.
 - **3.9 matrix questions** — 3.9 is EOL; the first `deps`-focus runs will propose the matrix
