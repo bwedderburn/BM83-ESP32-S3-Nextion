@@ -1,10 +1,10 @@
-// ESP-NOW link to the BM83 audio unit — Stage 2: remote -> unit tokens.
+// ESP-NOW link: control tokens out, bounded BMS2 Now Playing snapshots in.
 //
 // PROTOCOL (shared with the Stage 3 CircuitPython receiver; keep in sync
 // with README.md):
 //   token frame  (remote -> audio unit):  "BMR1:<seq>:<token>"
-//   state frame  (audio unit -> remote):  "BMS1:<seq>:<key>=<val>[...]"
-// ASCII, <= 64 bytes, no NUL on the wire. <seq> is a decimal uint32 the
+//   state frame (audio unit -> remote): binary BMS2; see now_playing.h.
+// Control frames are ASCII, <=64 bytes, with no NUL. <seq> is a decimal uint32 the
 // receiver uses to drop duplicates (ESP-NOW MAC-layer retries can deliver
 // a frame twice). <token> is EXACTLY the Nextion vocabulary (BT_PLAY,
 // BT_VOLUP_P, ...) so the audio unit's main.py feeds one dispatch path.
@@ -63,6 +63,7 @@ void espnow_link_rescan();
 // Extra send attempts beyond the first, lifetime (link-quality signal).
 uint32_t espnow_link_retries();
 
-// Drain one received frame into out (NUL-terminated); true if one was
-// pending. Stage 3 state frames will arrive here.
-bool espnow_link_poll(char *out, size_t out_len);
+// Drain one binary frame from the paired unit; returns its byte length,
+// or zero when none is pending. No terminator is added. WiFi callbacks only
+// queue bytes; decoding and LVGL updates stay in the main task.
+size_t espnow_link_poll(uint8_t *out, size_t capacity);

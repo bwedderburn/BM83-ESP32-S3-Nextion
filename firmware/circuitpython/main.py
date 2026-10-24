@@ -14,6 +14,7 @@ from utils.common import (
 )
 from nextion.display import Nextion, NX_RUNTIME, EQ_MAP, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from remote import EspNowRemote
+from remote.state_tx import StatePublisher
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
 from utils.ticks import ticks_diff, ticks_ms
@@ -77,6 +78,7 @@ def main():
                           ble_active=BLE_ENABLED)
     remote.setup()
     remote_poll = remote.poll
+    remote_state = StatePublisher(remote)
 
     # Local bindings for speed/low allocation on mpy
     monotonic = time.monotonic
@@ -192,6 +194,7 @@ def main():
         notifications and its metadata would stay frozen.
         """
         nonlocal avrcp_notifs_registered
+        remote_state.clear_track()
         print("[BTM] Connected -> register notifications + request metadata")
         # Stagger the initial registrations instead of sending all three
         # back-to-back. Some BM83 firmware revs choke on rapid
@@ -243,6 +246,7 @@ def main():
         changed.append(key)
 
     def invalidate_track_meta(clear_primary=False):
+        remote_state.clear_track()
         changed = []
         if clear_primary:
             meta_set("title", "—", changed)
@@ -385,6 +389,8 @@ def main():
             avrcp_notifs_registered = False
             last_play_status = None
 
+        remote_state.set_transport(bm.power_on, bm.connected, aux_mode, bm.avrcp_suspended)
+
         for op, params in bm_poll():
             bm_ack(op)
             if op == bm.EVT_BTM_STATUS and params:
@@ -426,10 +432,11 @@ def main():
                 if not parsed:
                     continue
                 _db, pdu, pkt_type, avp = parsed
+                avc_response = params[1] & 0x0F
                 if pkt_type != 0x00:
                     continue
                 last_avrcp_rx_at = time.monotonic()
-                if pdu == 0x30 and len(avp) >= 9:
+                if pdu == 0x30 and avc_response == 0x0C and len(avp) >= 9:
                     total_ms = _normalize_track_time_ms(int.from_bytes(avp[0:4], "big"))
                     pos_ms = _normalize_track_time_ms(int.from_bytes(avp[4:8], "big"))
                     last_play_status = avp[8]
@@ -450,17 +457,26 @@ def main():
                         meta_set("time_cur", _fmt_ms(pos_ms), changed)
                     if total_ms is not None and total_ms > 0:
                         meta_set("time", _fmt_ms(total_ms), changed)
+                    remote_state.note_status(last_play_status)
+                    remote_state.note_position(pos_ms, total_ms)
                     push_meta_updates(changed)
-                elif pdu == 0x31 and len(avp) >= 1:
+                elif pdu == 0x31 and avc_response in (0x0D, 0x0F) and len(avp) >= 1:
+                    # INTERIM seeds the current value and leaves the existing
+                    # notification outstanding. Only CHANGED completes it and
+                    # requires re-registration; treating INTERIM as CHANGED
+                    # repeatedly clears track data and creates request churn.
+                    notification_changed = avc_response == 0x0D
                     event_id = avp[0]
                     if event_id == 0x01 and len(avp) >= 2:
                         # PlaybackStatusChanged: keep local status cache fresh
                         # between GetPlayStatus polling intervals.
                         prev_status = last_play_status
                         last_play_status = avp[1]
+                        remote_state.note_status(last_play_status)
                         if last_play_status in PLAYING_STATES:
                             bm.maybe_stream_kick()
-                        bm.avrcp_reregister_status_changed()
+                        if notification_changed:
+                            bm.avrcp_reregister_status_changed()
                         bm.schedule_play_status(0.05)
                         if last_play_status in PLAYING_STATES and (
                             primary_metadata_missing()
@@ -478,7 +494,7 @@ def main():
                             # but must not pull it back into stream startup.
                             bm.defer_attrs(1.0)
                             bm.schedule_attrs(1.0, force=True)
-                    elif event_id == 0x02:
+                    elif event_id == 0x02 and notification_changed:
                         last_pos_ms = None
                         last_total_ms = None
                         push_meta_updates(invalidate_track_meta())
@@ -490,16 +506,20 @@ def main():
                         # Playback Position Changed notifications may still be emitted
                         # around state transitions. Avoid advancing the UI clock while
                         # paused/stopped to prevent "counting while paused" behavior.
+                        if pos is not None:
+                            remote_state.note_position(pos)
                         if pos is not None and last_play_status in PLAYING_STATES:
                             changed = []
                             meta_set("time_cur", _fmt_ms(pos), changed)
                             push_meta_updates(changed)
-                        bm.avrcp_reregister_position_changed()
+                        if notification_changed:
+                            bm.avrcp_reregister_position_changed()
             elif op == bm.EVT_AVRCP_VENDOR_DEP_RSP:
                 gea = bm.parse_gea_0x5d(params)
                 if gea:
                     last_avrcp_rx_at = time.monotonic()
                     _resp, attrs = gea
+                    remote_state.note_attributes(attrs)
                     print("[META] GetElementAttributes received:", sorted(attrs.keys()))
                     changed = []
                     if 1 in attrs:
@@ -520,6 +540,7 @@ def main():
                         if attr_time is not None and attr_time > 0:
                             if ref_total_ms is None or attr_time == ref_total_ms:
                                 last_total_ms = attr_time
+                                remote_state.note_duration(attr_time)
                                 meta_set("time", _fmt_track_time_ms(attr_time), changed)
                             else:
                                 dprint("[META] ignore duration attr", attrs[7], "baseline=", last_total_ms)
@@ -650,6 +671,11 @@ def main():
                         vol_last_repeat_at = tnow
                         vol_repeat_count += 1
 
+        # Publish cached observations only: no extra AVRCP polling, and at
+        # most one small ESP-NOW frame is queued after UART/input servicing.
+        remote_state.set_transport(bm.power_on, bm.connected, aux_mode, bm.avrcp_suspended)
+        remote_state.set_eq(bm.EQ_SEQ[bm.eq_index])
+        remote_state.tick()
         sleep(0.005)
 
 

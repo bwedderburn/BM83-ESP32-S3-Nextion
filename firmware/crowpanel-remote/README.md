@@ -6,12 +6,26 @@ unit. Display/touch/power bring-up is copied verbatim from
 `solar-monitor/firmware/crowpanel-hmi` — same physical panel; the previous
 solar firmware stays recoverable from that repo at any time.
 
-## Current stage: Stage 2 — ESP-NOW sender
+## Now Playing and Settings
 
-The 800×480 screen is titled **BM83 Remote**. Compact 200×64 secondary
-buttons use 18-pixel labels, with Prev / EQ / Next above Power / Pair /
-E-Bind. The bottom row is **Play/Pause → Vol − → volume slider → Vol +**.
-The 20-pixel title and smaller battery readout have separate header space.
+The main 800×480 page shows title, artist, album, playback state, elapsed
+time, total time and a display-only progress bar. A 200×200 artwork placeholder
+reserves space for a future image source. The **Settings** button opens a
+second page containing Power, Pair, EQ and Erase BLE bonds. Compact Previous,
+Play/Pause, Next and Volume −/+ controls remain available on both pages.
+Battery/supply indication and screen-wake gesture suppression are preserved.
+
+Windows PC and iPhone playback are the intended verification targets. The
+source must provide AVRCP metadata and timing to BM83: forwarding cannot
+recover data withheld by the source. Missing values show unavailable text or
+`--:--`; they never start a clock from the connection time. Mac support is
+optional and its previously observed missing metadata is not repaired here.
+
+The progress bar replaces the relative volume slider. It does **not** accept
+drag-to-seek input: there is no arbitrary-position seek command in this build.
+The panel can render artwork, but the documented BM83 UART path does not
+support cover-art retrieval. This build neither fetches images online nor
+transfers image data; no Mac/helper application is needed for the text/time link.
 
 The remote emits the **same token vocabulary the Nextion sends over
 UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for the volume
@@ -19,14 +33,8 @@ buttons' hold-and-repeat, single tokens otherwise — see
 `../../NEXTION_SETUP.md`). Volume buttons release on both finger lift and
 press loss. The existing screen-wake gesture suppression remains in place.
 
-The slider is a **relative adjustment**, not an actual-volume indicator:
-drag left or right to request one to five steps, then release. Its thumb
-returns to center immediately. Standalone `BT_VOLDN` / `BT_VOLUP` tokens
-are sent one at a time, at least 200 ms apart measured from each send's
-completion. New gestures or button presses cancel remaining slider steps;
-press loss cancels the drag. Failed radio delivery or a three-second
-deadline discards unfinished work, so reconnecting cannot replay an old
-queue. The source may still ignore a delivered BLE HID key; counting
+The volume buttons keep their existing press/release hold-and-repeat
+behavior. The source may still ignore a delivered BLE HID key; counting
 requests cannot establish its actual volume.
 
 Every token is logged to serial AND transmitted over ESP-NOW, unicast to
@@ -41,7 +49,7 @@ heartbeat shows `espnow=<delivered>/<sent> rt=<retries> ch=<channel>`
 (`ch=0` = not found).
 
 - token frame, remote → unit: `BMR1:<seq>:<token>`
-- state frame, unit → remote: `BMS1:<seq>:<key>=<val>` (reserved — Stage 3)
+- state frame, unit → remote: binary `BMS2` snapshot fragments (see below)
 
 `<seq>` lets the receiver drop duplicates. The footer shows the last
 action and whether it was sent or got no response. Serial logs retain
@@ -52,10 +60,47 @@ audio-unit power state, or a resulting source-volume change. The peer MAC in
 printed by the unit's `[REMOTE] ESP-NOW receiver up: own-sta=...` boot
 line) — not the `MAC:` value in its `boot_out.txt`, which differs.
 
-**Audio-unit side (Stage 3):** the CircuitPython receiver
-(`firmware/circuitpython/lib/remote`) merges these tokens into the exact
-Nextion dispatch in `main.py`. Next: state/metadata frames back to the
-remote so its screen can show what is playing.
+The CircuitPython receiver (`firmware/circuitpython/lib/remote`) merges control
+tokens into the existing Nextion dispatch. Its state publisher separately
+forwards cached BM83 observations, without adding AVRCP requests or changing
+the audio, AUX, power or volume backend.
+
+### State return channel
+
+`remote/now_playing.py` and `include/now_playing.h` define BMS2. Each binary
+frame is at most 64 bytes: magic `BMS2`, boot-session u32, snapshot-sequence
+u16, fragment index/count u8, total payload length u16, CRC16-CCITT-FALSE u16,
+then up to 48 payload bytes. Multi-byte integers are big-endian. The payload
+contains source flags, playback status, EQ mode, duration/position/sample-age
+in milliseconds and three UTF-8 strings bounded to 96 bytes each.
+
+Only a complete validated snapshot changes the display. The paired-unit MAC
+is checked before frames enter a bounded 16-frame queue; WiFi callbacks never
+call LVGL. Sequences and boot sessions reject duplicates and old snapshots.
+Periodic full snapshots heal loss and refresh a waking panel. Rescanning after
+wake discards buffered frames and the display awaits fresh source state.
+
+The controller permits one outstanding state send and spaces frames by at
+least 40 ms. Ordinary timing updates do not abort a snapshot in flight;
+track, playback-state and transport boundaries do. A snapshot has a bounded
+two-second send window. CircuitPython's native send API can itself retry for
+up to two seconds on driver memory exhaustion, despite the completion guard;
+actual-unit UART/coexistence timing must be checked before release.
+
+Snapshots expire after six seconds without a new complete update. Playing
+time advances only from a genuine source position, for at most five seconds
+without another source sample; radio refreshes do not make old timing fresh.
+Pause, seek and track changes use subsequent source observations. Off, AUX,
+disconnect and suspended AVRCP sessions clear the old remote track cache.
+
+### Hardware acceptance checks
+
+Host tests and a successful firmware build do not establish Windows/iPhone
+correctness. Check iPhone first, then Windows: title/artist/album, elapsed and
+total time, pause/resume, Next/Previous, a source-side seek and reconnect in
+the middle of a track. Verify that Settings, volume hold/release, screen
+dim/wake and lost-link expiry still work and the controller UART remains
+healthy. These checks are pending until recorded on the actual hardware.
 
 ## Build & flash
 

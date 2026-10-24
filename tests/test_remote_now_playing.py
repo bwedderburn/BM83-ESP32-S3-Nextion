@@ -1,0 +1,239 @@
+"""Exercise real Python wire frames against the CrowPanel's C++ model."""
+import os
+import shutil
+import subprocess  # nosec B404 - fixed local compiler and host-test binary only
+from pathlib import Path
+
+import pytest
+
+from remote.now_playing import (
+    FRAGMENT_SIZE, MAX_PAYLOAD, UNKNOWN, crc16, encode_frames,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def state(**changes):
+    snapshot = dict(power_on=True, connected=True, aux=False, play_status=1, eq_index=2,
+                    duration_ms=200000, position_ms=50000, position_age_ms=100,
+                    title='A "new" song', artist="Björk", album="Album with long title")
+    snapshot.update(changes)
+    return snapshot
+
+
+def raw_frames(payload, session=42, seq=1):
+    count = (len(payload) + FRAGMENT_SIZE - 1) // FRAGMENT_SIZE
+    prefix = b"BMS2" + session.to_bytes(4, "big") + seq.to_bytes(2, "big")
+    suffix = len(payload).to_bytes(2, "big") + crc16(payload).to_bytes(2, "big")
+    return tuple(prefix + bytes((index, count)) + suffix + payload[index * 48:(index + 1) * 48]
+                 for index in range(count))
+
+
+def payload_of(frames):
+    return b"".join(frame[16:] for frame in frames)
+
+
+@pytest.fixture(scope="module")
+def cpp_model(tmp_path_factory):
+    compiler = shutil.which("g++") or shutil.which("clang++")
+    if not compiler:
+        pytest.skip("no C++ compiler on this machine")
+    binary = tmp_path_factory.mktemp("now_playing_host") / ("model.exe" if os.name == "nt" else "model")
+    result = subprocess.run(  # nosec B603 - fixed local source/include paths
+        [compiler, "-std=c++11", "-Wall", "-Wextra", "-Werror", "-pedantic",
+         "-I" + str(ROOT / "firmware/crowpanel-remote/include"),
+         str(ROOT / "tests/crowpanel_host/now_playing_test.cpp"), "-o", str(binary)],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return binary
+
+
+def probe(binary, operations):
+    commands = []
+    for operation in operations:
+        if operation[0] == "F":
+            commands.append("F %d %s" % (operation[1] & UNKNOWN, operation[2].hex()))
+        elif operation[0] == "P":
+            commands.append("P %d" % (operation[1] & UNKNOWN))
+        else:
+            commands.append("R")
+    result = subprocess.run(  # nosec B603 - locally built host probe; no hardware
+        [str(binary)], input="\n".join(commands) + "\n", capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    results = []
+    for line in result.stdout.splitlines():
+        values = line.split()
+        if values[0] != "P":
+            results.append((values[0], int(values[1]) if len(values) > 1 else 0))
+            continue
+        names = ("fresh", "have", "position", "status", "eq", "duration", "sample", "age", "flags", "max_text")
+        decoded = dict(zip(names, map(int, values[1:11])))
+        decoded.update(zip(("title", "artist", "album"),
+                           ("" if value == "-" else bytes.fromhex(value).decode("utf-8") for value in values[11:])))
+        results.append(decoded)
+    return results
+
+
+def send(frames, now=1000):
+    return [("F", now, frame) for frame in frames]
+
+
+def test_known_crc_and_fixed_wire_layout():
+    assert crc16(b"123456789") == 0x29B1
+    frames = encode_frames(state(), 0x12345678, 0xABCD)
+    assert frames[0][:12] == b"BMS2\x12\x34\x56\x78\xab\xcd\x00\x02"
+    payload = payload_of(frames)
+    assert payload[:3] == b"\x03\x01\x02"
+    assert int.from_bytes(payload[3:7], "big") == 200000
+    assert int.from_bytes(payload[7:11], "big") == 50000
+    assert int.from_bytes(payload[11:15], "big") == 100
+    assert int.from_bytes(frames[0][12:14], "big") == len(payload)
+    assert int.from_bytes(frames[0][14:16], "big") == crc16(payload)
+
+
+def test_text_is_bounded_utf8_and_controls_are_sanitized():
+    frames = encode_frames(state(title="x" * 95 + "🎵", artist="é" * 100, album="A\0B\nC\tD"), 1, 1)
+    payload = payload_of(frames)
+    lengths = payload[15:18]
+    assert lengths == bytes((95, 96, 7))
+    assert payload[18:18 + lengths[0]].decode("utf-8") == "x" * 95
+    assert payload[-7:] == b"A B C D"
+    assert all(len(frame) <= 64 for frame in frames)
+
+
+def test_maximum_size_and_missing_fields():
+    frames = encode_frames(state(title="x" * 96, artist="y" * 96, album="z" * 96), 1, 1)
+    assert len(frames) == 7
+    assert len(payload_of(frames)) == MAX_PAYLOAD
+    assert len(frames[-1]) == 16 + MAX_PAYLOAD % 48
+    empty = payload_of(encode_frames({}, 1, 1))
+    assert empty[:3] == b"\x00\xff\xff"
+    assert empty[3:15] == b"\xff" * 12
+    assert empty[15:] == b"\x00\x00\x00"
+
+
+@pytest.mark.parametrize("bad", [None, -1, UNKNOWN, UNKNOWN + 10, "invalid", float("inf")])
+def test_invalid_timing_is_unknown(bad):
+    payload = payload_of(encode_frames(state(position_ms=bad), 1, 1))
+    assert payload[7:11] == b"\xff" * 4
+
+
+def test_cross_language_atomic_text_and_clock(cpp_model):
+    frames = encode_frames(state(), 42, 1)
+    result = probe(cpp_model, [("P", 1000)] + send(frames) + [("P", 1500), ("P", 3000)])
+    assert result[0]["have"] == 0
+    assert [entry for entry in result if isinstance(entry, tuple)] == [("A", 0), ("A", 1)]
+    assert result[-2]["title"] == 'A "new" song'
+    assert result[-2]["artist"] == "Björk"
+    assert result[-2]["album"] == "Album with long title"
+    assert result[-2]["position"] == 50600
+    assert result[-1]["position"] == 52100
+
+
+def test_fragment_delay_uses_first_receipt_as_clock_anchor(cpp_model):
+    frames = encode_frames(state(), 1, 1)
+    result = probe(cpp_model, [("F", 1000, frames[0]), ("F", 1300, frames[1]), ("P", 1500)])
+    assert result[-1]["position"] == 50600
+
+
+def test_reordering_duplicates_and_lost_fragment_never_mix_tracks(cpp_model):
+    old = encode_frames(state(title="old"), 1, 1)
+    new = encode_frames(state(title="新" * 32, artist="a" * 96, album="b" * 96), 1, 2)
+    next_track = encode_frames(state(title="third", position_ms=1200), 1, 3)
+    result = probe(cpp_model, send(old) + send(new[:-1], 1200) + [("P", 1200)] +
+                   send(tuple(reversed(next_track)), 1400) + send(new[-1:], 1500) + [("P", 1600)])
+    assert result[len(old) + len(new) - 1]["title"] == "old"
+    assert result[-1]["title"] == "third"
+    assert result[-1]["position"] == 1500
+    assert sum(entry == ("A", 1) for entry in result) == 2
+
+
+def test_duplicate_snapshot_cannot_refresh_freshness(cpp_model):
+    frames = encode_frames(state(), 1, 1)
+    result = probe(cpp_model, send(frames) + send(frames, 6500) + [("P", 7000)])
+    assert result[-1]["fresh"] == 0
+    assert result[-1]["position"] == UNKNOWN
+
+
+def test_corrupt_and_malformed_frames_preserve_committed_state(cpp_model):
+    good = encode_frames(state(title="good"), 1, 1)
+    new = encode_frames(state(title="bad"), 1, 2)
+    corrupt = bytearray(new[-1])
+    corrupt[-1] ^= 1
+    malformed = []
+    for offset, value in ((0, ord("X")), (10, 7), (11, 0), (12, 255)):
+        frame = bytearray(new[0])
+        frame[offset] = value
+        malformed.append(bytes(frame))
+    operations = send(good) + send(new[:-1], 1200) + send((bytes(corrupt),), 1200)
+    operations += send(tuple(malformed) + (new[0][:-1], b"BMS2"), 1400) + [("P", 1500)]
+    result = probe(cpp_model, operations)
+    assert result[-1]["title"] == "good"
+    assert sum(entry == ("A", 1) for entry in result) == 1
+
+
+@pytest.mark.parametrize("offset,value", [(0, 8), (1, 5), (15, 97), (18, 0), (18, 0xFF)])
+def test_invalid_payload_rejected_even_with_valid_crc(cpp_model, offset, value):
+    payload = bytearray(payload_of(encode_frames(state(), 1, 1)))
+    payload[offset] = value
+    result = probe(cpp_model, send(raw_frames(payload)) + [("P", 1100)])
+    assert result[-1]["have"] == 0
+
+
+def test_sequence_wrap_and_reboot_retire_old_session(cpp_model):
+    first = encode_frames(state(title="first"), 111, 65535)
+    wrapped = encode_frames(state(title="wrapped"), 111, 0)
+    reboot = encode_frames(state(title="reboot"), 222, 1)
+    old = encode_frames(state(title="stale"), 111, 1)
+    result = probe(cpp_model, send(first) + send(wrapped, 1100) + send(first, 1200) +
+                   send(reboot, 1300) + send(old, 1400) + [("P", 1500)])
+    assert result[-1]["title"] == "reboot"
+    assert sum(entry == ("A", 1) for entry in result) == 3
+
+
+def test_pause_seek_track_change_and_duration_clamp(cpp_model):
+    paused = encode_frames(state(play_status=2, position_ms=50000), 1, 1)
+    seek = encode_frames(state(play_status=1, position_ms=190000), 1, 2)
+    next_track = encode_frames(state(title="next", position_ms=100, duration_ms=300), 1, 3)
+    result = probe(cpp_model, send(paused) + [("P", 2000)] + send(seek, 2100) + [("P", 2200)] +
+                   send(next_track, 2300) + [("P", 2600)])
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert [entry["position"] for entry in states] == [50000, 190200, 300]
+    assert states[-1]["title"] == "next"
+
+
+@pytest.mark.parametrize("changes", [
+    dict(position_ms=None), dict(position_age_ms=None), dict(position_age_ms=5001),
+    dict(power_on=False), dict(connected=False), dict(aux=True),
+])
+def test_unavailable_source_position_is_never_invented(cpp_model, changes):
+    result = probe(cpp_model, send(encode_frames(state(**changes), 1, 1)) + [("P", 1100)])
+    assert result[-1]["position"] == UNKNOWN
+
+
+def test_clock_stops_when_source_sample_stale_despite_fresh_radio(cpp_model):
+    first = encode_frames(state(position_age_ms=4900), 1, 1)
+    stale = encode_frames(state(position_age_ms=7000), 1, 2)
+    result = probe(cpp_model, send(first) + [("P", 1100), ("P", 1101)] +
+                   send(stale, 1200) + [("P", 1200)])
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert states[0]["position"] == 55000
+    assert states[1]["position"] == UNKNOWN
+    assert states[2]["fresh"] == 1 and states[2]["position"] == UNKNOWN
+
+
+def test_millis_wrap_and_reset(cpp_model):
+    start = 0xFFFFFF00
+    frames = encode_frames(state(), 1, 1)
+    result = probe(cpp_model, send(frames, start) + [("P", start + 500), ("R",), ("P", start + 600)])
+    assert result[-3]["position"] == 50600
+    assert result[-1]["have"] == 0 and result[-1]["position"] == UNKNOWN
+
+
+def test_expired_radio_snapshot_cannot_revive_after_full_millis_wrap(cpp_model):
+    frames = encode_frames(state(), 1, 1)
+    result = probe(cpp_model, send(frames, 1000) + [("P", 8000), ("P", 1001)] +
+                   send(encode_frames(state(title="Fresh"), 1, 2), 1100) + [("P", 1100)])
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert states[0]["fresh"] == states[1]["fresh"] == 0
+    assert states[-1]["fresh"] == 1

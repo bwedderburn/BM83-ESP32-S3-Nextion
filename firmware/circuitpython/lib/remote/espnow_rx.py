@@ -171,6 +171,12 @@ class EspNowRemote:
         self._foreign_seen = []
         self._stats_at = 0.0
         self._stats_last = None
+        self._tx_peer = None
+        self.state_tx_enabled = False
+        self._tx_pending = False
+        self._tx_counts = None
+        self._tx_backoff_until = 0.0
+        self.tx_frames = 0
 
     def setup(self):
         """Bring the receiver up. Never raises; returns True when live."""
@@ -199,10 +205,63 @@ class EspNowRemote:
             return False
         wifi_ps = self._keep_radio_awake()
         self.enabled = True
+        self._setup_state_tx()
         self._stats_at = self._clock()
         self._log("[REMOTE] ESP-NOW receiver up: own-sta=%s accepting=%s wifi-ps=%s" % (
             self._own_mac(), fmt_mac(self.peer_mac) if self.peer_mac else "any MAC", wifi_ps))
         return True
+
+    def _setup_state_tx(self):
+        """Register only the configured remote; RX still works if TX cannot."""
+        if self.peer_mac is None:
+            return
+        try:
+            # These completion counters allow exactly one outstanding send.
+            # ESPNow.send can block for 2s if its internal buffers fill: never
+            # enqueue another frame before the previous callback completes.
+            self._tx_counts = (self._radio.send_success, self._radio.send_failure)
+            self._tx_peer = self._mod.Peer(mac=self.peer_mac)
+            self._radio.peers.append(self._tx_peer)
+            self.state_tx_enabled = True
+            self._log("[REMOTE] Now Playing return channel enabled")
+        except Exception as e:
+            self._log("[REMOTE] state TX unavailable; controls remain active: %r" % (e,))
+
+    def state_tx_ready(self):
+        """True only when a new single-frame send can be queued safely."""
+        if not self.state_tx_enabled or self._clock() < self._tx_backoff_until:
+            return False
+        try:
+            counts = (self._radio.send_success, self._radio.send_failure)
+            if self._tx_pending:
+                if counts == self._tx_counts:
+                    return False
+                self._tx_pending = False
+            return True
+        except Exception:
+            return False
+
+    def send_state_frame(self, frame):
+        """Queue one BMS2 frame with no application-level wait or retry.
+
+        The completion guard avoids filling our own send queue. CircuitPython
+        can still retry for up to 2s on a driver NO_MEM error; live UART timing
+        under WiFi/BLE coexistence must be checked before release.
+        """
+        if not frame or len(frame) > MAX_FRAME_LEN or not frame.startswith(b"BMS2"):
+            return False
+        if not self.state_tx_ready():
+            return False
+        try:
+            self._tx_counts = (self._radio.send_success, self._radio.send_failure)
+            self._radio.send(frame, self._tx_peer)
+            self._tx_pending = True
+            self.tx_frames += 1
+            return True
+        except Exception as e:
+            self._tx_backoff_until = self._clock() + ERROR_BACKOFF_S
+            self._log("[REMOTE] state TX back-off: %r" % (e,))
+            return False
 
     @staticmethod
     def _keep_radio_awake():
