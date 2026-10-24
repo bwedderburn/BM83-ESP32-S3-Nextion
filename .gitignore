@@ -31,3 +31,4 @@ sym-lib-table-bak
 # Editor junk
 .vscode/
 .idea/
+tools/mpy-cross/
