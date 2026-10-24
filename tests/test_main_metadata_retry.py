@@ -90,6 +90,9 @@ class _Ble:
 
 
 class _Remote:
+    # This script exercises AVRCP retries; its radio double has no state TX.
+    state_tx_enabled = False
+
     def __init__(self, **_kwargs):
         pass
 
