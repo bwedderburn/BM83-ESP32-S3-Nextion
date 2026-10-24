@@ -71,6 +71,7 @@ static lv_obj_t *g_position_label = nullptr;
 static lv_obj_t *g_duration_label = nullptr;
 static lv_obj_t *g_progress_bar = nullptr;
 static lv_obj_t *g_play_button_label = nullptr;
+static lv_obj_t *g_eq_label = nullptr;
 static bool g_show_settings = false;
 
 // ----- battery widget (the solar HMI header icon, scaled for the remote) -----
@@ -278,6 +279,58 @@ static void set_label(lv_obj_t *label, const char *text) {
     if (strcmp(lv_label_get_text(label), text) != 0) lv_label_set_text(label, text);
 }
 
+// Raw BM83 EQ modes, matching BM83.EQ_L. Do not infer EQ from button presses:
+// a delivered command does not prove that the module applied the setting.
+static const char *eq_name(uint8_t mode) {
+    switch (mode) {
+        case 0: return "OFF";
+        case 1: return "SOFT";
+        case 2: return "BASS";
+        case 3: return "TREBLE";
+        case 4: return "CLASSICAL";
+        case 5: return "ROCK";
+        case 6: return "JAZZ";
+        case 7: return "POP";
+        case 8: return "DANCE";
+        case 9: return "RNB";
+        case 11: return "USER";
+        default: return "--";
+    }
+}
+
+// The model validates UTF-8 before committing a snapshot. Decode only that
+// bounded text here, once per text change, to identify any missing font glyphs.
+static void log_missing_glyphs(unsigned field, const char *name, const char *text,
+                               const lv_font_t *font) {
+    static char previous[3][now_playing::MAX_TEXT_BYTES + 1] = {};
+    static bool initialized[3] = {};
+    if (field >= 3 || (initialized[field] && strcmp(previous[field], text) == 0)) return;
+    strncpy(previous[field], text, now_playing::MAX_TEXT_BYTES);
+    previous[field][now_playing::MAX_TEXT_BYTES] = '\0';
+    initialized[field] = true;
+
+    char missing[120] = {};
+    size_t used = 0;
+    const auto *bytes = reinterpret_cast<const uint8_t *>(text);
+    for (size_t i = 0; bytes[i] != 0;) {
+        const uint8_t lead = bytes[i++];
+        uint32_t code = lead;
+        unsigned tail = 0;
+        if ((lead & 0xE0) == 0xC0) { code = lead & 0x1F; tail = 1; }
+        else if ((lead & 0xF0) == 0xE0) { code = lead & 0x0F; tail = 2; }
+        else if ((lead & 0xF8) == 0xF0) { code = lead & 7; tail = 3; }
+        while (tail--) code = (code << 6) | (bytes[i++] & 0x3F);
+        lv_font_glyph_dsc_t glyph;
+        if (lv_font_get_glyph_dsc(font, &glyph, code, 0) && !glyph.is_placeholder) continue;
+        // Leave room for the largest Unicode codepoint and a final terminator.
+        if (sizeof(missing) - used < 11) break;
+        const int written = snprintf(missing + used, sizeof(missing) - used,
+                                     "%sU+%04lX", used ? " " : "", (unsigned long)code);
+        if (written > 0) used += static_cast<size_t>(written);
+    }
+    if (used) rlog("[text] %s missing glyphs: %s", name, missing);
+}
+
 static void cb_page(lv_event_t *) {
     g_show_settings = !g_show_settings;
     if (g_show_settings) {
@@ -353,6 +406,14 @@ static void ui_set_now_playing(uint32_t now) {
     set_label(g_album_label, album);
     set_label(g_playback_label, playback);
     set_label(g_play_button_label, play_button);
+    char eq_text[24];
+    snprintf(eq_text, sizeof(eq_text), "EQ: %s", fresh && state.power_on ? eq_name(state.eq_index) : "--");
+    set_label(g_eq_label, eq_text);
+    if (bluetooth) {
+        log_missing_glyphs(0, "title", state.title, &lv_font_montserrat_28);
+        log_missing_glyphs(1, "artist", state.artist, &lv_font_montserrat_20);
+        log_missing_glyphs(2, "album", state.album, &lv_font_montserrat_18);
+    }
 
     const uint32_t position = bluetooth ? g_now_playing.position(now) : now_playing::UNKNOWN;
     const uint32_t duration = bluetooth ? state.duration_ms : now_playing::UNKNOWN;
@@ -386,6 +447,9 @@ static void build_ui() {
     g_page_button_label = lv_obj_get_child(page_button, 0);
     lv_obj_add_event_cb(page_button, cb_page, LV_EVENT_CLICKED, nullptr);
     build_battery_widget(scr);
+    g_eq_label = make_label(scr, "EQ: --", 640, 48, &lv_font_montserrat_12, 0x9AAAB8);
+    lv_obj_set_width(g_eq_label, 136);
+    lv_obj_set_style_text_align(g_eq_label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_t *divider = make_plain(scr, 752, 1);
     lv_obj_set_pos(divider, 24, 72);
     lv_obj_set_style_bg_color(divider, lv_color_hex(0x293846), 0);
@@ -618,6 +682,14 @@ void loop() {
              (unsigned)espnow_link_channel(),
              batt, battery_supply_str(g_batt.supply),
              screen_is_battery_mode() ? " (battery timings)" : "");
+        const auto &state = g_now_playing.state;
+        rlog("[playback] snapshot=%u fresh=%u power=%u connected=%u aux=%u status=0x%02X eq=%u advancing=%u",
+             (unsigned)g_now_playing.have_snapshot(), (unsigned)g_now_playing.fresh(now),
+             (unsigned)state.power_on, (unsigned)state.connected, (unsigned)state.aux,
+             (unsigned)state.play_status, (unsigned)state.eq_index, (unsigned)state.clock_advancing);
+        rlog("[clock] cached=%lu age=%lu shown=%lu duration=%lu",
+             (unsigned long)state.position_ms, (unsigned long)state.position_age_ms,
+             (unsigned long)g_now_playing.position(now), (unsigned long)state.duration_ms);
     }
     delay(5);
 }

@@ -18,7 +18,7 @@ static const uint32_t FRESH_MS = 6000;
 static const uint32_t EXTRAPOLATE_MS = 5000;
 
 struct NowPlayingState {
-    bool power_on, connected, aux;
+    bool power_on, connected, aux, clock_advancing;
     uint8_t play_status, eq_index;
     uint32_t duration_ms, position_ms, position_age_ms;
     char title[MAX_TEXT_BYTES + 1], artist[MAX_TEXT_BYTES + 1], album[MAX_TEXT_BYTES + 1];
@@ -99,8 +99,10 @@ public:
             state.position_ms == UNKNOWN || state.position_age_ms == UNKNOWN ||
             state.position_age_ms > EXTRAPOLATE_MS) return UNKNOWN;
         uint64_t result = state.position_ms;
+        // Prediction needs observed clock motion as well as PLAYING. Some
+        // sources retain PLAYING while paused; their frozen samples must hold.
         // Fast-forward/reverse have no known rate: show source snapshots only.
-        if (state.play_status == 1) {
+        if (state.play_status == 1 && state.clock_advancing) {
             const uint64_t age = static_cast<uint64_t>(state.position_age_ms) +
                                  static_cast<uint32_t>(now_ms - sample_at_);
             if (age > EXTRAPOLATE_MS) return UNKNOWN;
@@ -177,7 +179,7 @@ private:
     }
 
     bool decode(NowPlayingState &out, size_t len) const {
-        if (payload_[0] & ~7U) return false;
+        if (payload_[0] & ~15U) return false;
         const uint8_t status = payload_[1];
         if (status > 4 && status != 0xFF) return false;
         const size_t title_len = payload_[15], artist_len = payload_[16], album_len = payload_[17];
@@ -195,6 +197,7 @@ private:
         out.power_on = (payload_[0] & 1) != 0;
         out.connected = (payload_[0] & 2) != 0;
         out.aux = (payload_[0] & 4) != 0;
+        out.clock_advancing = (payload_[0] & 8) != 0;
         out.play_status = status;
         out.eq_index = payload_[2];
         out.duration_ms = read32(payload_ + 3);

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def state(**changes):
     snapshot = dict(power_on=True, connected=True, aux=False, play_status=1, eq_index=2,
                     duration_ms=200000, position_ms=50000, position_age_ms=100,
-                    title='A "new" song', artist="Björk", album="Album with long title")
+                    clock_advancing=True, title='A "new" song', artist="Björk", album="Album with long title")
     snapshot.update(changes)
     return snapshot
 
@@ -83,7 +83,7 @@ def test_known_crc_and_fixed_wire_layout():
     frames = encode_frames(state(), 0x12345678, 0xABCD)
     assert frames[0][:12] == b"BMS2\x12\x34\x56\x78\xab\xcd\x00\x02"
     payload = payload_of(frames)
-    assert payload[:3] == b"\x03\x01\x02"
+    assert payload[:3] == b"\x0b\x01\x02"
     assert int.from_bytes(payload[3:7], "big") == 200000
     assert int.from_bytes(payload[7:11], "big") == 50000
     assert int.from_bytes(payload[11:15], "big") == 100
@@ -172,7 +172,7 @@ def test_corrupt_and_malformed_frames_preserve_committed_state(cpp_model):
     assert sum(entry == ("A", 1) for entry in result) == 1
 
 
-@pytest.mark.parametrize("offset,value", [(0, 8), (1, 5), (15, 97), (18, 0), (18, 0xFF)])
+@pytest.mark.parametrize("offset,value", [(0, 16), (1, 5), (15, 97), (18, 0), (18, 0xFF)])
 def test_invalid_payload_rejected_even_with_valid_crc(cpp_model, offset, value):
     payload = bytearray(payload_of(encode_frames(state(), 1, 1)))
     payload[offset] = value
@@ -237,3 +237,52 @@ def test_expired_radio_snapshot_cannot_revive_after_full_millis_wrap(cpp_model):
     states = [entry for entry in result if isinstance(entry, dict)]
     assert states[0]["fresh"] == states[1]["fresh"] == 0
     assert states[-1]["fresh"] == 1
+
+
+def test_interpolation_flag_defaults_false_and_never_fakes_pause_status(cpp_model):
+    snapshot = state()
+    del snapshot["clock_advancing"]
+    frames = encode_frames(snapshot, 1, 1)
+    assert payload_of(frames)[0] == 3
+    result = probe(cpp_model, send(frames) + [("P", 1500), ("P", 3000)])
+    assert result[-2]["position"] == result[-1]["position"] == 50000
+    assert result[-1]["status"] == 1
+
+
+def test_windows_playing_label_with_frozen_source_clock_stays_frozen(cpp_model):
+    from remote.state_tx import StatePublisher
+
+    now = [1000]
+    publisher = StatePublisher(object(), clock=lambda: now[0], session=55)
+    publisher.set_transport(True, True, False)
+    publisher.note_status(1)
+    publisher.note_position(12000, 180000)
+    operations = send(encode_frames(publisher.snapshot(), 55, 1), now[0])
+    operations += [("P", 1500)]
+    now[0] = 2000
+    publisher.note_position(13000)
+    operations += send(encode_frames(publisher.snapshot(), 55, 2), now[0])
+    operations += [("P", 2250)]
+    # Windows keeps saying PLAYING, but actual source time stopped.
+    now[0] = 3000
+    publisher.note_position(13000)
+    operations += send(encode_frames(publisher.snapshot(), 55, 3), now[0])
+    operations += [("P", 3250), ("P", 3750)]
+    now[0] = 4000
+    publisher.note_position(13000)
+    operations += send(encode_frames(publisher.snapshot(), 55, 4), now[0])
+    operations += [("P", 4500)]
+    now[0] = 5000
+    publisher.note_position(14000)
+    operations += send(encode_frames(publisher.snapshot(), 55, 5), now[0])
+    operations += [("P", 5250)]
+    result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
+    assert [entry["position"] for entry in result] == [12000, 13250, 13000, 13000, 13000, 14250]
+    assert all(entry["status"] == 1 for entry in result)
+
+
+def test_actual_paused_status_always_suppresses_interpolation(cpp_model):
+    frames = encode_frames(state(play_status=2, clock_advancing=True), 1, 1)
+    result = probe(cpp_model, send(frames) + [("P", 1500), ("P", 3000)])
+    assert result[-2]["position"] == result[-1]["position"] == 50000
+    assert result[-1]["status"] == 2

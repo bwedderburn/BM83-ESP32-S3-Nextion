@@ -5,10 +5,14 @@ snapshot sequence (u16), fragment index/count (u8 each), payload length
 (u16), CRC16-CCITT-FALSE (u16), then up to 48 payload bytes. A snapshot
 contains flags/status/EQ, duration/position/sample-age (u32 milliseconds),
 three text byte lengths, and bounded UTF-8 title/artist/album strings.
+Flag bits 0/1/2 are power/connected/AUX; bit 3 permits interpolation only
+after genuine source position advances. Playback status stays source-reported.
 
 The receiver commits only complete, validated snapshots. Periodic full
 snapshots repair packet loss without blocking the audio controller for ACKs.
 """
+
+from .metadata_text import normalize_metadata_text
 
 UNKNOWN = 0xFFFFFFFF
 MAX_TEXT_BYTES = 96
@@ -20,6 +24,7 @@ MAX_PAYLOAD = PAYLOAD_FIXED + 3 * MAX_TEXT_BYTES
 FLAG_POWER = 1
 FLAG_CONNECTED = 2
 FLAG_AUX = 4
+FLAG_CLOCK_ADVANCING = 8
 
 
 def crc16(data):
@@ -33,10 +38,7 @@ def crc16(data):
 
 
 def _text_bytes(value):
-    if value is None:
-        return b""
-    # Display text cannot contain NUL, line breaks, or other control bytes.
-    text = "".join(" " if ord(char) < 32 or ord(char) == 127 else char for char in str(value))
+    text = normalize_metadata_text(value)
     try:
         raw = text.encode("utf-8")[:MAX_TEXT_BYTES]
     except UnicodeError:
@@ -70,6 +72,7 @@ def encode_frames(state, session, seq):
     flags = (FLAG_POWER if state.get("power_on") else 0)
     flags |= FLAG_CONNECTED if state.get("connected") else 0
     flags |= FLAG_AUX if state.get("aux") else 0
+    flags |= FLAG_CLOCK_ADVANCING if state.get("clock_advancing", False) else 0
     status = state.get("play_status")
     status = status if status in (0, 1, 2, 3, 4) else 0xFF
     try:

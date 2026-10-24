@@ -229,3 +229,126 @@ def test_unconfigured_peer_cannot_broadcast_metadata():
     assert not remote.state_tx_enabled
     assert not remote.send_state_frame(b"BMS2data")
     assert not mod.radio.sent
+
+
+def test_source_motion_requires_actual_advance_not_radio_snapshots():
+    state, _sink, clock = publisher()
+    assert not state.snapshot()["clock_advancing"]
+    for now in (100, 300, 1000):
+        clock.value = now
+        state.snapshot()
+        state.tick()
+        assert not state.snapshot()["clock_advancing"]
+    state.note_position(13000)
+    assert state.snapshot()["clock_advancing"]
+    # A radio-only refresh retains age and motion evidence, not a new sample.
+    clock.value = 1500
+    assert state.snapshot()["position_age_ms"] == 500
+    assert state.snapshot()["clock_advancing"]
+
+
+def test_windows_frozen_positions_hold_clock_without_fabricating_paused_status():
+    state, _sink, clock = publisher()
+    clock.value = 1000
+    state.note_position(13000)
+    assert state.snapshot()["clock_advancing"]
+    for now in (2000, 3000, 4000):
+        clock.value = now
+        state.note_position(13000)
+        snapshot = state.snapshot()
+        assert snapshot["position_ms"] == 13000
+        assert not snapshot["clock_advancing"]
+        assert snapshot["play_status"] == 1
+    clock.value = 5000
+    state.note_position(14000)
+    assert state.snapshot()["clock_advancing"]
+
+
+def test_coarse_position_duplicates_do_not_falsely_freeze_recent_motion():
+    state, _sink, clock = publisher()
+    clock.value = 1000
+    state.note_position(13000)
+    for now in (1100, 1200, 1499):
+        clock.value = now
+        state.note_position(13000)
+        assert state.snapshot()["clock_advancing"]
+    clock.value = 1500
+    state.note_position(13000)
+    assert not state.snapshot()["clock_advancing"]
+    clock.value = 2000
+    state.note_position(14000)
+    assert state.snapshot()["clock_advancing"]
+
+
+def test_pause_backward_seek_unknown_and_track_boundaries_reset_motion():
+    for boundary in ("pause", "seek", "unknown", "track", "disconnect"):
+        state, _sink, clock = publisher()
+        clock.value = 1000
+        state.note_position(13000)
+        assert state.snapshot()["clock_advancing"]
+        clock.value = 1100
+        if boundary == "pause":
+            state.note_status(2)
+            state.note_position(13000)
+            assert state.snapshot()["play_status"] == 2
+        elif boundary == "seek":
+            state.note_position(1000)
+        elif boundary == "unknown":
+            state.note_position(None)
+        elif boundary == "track":
+            state.clear_track()
+        else:
+            state.set_transport(True, False, False)
+        assert not state.snapshot()["clock_advancing"]
+
+
+def test_source_expiry_discards_motion_evidence_before_recovery():
+    state, _sink, clock = publisher()
+    clock.value = 1000
+    state.note_position(13000)
+    assert state.snapshot()["clock_advancing"]
+    clock.value = 7000
+    assert state.snapshot()["position_ms"] is None
+    assert not state.snapshot()["clock_advancing"]
+    state.note_position(15000)
+    assert not state.snapshot()["clock_advancing"]
+    clock.value = 8000
+    state.note_position(16000)
+    assert state.snapshot()["clock_advancing"]
+
+
+def test_motion_evidence_and_duplicate_window_cross_device_tick_wrap():
+    clock = Clock((1 << 29) - 100)
+    state = StatePublisher(Sink(), clock=clock, session=1)
+    state.set_transport(True, True, False)
+    state.note_status(1)
+    state.note_position(12000, 180000)
+    clock.value = 100
+    state.note_position(12200)
+    assert state.snapshot()["clock_advancing"]
+    clock.value = 500
+    state.note_position(12200)
+    assert state.snapshot()["clock_advancing"]
+    clock.value = 600
+    state.note_position(12200)
+    assert not state.snapshot()["clock_advancing"]
+
+
+def test_iphone_pause_resume_waits_for_new_motion_evidence():
+    state, _sink, clock = publisher()
+    clock.value = 1000
+    state.note_position(13000)
+    assert state.snapshot()["clock_advancing"]
+    clock.value = 1200
+    state.note_status(2)
+    assert state.snapshot()["position_ms"] is None
+    state.note_position(13200)
+    clock.value = 2200
+    assert state.snapshot()["position_ms"] == 13200
+    assert not state.snapshot()["clock_advancing"]
+    state.note_status(1)
+    state.note_position(13200)
+    assert not state.snapshot()["clock_advancing"]
+    clock.value = 3200
+    state.note_position(14200)
+    assert state.snapshot()["clock_advancing"]

@@ -6,12 +6,13 @@ its age, so frequent radio snapshots cannot revive a stalled playback clock.
 import os
 
 from utils.ticks import ticks_diff, ticks_ms
-from .now_playing import encode_frames
+from .now_playing import UNKNOWN, encode_frames
 
 SNAPSHOT_PERIOD_MS = 1000
 FRAME_GAP_MS = 40
 SNAPSHOT_DEADLINE_MS = 2000
 SOURCE_TIME_MAX_AGE_MS = 5000
+MOTION_STALL_MS = 500
 
 
 class StatePublisher:
@@ -37,18 +38,26 @@ class StatePublisher:
         self._duration = None
         self._position = None
         self._position_at = None
+        self._clock_advancing = False
+        self._motion_position = None
+        self._motion_at = None
 
     def _dirty(self, restart=True):
         if restart:
             self._frames = ()
         self._next_snapshot = None
 
+    def _reset_motion(self):
+        self._clock_advancing = False
+        self._motion_position = self._motion_at = None
+
     def clear_track(self):
         """Invalidate old text and timing at a track/session boundary."""
         if (self._title or self._artist or self._album or self._status is not None
-                or self._duration is not None or self._position is not None):
+                or self._duration is not None or self._position is not None or self._clock_advancing):
             self._title = self._artist = self._album = ""
             self._status = self._duration = self._position = self._position_at = None
+            self._reset_motion()
             self._dirty()
 
     def set_transport(self, power_on, connected, aux, suspended=False):
@@ -85,6 +94,7 @@ class StatePublisher:
         if status != self._status:
             self._status = status
             self._position = self._position_at = None
+            self._reset_motion()
             self._dirty()
 
     def note_duration(self, duration_ms):
@@ -93,12 +103,42 @@ class StatePublisher:
             self._dirty(restart=False)
 
     def note_position(self, position_ms, duration_ms=None):
+        """Observe source clock motion independently of its playback label.
+
+        Some sources keep reporting PLAYING while paused. Only genuine
+        position advances permit interpolation; radio repeats are not source
+        observations. Closely spaced duplicate GPS/notification samples must
+        not freeze a coarse, one-second-resolution source clock.
+        """
         self.note_duration(duration_ms)
+        now = self._clock()
+        was_advancing = self._clock_advancing
+        restart = False
+        if position_ms is not None and not 0 <= position_ms < UNKNOWN:
+            position_ms = None
+        if position_ms is None or self._status != 1:
+            self._reset_motion()
+            restart = position_ms is None
+        else:
+            elapsed = ticks_diff(now, self._motion_at) if self._motion_at is not None else None
+            if self._motion_position is None or elapsed is None or elapsed < 0 or elapsed > SOURCE_TIME_MAX_AGE_MS:
+                self._clock_advancing = False
+                self._motion_position, self._motion_at = position_ms, now
+            elif position_ms > self._motion_position:
+                self._clock_advancing = True
+                self._motion_position, self._motion_at = position_ms, now
+            elif position_ms < self._motion_position:
+                self._clock_advancing = False
+                self._motion_position, self._motion_at = position_ms, now
+                restart = True
+            elif elapsed >= MOTION_STALL_MS:
+                self._clock_advancing = False
         self._position = position_ms
-        self._position_at = self._clock() if position_ms is not None else None
+        self._position_at = now if position_ms is not None else None
         # Let an atomic snapshot finish even when source timing arrives more
-        # often than slow radio callbacks. Track/status boundaries still abort.
-        self._dirty(restart=False)
+        # often than slow radio callbacks. Stop predictions promptly when
+        # genuine samples establish that the source clock has frozen.
+        self._dirty(restart=restart or (was_advancing and not self._clock_advancing))
 
     def snapshot(self, now=None):
         """Return source data, retaining the original timing sample's age."""
@@ -115,11 +155,13 @@ class StatePublisher:
                 # Latch expiry so a stalled source cannot become fresh again
                 # when the device tick counter eventually wraps.
                 self._position = self._position_at = position = age = None
+                self._reset_motion()
         return {
             "power_on": power, "connected": connected and not suspended, "aux": aux,
             "play_status": self._status if active else None, "eq_index": self._eq,
             "duration_ms": self._duration if active else None,
             "position_ms": position, "position_age_ms": age,
+            "clock_advancing": bool(active and position is not None and self._status == 1 and self._clock_advancing),
             "title": self._title if active else "", "artist": self._artist if active else "",
             "album": self._album if active else "",
         }

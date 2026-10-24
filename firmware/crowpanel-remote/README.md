@@ -14,6 +14,8 @@ reserves space for a future image source. The **Settings** button opens a
 second page containing Power, Pair, EQ and Erase BLE bonds. Compact Previous,
 Play/Pause, Next and Volume −/+ controls remain available on both pages.
 Battery/supply indication and screen-wake gesture suppression are preserved.
+The current EQ mode is displayed beneath the battery, using the audio unit's
+latest state rather than counting remote button presses.
 
 Windows PC and iPhone playback are the intended verification targets. The
 source must provide AVRCP metadata and timing to BM83: forwarding cannot
@@ -90,6 +92,12 @@ actual-unit UART/coexistence timing must be checked before release.
 Snapshots expire after six seconds without a new complete update. Playing
 time advances only from a genuine source position, for at most five seconds
 without another source sample; radio refreshes do not make old timing fresh.
+An explicit clock-motion flag permits interpolation only after actual source
+positions advance. Equal positions persisting at least 500 ms hold the clock,
+even if a source still reports Playing. Closely spaced duplicate observations
+do not freeze a coarse source clock. Unicode spacing is normalized to ordinary
+spaces; meaningful UTF-8 names are retained, with missing glyphs diagnosed on
+serial when text changes.
 Pause, seek and track changes use subsequent source observations. Off, AUX,
 disconnect and suspended AVRCP sessions clear the old remote track cache.
 

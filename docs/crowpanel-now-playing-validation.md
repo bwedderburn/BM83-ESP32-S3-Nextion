@@ -20,7 +20,7 @@ the registration. No additional BM83 metadata polling is introduced.
 
 ## Host verification
 
-- 534 tests passed, including the actual CircuitPython MPY build test.
+- 568 tests passed, including the actual CircuitPython MPY build test.
 - Python-to-C++ protocol tests cover malformed/lost/reordered fragments,
   duplicate/replayed sequences, reboot sessions, UTF-8 limits, pause/seek,
   unknown timing and counter wrap.
@@ -52,7 +52,18 @@ healthy during playback. One host USB-console capture lost its device handle;
 the same console reappeared and passive capture resumed. The physical playback
 checks passed; a continuous USB capture across that interval is not available.
 
-Windows verification is pending. Mac support is optional and is not claimed.
+Windows metadata, progress, Next and source-side seeking were confirmed on
+both displays. An initial pause-clock and spacing issue prompted a follow-up
+build with explicit clock-motion evidence, Unicode-space normalization and
+the EQ indicator beneath the battery. The user confirmed all three fixes.
+Serial telemetry recorded 26 paused samples over 125 seconds with status
+0x02, prediction disabled and cached/displayed position fixed at 193111 ms.
+No missing-glyph diagnostics appeared for those received metadata fields.
+
+The original iPhone physical checks preceded this follow-up build; the new
+motion logic also has iPhone pause/resume host coverage. A final iPhone
+hardware regression check remains after artwork integration. Mac support is
+optional and is not claimed.
 Battery-powered dim/sleep/wake behavior has host coverage but has not been
 retested physically in this session.
 
