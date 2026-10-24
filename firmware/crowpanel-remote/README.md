@@ -9,9 +9,10 @@ solar firmware stays recoverable from that repo at any time.
 ## Now Playing and Settings
 
 The main 800×480 page shows title, artist, album, playback state, elapsed
-time, total time and a display-only progress bar. A 200×200 artwork placeholder
-reserves space for a future image source. The **Settings** button opens a
-second page containing Power, Pair, EQ and Erase BLE bonds. Compact Previous,
+time, total time and a display-only progress bar. The 200×200 artwork area
+automatically shows a matching cached or downloaded cover when available,
+and a status placeholder otherwise. The **Settings** button opens a
+second page containing Power, Pair, EQ, Erase BLE bonds and **Wi-Fi / Artwork**. Compact Previous,
 Play/Pause, Next and Volume −/+ controls remain available on both pages.
 Battery/supply indication and screen-wake gesture suppression are preserved.
 The current EQ mode is displayed beneath the battery, using the audio unit's
@@ -25,9 +26,10 @@ optional and its previously observed missing metadata is not repaired here.
 
 The progress bar replaces the relative volume slider. It does **not** accept
 drag-to-seek input: there is no arbitrary-position seek command in this build.
-The panel can render artwork, but the documented BM83 UART path does not
-support cover-art retrieval. This build neither fetches images online nor
-transfers image data; no Mac/helper application is needed for the text/time link.
+The documented BM83 UART path does not support cover-art retrieval. Optional
+artwork instead comes from an online catalog lookup on the CrowPanel, using
+the forwarded track text; see [Automatic artwork](#automatic-artwork). No
+computer or helper application is needed during playback.
 
 The remote emits the **same token vocabulary the Nextion sends over
 UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for the volume
@@ -40,7 +42,8 @@ behavior. The source may still ignore a delivered BLE HID key; counting
 requests cannot establish its actual volume.
 
 Every token is logged to serial AND transmitted over ESP-NOW, unicast to
-the audio unit (unassociated STA mode, power-save off). The unit's WiFi
+the audio unit, with modem power-save off on the remote. Without artwork
+Wi-Fi configured, both boards use unassociated STA mode. The unit's WiFi
 channel isn't fixed, so the remote finds it at boot by probing every
 channel 1–13 three times for a hardware ACK and taking the centre of the
 best-scoring run (neighbouring channels sometimes ACK at bench range):
@@ -49,6 +52,12 @@ retried up to 4× until ACKed (same `<seq>`, so the receiver drops repeats);
 two undelivered tokens in a row trigger a rescan (at most every 10 s). The
 heartbeat shows `espnow=<delivered>/<sent> rt=<retries> ch=<channel>`
 (`ch=0` = not found).
+
+With artwork Wi-Fi enabled, both boards join the same 2.4 GHz access-point
+BSSID and ESP-NOW follows that AP's channel. The remote does not hop channels
+while associated, scanning or joining. A lost audio-unit link causes Wi-Fi
+to pause so local ESP-NOW discovery can recover controls; use **Retry both**
+in Wi-Fi setup after the link returns.
 
 - token frame, remote → unit: `BMR1:<seq>:<token>`
 - state frame, unit → remote: binary `BMS2` snapshot fragments (see below)
@@ -86,8 +95,10 @@ The controller permits one outstanding state send and spaces frames by at
 least 40 ms. Ordinary timing updates do not abort a snapshot in flight;
 track, playback-state and transport boundaries do. A snapshot has a bounded
 two-second send window. CircuitPython's native send API can itself retry for
-up to two seconds on driver memory exhaustion, despite the completion guard;
-actual-unit UART/coexistence timing must be checked before release.
+up to two seconds on driver memory exhaustion, despite the completion guard.
+Actual Windows web-player playback kept the BM83 UART healthy and snapshots
+fresh during associated-Wi-Fi artwork fetching; that check does not force the
+driver's memory-exhaustion path.
 
 Snapshots expire after six seconds without a new complete update. Playing
 time advances only from a genuine source position, for at most five seconds
@@ -101,14 +112,125 @@ serial when text changes.
 Pause, seek and track changes use subsequent source observations. Off, AUX,
 disconnect and suspended AVRCP sessions clear the old remote track cache.
 
-### Hardware acceptance checks
+## Automatic artwork
 
-Host tests and a successful firmware build do not establish Windows/iPhone
-correctness. Check iPhone first, then Windows: title/artist/album, elapsed and
-total time, pause/resume, Next/Previous, a source-side seek and reconnect in
-the middle of a track. Verify that Settings, volume hold/release, screen
-dim/wake and lost-link expiry still work and the controller UART remains
-healthy. These checks are pending until recorded on the actual hardware.
+The CrowPanel searches MusicBrainz using artist and album; when the source
+omits the album, it can use artist and track title instead. A sufficiently
+high search score alone is not accepted: normalized names must match and
+the candidates must identify one release group. Album/track comparison permits
+an omitted in-word apostrophe, such as `Dreams` versus `Dream's`; artist identity
+remains strict. Only a complete successful empty album search permits one
+bounded fallback query, followed by the same identity and uniqueness checks.
+Ambiguous results,
+compilations, generic artist names and incomplete or oversized results keep
+the placeholder. This is a catalog match, so a cover is not guaranteed for
+every track or edition. The matching cover is fetched from the Cover Art
+Archive's `front-250` endpoint, decoded as JPEG and fitted into the artwork
+area. Online searches send the relevant track text to those public services.
+
+A background worker owns network requests, decoding and SD operations;
+LVGL updates remain in the main task. Lookup failures, missing artwork,
+unavailable Wi-Fi, invalid network time or TLS errors leave the placeholder
+and do not change the metadata, playback clock or control backend. New
+track requests retire old artwork results. Requests use verified HTTPS,
+bounded responses and rate limiting. TLS fetching requires network time
+and the explicit maintained CA bundle; there is no insecure fallback.
+Provider references, trust-store regeneration and third-party notices are
+in [lib/artwork_trust/README.md](lib/artwork_trust/README.md).
+
+### SD cache
+
+The existing SD card is mounted over the board's SPI connection (SCK 12,
+MISO 13, MOSI 11, CS 10). The firmware never formats the card. Its cache
+uses only `/bm83-artwork/aw-<SHA256>.*`; unrelated files and directories
+are preserved. The cache is bounded to 64 entries and 8 MiB, with old
+entries evicted as needed. Misses are cached for 24 hours when network
+time is available. Positive cached covers can be displayed offline,
+including before time synchronization. A missing or unwritable card
+disables persistent caching; an online cover can still be displayed.
+The matching-policy update retries older cached misses while preserving
+existing positive covers and their filenames.
+
+### One-time Wi-Fi setup
+
+Both boards have one 2.4 GHz radio shared by Wi-Fi and ESP-NOW. They must
+join the **same BSSID**, not merely the same SSID: two mesh access points
+can share a name while using different channels. Enterprise Wi-Fi is not
+supported. Router channel changes can be followed by rejoining the saved
+BSSID; replacing the AP requires enrollment again.
+
+1. Install the artwork-capable firmware on both boards and connect both
+   boards to the setup computer by USB. Pause playback for setup, which
+   briefly restarts the audio controller. Ensure its writable `CIRCUITPY`
+   volume is mounted and Python with `pyserial` is available.
+2. Close serial monitors and captures. From the repository root, start the
+   one-time utility with a **new** private rollback directory:
+
+   ```sh
+   python3 tools/provision_artwork_wifi.py --volume /Volumes/CIRCUITPY --output /private/tmp/bm83-artwork-setup
+   ```
+
+   Adjust the volume and output paths for the host. If necessary, identify
+   the devices with `--controller-serial` and `--crow-port`; the utility
+   requires exactly one matching controller (`303A:7003`) and CrowPanel
+   CH340 (`1A86:7523`).
+3. Open **Settings → Wi-Fi / Artwork**, select **Scan**, choose the desired
+   2.4 GHz access point, enter its password and press **Save**. Save stages
+   a pending profile; it does not immediately switch the live radio.
+4. The utility transfers the profile over physical USB, joins the
+   controller, trial-joins the CrowPanel, verifies fresh ESP-NOW snapshots
+   and commits the panel's profile. Resume playback after it reports
+   success. Disconnecting the computer afterward is supported; the utility
+   is not a runtime helper.
+
+Credentials are stored locally in CrowPanel NVS and the controller's
+`.artwork_wifi.json`; these stores are not encrypted at rest. The utility
+does not print credentials, and its host rollback directory/files use
+private permissions. Keep that directory private. The USB profile response
+contains credentials, so do not record the setup serial stream or publish
+its raw contents. Profiles are not transferred through ESP-NOW.
+
+Before a commit is sent, a failed setup restores the previous controller
+profile and aborts the panel's trial; a trial also times out automatically.
+Commit requests are retried with the same session nonce to recover a lost
+acknowledgment. If the final commit acknowledgment remains unconfirmed,
+the utility records that outcome and retains the new controller profile:
+the panel may already have committed. Do not restore just one board in
+that state. Check the on-panel connection and live metadata, then repeat
+the complete two-board enrollment with a new private output directory if
+needed. Loss of power between the two devices' writes cannot be made atomic.
+
+Wi-Fi association and scans share radio time with ESP-NOW. The firmware
+prioritizes the audio-unit link, so a failed connection can leave artwork
+offline until **Retry both** is selected. Cached art remains useful in
+that state; the text/time link still depends on fresh BM83 source data.
+
+### Verification status
+
+The installed metadata/clock baseline has actual iPhone and Windows
+verification, including displayed track details and advancing time.
+iPhone pause/resume, Next and source-side seek passed. The latest Windows
+clock-motion, spacing and EQ changes were also confirmed on the hardware;
+a paused clock remained fixed in the recorded telemetry.
+
+The artwork revision is installed on the actual ESP32-S3 boards. Two-board
+Wi-Fi enrollment, SD mounting, a verified HTTPS cover download and positive
+SD-cache reads passed. The user confirmed the correct cover, a stationary
+paused clock, CrowPanel pause/resume and source-side seeking with the Windows
+Apple Music web player. Telemetry confirms `ready cache=1 sd=1` on returning
+to the album and a held displayed clock despite increasing raw paused samples.
+The user also confirmed iPhone covers, metadata, clocks, CrowPanel pause/resume
+and Next, and source-side seeking. Both displays followed all four checks.
+The final punctuation correction downloaded the correct Chimp Spanner cover
+on the actual panel. The user then confirmed that both the Chimp Spanner and
+Sithu Aye covers appeared correctly and returned promptly when switching
+between the new and previously saved albums.
+
+The public host suite, real target build, production JPEG decoder and cache
+compatibility checks pass. Battery sleep/wake with associated Wi-Fi, offline
+cache display and unavailable-AP recovery still need dedicated hardware checks.
+The SD mount disables formatting and all cache operations stay in its reserved
+directory; the app-only flash preserves the saved Wi-Fi configuration.
 
 ## Build & flash
 
@@ -172,10 +294,35 @@ The detected supply picks the sleep policy:
 - **Light sleep** (battery only). Touch can't wake it (the GT911
   misbehaves across light sleep, see `power.h`), so press BOOT. After
   waking, touches are ignored until the finger lifts, so a phantom touch
-  can't fire a button, and the remote rescans for the audio unit's channel.
+  can't fire a button. Sleep waits for artwork/SD/network work to quiesce,
+  then stops ESP-NOW and Wi-Fi. Manual light sleep does not preserve AP
+  association. On wake the remote rebuilds the radio, awaits fresh track
+  state and rejoins a previously enabled committed network; an offline
+  profile remains in local control mode until **Retry both**. This new
+  artwork sleep/wake path still needs a battery hardware check.
   Plugging USB into a sleeping remote doesn't wake it; after BOOT it
   switches to USB timings from the voltage step.
 - **Dim.** Tapping a dimmed screen only wakes it: the whole wake gesture
   is swallowed until the finger lifts, so no button can fire by accident.
 - **Tuning.** The heartbeat logs `batt=<V>/<pct> supply=<usb|bat|?>`, and
   every supply change logs the rule and step that caused it.
+
+## Paused playback position
+
+The current Windows Apple Music **web player** test reports PAUSED over
+Bluetooth while its raw position counter continues to increase. The browser
+has not been identified. Earlier Windows PC testing did not establish which
+player was in use.
+
+When the source explicitly reports PAUSED, the CrowPanel holds the first valid
+paused position across fresh snapshots for that track. It retains the raw
+samples for diagnostics and does not invent a different playback status.
+Resume, track invalidation/identity changes, controller sessions, transport
+changes, unknown timing and snapshot expiry retire the hold. The earlier
+handling of PLAYING with a genuinely frozen source clock remains in place.
+
+A seek while paused is displayed on resume, consistent with the Nextion; an
+advancing source counter alone cannot distinguish a real seek from this source
+bug. Starting or reconnecting while the source is already paused cannot recover
+the true pause point if that source counter is already wrong. Verification
+therefore resumes playback first, then pauses again to establish a fresh anchor.

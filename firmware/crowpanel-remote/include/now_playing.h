@@ -80,6 +80,8 @@ public:
         state.play_status = state.eq_index = 0xFF;
         state.duration_ms = state.position_ms = state.position_age_ms = UNKNOWN;
         have_ = assembling_ = retired_valid_ = expired_ = false;
+        paused_hold_valid_ = false;
+        paused_position_ = UNKNOWN;
         session_ = assembly_session_ = retired_session_ = committed_at_ = sample_at_ = 0;
         seq_ = assembly_seq_ = assembly_crc_ = assembly_size_ = 0;
         assembly_count_ = mask_ = 0;
@@ -98,7 +100,10 @@ public:
         if (!fresh(now_ms) || !state.power_on || !state.connected || state.aux ||
             state.position_ms == UNKNOWN || state.position_age_ms == UNKNOWN ||
             state.position_age_ms > EXTRAPOLATE_MS) return UNKNOWN;
-        uint64_t result = state.position_ms;
+        // Some sources explicitly report PAUSED while their raw position
+        // counter keeps increasing. Retain the first valid paused observation
+        // until a real state/track boundary, rather than displaying that drift.
+        uint64_t result = state.play_status == 2 && paused_hold_valid_ ? paused_position_ : state.position_ms;
         // Prediction needs observed clock motion as well as PLAYING. Some
         // sources retain PLAYING while paused; their frozen samples must hold.
         // Fast-forward/reverse have no known rate: show source snapshots only.
@@ -154,6 +159,19 @@ public:
         if (crc16(payload_, size) != crc) return false;
         NowPlayingState incoming = {};
         if (!decode(incoming, size)) return false;
+        const bool boundary = !have_ || session != session_ || !fresh(now_ms) ||
+            state.play_status != 2 || incoming.play_status != 2 ||
+            state.power_on != incoming.power_on || state.connected != incoming.connected || state.aux != incoming.aux ||
+            known_text_changed(state.title, incoming.title) ||
+            known_text_changed(state.artist, incoming.artist) || known_text_changed(state.album, incoming.album);
+        const bool valid_paused_sample = incoming.play_status == 2 && incoming.power_on &&
+            incoming.connected && !incoming.aux && incoming.position_ms != UNKNOWN &&
+            incoming.position_age_ms != UNKNOWN && incoming.position_age_ms <= EXTRAPOLATE_MS;
+        if (boundary || !valid_paused_sample) paused_hold_valid_ = false;
+        if (valid_paused_sample && !paused_hold_valid_) {
+            paused_position_ = incoming.position_ms;
+            paused_hold_valid_ = true;
+        }
         if (have_ && session != session_) { retired_session_ = session_; retired_valid_ = true; }
         state = incoming;
         session_ = session;
@@ -167,6 +185,8 @@ public:
 
 private:
     bool have_, assembling_, retired_valid_;
+    bool paused_hold_valid_;
+    uint32_t paused_position_;
     mutable bool expired_;
     uint32_t session_, assembly_session_, retired_session_, committed_at_, sample_at_, assembly_at_;
     uint16_t seq_, assembly_seq_, assembly_crc_, assembly_size_;
@@ -176,6 +196,12 @@ private:
     static bool newer(uint16_t candidate, uint16_t previous) {
         const uint16_t distance = static_cast<uint16_t>(candidate - previous);
         return distance != 0 && distance < 0x8000;
+    }
+
+    static bool known_text_changed(const char *previous, const char *incoming) {
+        // Empty becoming known can be late metadata for this same track.
+        // Clearing/replacing a known identity signals track invalidation.
+        return previous[0] && strcmp(previous, incoming) != 0;
     }
 
     bool decode(NowPlayingState &out, size_t len) const {

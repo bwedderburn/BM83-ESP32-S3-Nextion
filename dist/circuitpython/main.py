@@ -15,6 +15,7 @@ from utils.common import (
 from nextion.display import Nextion, NX_RUNTIME, EQ_MAP, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from remote import EspNowRemote
 from remote.state_tx import StatePublisher
+from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
 from utils.ticks import ticks_diff, ticks_ms
@@ -61,6 +62,9 @@ STREAM_KICK_ENABLED = False
 
 def main():
     gc.collect()
+
+    # Bounded optional artwork Wi-Fi join before UART setup, never in its loop.
+    start_artwork_wifi()
 
     nx_uart = busio.UART(NX_TX, NX_RX, baudrate=NX_BAUD, timeout=0.0, receiver_buffer_size=1024)
     bm_uart = busio.UART(BM83_TX, BM83_RX, baudrate=BM83_BAUD, timeout=0.0, receiver_buffer_size=8192)
@@ -555,7 +559,9 @@ def main():
 
         for tok in tokens:
             dprint("[NX] Token:", tok)
-            if tok == b"BT_POWER":
+            if tok == b"NET_RETRY":
+                retry_artwork_wifi()
+            elif tok == b"BT_POWER":
                 print("[NX] BT_POWER token")
                 bm.power_toggle()
             elif tok == b"BT_POWEROFF":

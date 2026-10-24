@@ -7,6 +7,7 @@
 // guards a bounded RX queue for fragmented state snapshots.
 
 #include "espnow_link.h"
+#include "network_setup.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -121,6 +122,18 @@ uint8_t score_channel(uint8_t ch) {
 // undelivered tokens in case the unit's channel moved.
 void discover_channel() {
     g_last_scan_ms = millis();
+    if (WiFi.status() == WL_CONNECTED) {
+        // Associated peers follow their common AP; channel hopping breaks it.
+        g_channel = (uint8_t)WiFi.channel();
+        g_fail_streak = 0;
+        if (g_log) g_log("[espnow] following artwork AP channel%u", (unsigned)g_channel);
+        return;
+    }
+    if (network_setup_radio_busy()) {
+        // ESP-IDF rejects channel changes while a station scans/connects.
+        // Let the coordinated join finish, then follow its AP channel.
+        return;
+    }
     uint8_t score[14] = {0};
     uint8_t best = 0;
     for (uint8_t ch = 1; ch <= 13; ch++) {
@@ -173,6 +186,7 @@ bool espnow_link_init(espnow_log_fn logf) {
     g_log = logf;
 
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);  // Also updates Arduino's cached STA-start policy.
     WiFi.disconnect();  // unassociated STA: radio on, no AP
     // Modem power-save makes an idle unassociated STA miss ESP-NOW frames;
     // the remote must hear state frames, and it runs on USB. Not fatal if
@@ -216,6 +230,21 @@ bool espnow_link_init(espnow_log_fn logf) {
     }
     discover_channel();
     return true;
+}
+
+bool espnow_link_suspend() {
+    g_ready = false;
+    g_waiting = g_wait_ack = false;
+    g_fail_streak = 0;
+    esp_now_unregister_send_cb();
+    esp_now_unregister_recv_cb();
+    const esp_err_t result = esp_now_deinit();
+    if (result != ESP_OK && result != ESP_ERR_ESPNOW_NOT_INIT && g_log) {
+        g_log("[espnow] sleep deinit error: %d", (int)result);
+    }
+    clear_rx();
+    WiFi.setAutoReconnect(false);
+    return WiFi.mode(WIFI_OFF);
 }
 
 void espnow_send_token(const char *token) {
@@ -262,7 +291,9 @@ void espnow_link_heartbeat(uint32_t *sent, uint32_t *acked) {
     if (acked) *acked = g_acked;
 }
 
-uint8_t espnow_link_channel() { return g_channel; }
+uint8_t espnow_link_channel() {
+    return WiFi.status() == WL_CONNECTED ? (uint8_t)WiFi.channel() : g_channel;
+}
 
 void espnow_link_rescan() {
     if (g_ready) discover_channel();

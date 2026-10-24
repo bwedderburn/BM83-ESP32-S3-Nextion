@@ -19,8 +19,8 @@
 //     until BOOT is pressed (see battery.h, display_init.h)
 //
 // Display/touch/power bring-up comes verbatim from the solar HMI firmware
-// (same physical hardware). WiFi runs in unassociated STA mode for ESP-NOW
-// only — no AP association, no SD in this build.
+// (same physical hardware). Optional WiFi artwork shares the radio channel
+// with ESP-NOW. The artwork worker owns SD/cache/TLS; LVGL stays in this task.
 
 #include <Arduino.h>
 #include <lvgl.h>
@@ -30,6 +30,9 @@
 #include "display_init.h"
 #include "espnow_link.h"
 #include "now_playing.h"
+#include "artwork.h"
+#include "artwork_ca_bundle.h"
+#include "network_setup.h"
 
 // ----- logging ---------------------------------------------------------------
 // ARDUINO_USB_CDC_ON_BOOT=1 makes `Serial` the native USB CDC and `Serial0`
@@ -42,7 +45,7 @@ static void rlog(const char *fmt, ...) {
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
     Serial.println(buf);
-    Serial0.println(buf);
+    if (!network_setup_serial_busy()) Serial0.println(buf);
 }
 
 // ----- LVGL plumbing (v8 API, same shape as the solar HMI) -------------------
@@ -73,6 +76,15 @@ static lv_obj_t *g_progress_bar = nullptr;
 static lv_obj_t *g_play_button_label = nullptr;
 static lv_obj_t *g_eq_label = nullptr;
 static bool g_show_settings = false;
+static bool g_artwork_ready = false;
+static uint32_t g_artwork_request = 0;
+static lv_obj_t *g_artwork_image = nullptr;
+static lv_obj_t *g_artwork_icon = nullptr;
+static lv_obj_t *g_artwork_hint = nullptr;
+static uint16_t *g_artwork_pixels = nullptr;
+static lv_img_dsc_t g_artwork_descriptor = {};
+static lv_img_dsc_t g_blank_artwork = {};
+static const uint16_t g_blank_pixel = 0;
 
 // ----- battery widget (the solar HMI header icon, scaled for the remote) -----
 // [body with fill + charging bolt][tip]  "98%  4.12 V"
@@ -196,6 +208,7 @@ static const char *action_name(const char *token) {
     if (strcmp(token, "BT_POWER") == 0) return "Power";
     if (strcmp(token, "BT_PAIR") == 0) return "Pair";
     if (strcmp(token, "BT_EBIND") == 0) return "Erase BLE bonds";
+    if (strcmp(token, "NET_RETRY") == 0) return "Retry network";
     return "Control";
 }
 
@@ -277,6 +290,100 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *text,
 
 static void set_label(lv_obj_t *label, const char *text) {
     if (strcmp(lv_label_get_text(label), text) != 0) lv_label_set_text(label, text);
+}
+
+static void cb_network_settings(lv_event_t *) {
+    network_setup_show(lv_scr_act());
+}
+
+static void retry_network_both() {
+    // This callback runs only after the user selects Retry both in setup.
+    note_token("NET_RETRY");
+}
+
+static void clear_artwork(const char *message) {
+    if (!g_artwork_image) return;
+    lv_obj_add_flag(g_artwork_image, LV_OBJ_FLAG_HIDDEN);
+    // Switch the widget away from the owned buffer and evict any decoder/cache
+    // references before releasing it. Both descriptors have static lifetimes.
+    lv_img_set_src(g_artwork_image, &g_blank_artwork);
+    lv_img_cache_invalidate_src(&g_artwork_descriptor);
+    uint16_t *previous = g_artwork_pixels;
+    g_artwork_pixels = nullptr;
+    g_artwork_descriptor = {};
+    artwork_release(previous);
+    set_label(g_artwork_hint, message);
+    lv_obj_clear_flag(g_artwork_icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_artwork_hint, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void request_artwork(bool eligible) {
+    if (!g_artwork_ready) return;
+    const auto &state = g_now_playing.state;
+    eligible = eligible && state.artist[0] && (state.album[0] || state.title[0]);
+    const uint32_t id = artwork_request(eligible ? state.title : "",
+                                         eligible ? state.artist : "",
+                                         eligible ? state.album : "");
+    if (id != g_artwork_request) {
+        g_artwork_request = id;
+        clear_artwork(eligible ? "Finding artwork..." : "Artwork unavailable");
+    }
+}
+
+static const char *artwork_status_name(ArtworkStatus status) {
+    switch (status) {
+        case ArtworkStatus::Ready: return "ready";
+        case ArtworkStatus::NoMatch: return "no-match";
+        case ArtworkStatus::Offline: return "offline";
+        case ArtworkStatus::ClockUnavailable: return "waiting-time";
+        case ArtworkStatus::TrustUnavailable: return "trust-unavailable";
+        case ArtworkStatus::InvalidImage: return "invalid-image";
+        case ArtworkStatus::StorageError: return "storage-error";
+        default: return "network-error";
+    }
+}
+
+static void poll_artwork() {
+    ArtworkResult result;
+    if (!g_artwork_ready || !artwork_poll(result)) return;
+    if (result.request_id != g_artwork_request) {
+        artwork_release(result.rgb565);
+        return;
+    }
+    static uint32_t last_logged_id = 0;
+    static ArtworkStatus last_logged_status = ArtworkStatus::NoMatch;
+    if (result.request_id != last_logged_id || result.status != last_logged_status) {
+        rlog("[artwork] request=%lu status=%s cache=%u sd=%u size=%ux%u",
+             (unsigned long)result.request_id, artwork_status_name(result.status),
+             (unsigned)result.from_cache, (unsigned)result.sd_ready,
+             (unsigned)result.width, (unsigned)result.height);
+        last_logged_id = result.request_id;
+        last_logged_status = result.status;
+    }
+    if (result.status != ArtworkStatus::Ready || !result.rgb565 || !result.width || !result.height) {
+        clear_artwork(result.status == ArtworkStatus::Offline ? "Artwork offline" :
+                      result.status == ArtworkStatus::ClockUnavailable ? "Waiting for artwork..." :
+                      "Artwork unavailable");
+        artwork_release(result.rgb565);
+        return;
+    }
+    clear_artwork("Artwork unavailable");
+    g_artwork_pixels = result.rgb565;
+    g_artwork_descriptor.header.always_zero = 0;
+    g_artwork_descriptor.header.cf = LV_IMG_CF_TRUE_COLOR;
+    g_artwork_descriptor.header.w = result.width;
+    g_artwork_descriptor.header.h = result.height;
+    g_artwork_descriptor.data_size = static_cast<uint32_t>(result.width) * result.height * 2;
+    g_artwork_descriptor.data = reinterpret_cast<const uint8_t *>(g_artwork_pixels);
+    lv_img_set_src(g_artwork_image, &g_artwork_descriptor);
+    const uint16_t zoom_x = 200U * 256U / result.width;
+    const uint16_t zoom_y = 200U * 256U / result.height;
+    lv_img_set_pivot(g_artwork_image, result.width / 2, result.height / 2);
+    lv_img_set_zoom(g_artwork_image, zoom_x < zoom_y ? zoom_x : zoom_y);
+    lv_obj_center(g_artwork_image);
+    lv_obj_add_flag(g_artwork_icon, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(g_artwork_hint, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_artwork_image, LV_OBJ_FLAG_HIDDEN);
 }
 
 // Raw BM83 EQ modes, matching BM83.EQ_L. Do not infer EQ from button presses:
@@ -364,6 +471,7 @@ static void ui_set_now_playing(uint32_t now) {
     const auto &state = g_now_playing.state;
     const bool fresh = g_now_playing.fresh(now);
     const bool bluetooth = fresh && state.power_on && state.connected && !state.aux;
+    request_artwork(bluetooth);
     const char *title;
     const char *artist = "";
     const char *album = "";
@@ -469,12 +577,20 @@ static void build_ui() {
     lv_obj_set_style_border_color(art, lv_color_hex(0x344A60), 0);
     lv_obj_set_style_border_width(art, 1, 0);
     lv_obj_set_style_radius(art, 12, 0);
-    lv_obj_t *music_icon = make_label(art, LV_SYMBOL_AUDIO, 0, 0,
+    g_artwork_icon = make_label(art, LV_SYMBOL_AUDIO, 0, 0,
                                      &lv_font_montserrat_36, 0x9AAAB8);
-    lv_obj_align(music_icon, LV_ALIGN_CENTER, 0, -16);
-    lv_obj_t *art_hint = make_label(art, "Artwork unavailable", 0, 0,
+    lv_obj_align(g_artwork_icon, LV_ALIGN_CENTER, 0, -16);
+    g_artwork_hint = make_label(art, "Artwork unavailable", 0, 0,
                                    &lv_font_montserrat_12, 0x9AAAB8);
-    lv_obj_align(art_hint, LV_ALIGN_CENTER, 0, 28);
+    lv_obj_align(g_artwork_hint, LV_ALIGN_CENTER, 0, 28);
+    g_blank_artwork.header.always_zero = 0;
+    g_blank_artwork.header.cf = LV_IMG_CF_TRUE_COLOR;
+    g_blank_artwork.header.w = g_blank_artwork.header.h = 1;
+    g_blank_artwork.data_size = sizeof(g_blank_pixel);
+    g_blank_artwork.data = reinterpret_cast<const uint8_t *>(&g_blank_pixel);
+    g_artwork_image = lv_img_create(art);
+    lv_img_set_src(g_artwork_image, &g_blank_artwork);
+    lv_obj_add_flag(g_artwork_image, LV_OBJ_FLAG_HIDDEN);
 
     g_title_label = make_label(g_now_page, "Waiting for audio unit", 228, 8,
                                &lv_font_montserrat_28, COLOR_FG);
@@ -524,6 +640,14 @@ static void build_ui() {
     lv_obj_add_event_cb(make_button(g_settings_page, "Erase BLE bonds",
                                     256, 140, 240, 64),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_EBIND");
+    lv_obj_add_event_cb(make_button(g_settings_page, "Wi-Fi / Artwork",
+                                    512, 56, 240, 64),
+                        cb_network_settings, LV_EVENT_CLICKED, nullptr);
+    lv_obj_t *artwork_help = make_label(g_settings_page,
+                                       "Connect for automatic artwork. Saved covers work offline.",
+                                       512, 140, &lv_font_montserrat_14, 0x9AAAB8);
+    lv_obj_set_width(artwork_help, 240);
+    lv_label_set_long_mode(artwork_help, LV_LABEL_LONG_WRAP);
     make_label(g_settings_page, "Playback and volume controls remain available below.",
                 0, 246, &lv_font_montserrat_14, 0x9AAAB8);
 
@@ -591,6 +715,14 @@ void setup() {
     // can already transmit. Init failure is logged and non-fatal — the
     // panel keeps working as a serial-only remote.
     espnow_link_init(rlog);
+    network_setup_set_retry_callback(retry_network_both);
+    network_setup_set_export_hooks(artwork_prepare_sleep, artwork_resume);
+    network_setup_begin();
+    ArtworkConfig artwork_config;
+    artwork_config.ca_bundle = artwork_trust::kMozillaCaBundle;
+    artwork_config.archive_ca_pem = artwork_trust::kArchiveRootG2Pem;
+    g_artwork_ready = artwork_begin(artwork_config);
+    if (!g_artwork_ready) rlog("[artwork] worker unavailable; controls remain active");
 
     // Battery gauge after WiFi is up: the divider ratio was calibrated with
     // the radio running. On the bench a boot read taken before WiFi started
@@ -622,11 +754,22 @@ static void poll_battery() {  // the battery module assumes ~1 Hz
 
 void loop() {
     static uint32_t last_heartbeat = 0;
+    static bool preparing_sleep = false;
+    static bool network_prepared = false;
+    static bool sleep_retry_pending = false;
+    static uint32_t sleep_failed_at = 0;
 
     lv_timer_handler();  // a tap may wake the dimmed screen here
     report_backlight_change();
     const bool sleep_due = screen_idle_tick(SCREEN_DIM_AFTER_MS);  // may dim
     report_backlight_change();
+    if (!sleep_due && preparing_sleep) {
+        if (network_prepared) network_setup_resume_after_sleep();
+        network_prepared = false;
+        // A USB credential export may own a separate worker pause now.
+        if (!network_setup_serial_busy()) artwork_resume();
+        preparing_sleep = false;
+    }
     if (sleep_due) {
         // The current timings say light sleep. USB may have been plugged in
         // since the last 1 Hz sample, and a USB-powered remote must never
@@ -637,28 +780,71 @@ void loop() {
         // battery every loop (PR #157 review).
         poll_battery();
         if (screen_idle_tick(SCREEN_DIM_AFTER_MS)) {
-            screen_light_sleep();       // blocks until BOOT is pressed
-            report_backlight_change();  // the backlight is back on
-            rlog("[power] woke from light sleep (BOOT)");
-            // The unit may have changed channel while we slept: find it
-            // again now, so the first tap is not spent on a stale channel.
-            g_now_playing.reset();
-            espnow_link_rescan();
+            const bool retry_due = !sleep_retry_pending ||
+                                   static_cast<uint32_t>(millis() - sleep_failed_at) >= 30000;
+            if (!network_setup_serial_busy() && retry_due) {
+                preparing_sleep = true;
+                // A worker may be in SD/TLS I/O. Keep the UI responsive while
+                // cancellation finishes; never sleep through an active write.
+                if (artwork_prepare_sleep() && network_setup_prepare_sleep()) {
+                    network_prepared = true;
+                    if (espnow_link_suspend()) {
+                        screen_light_sleep();       // normal wake uses BOOT
+                        espnow_link_init(rlog);
+                        g_now_playing.reset();
+                        network_setup_resume_after_sleep();
+                        network_prepared = false;
+                        artwork_resume();
+                        preparing_sleep = false;
+                        sleep_retry_pending = false;
+                        report_backlight_change();
+                        rlog("[power] screen resumed; refreshing playback state");
+                        ui_set_now_playing(millis());
+                    } else {
+                        // A failed radio stop must restore controls and avoid
+                        // retrying every UI tick while the idle timer is due.
+                        espnow_link_init(rlog);
+                        g_now_playing.reset();
+                        network_setup_resume_after_sleep();
+                        network_prepared = false;
+                        if (!network_setup_serial_busy()) artwork_resume();
+                        preparing_sleep = false;
+                        sleep_retry_pending = true;
+                        sleep_failed_at = millis();
+                        rlog("[power] sleep deferred; radio stop failed");
+                        ui_set_now_playing(millis());
+                    }
+                }
+            }
+        } else if (preparing_sleep) {
+            if (network_prepared) network_setup_resume_after_sleep();
+            network_prepared = false;
+            if (!network_setup_serial_busy()) artwork_resume();
+            preparing_sleep = false;
         }
     }
 
     uint8_t rx_frame[ESPNOW_FRAME_MAX];
     size_t rx_len;
+    bool snapshot_changed = false;
     while ((rx_len = espnow_link_poll(rx_frame, sizeof(rx_frame))) != 0) {
-        g_now_playing.accept(rx_frame, rx_len, millis());
+        if (g_now_playing.accept(rx_frame, rx_len, millis())) snapshot_changed = true;
     }
 
     const uint32_t now = millis();
+    network_setup_peer_fresh(g_now_playing.fresh(now));
+    network_setup_tick();
+    if (network_setup_take_rescan_request()) {
+        g_now_playing.reset();
+        ui_set_now_playing(millis());
+        espnow_link_rescan();
+    }
     static uint32_t last_playback_refresh = 0;
-    if (now - last_playback_refresh >= 250) {
+    if (snapshot_changed || now - last_playback_refresh >= 250) {
         last_playback_refresh = now;
         ui_set_now_playing(now);
     }
+    poll_artwork();
     if (now - g_last_batt_poll >= 1000) poll_battery();
 
     if (now - last_heartbeat >= 5000) {

@@ -286,3 +286,98 @@ def test_actual_paused_status_always_suppresses_interpolation(cpp_model):
     result = probe(cpp_model, send(frames) + [("P", 1500), ("P", 3000)])
     assert result[-2]["position"] == result[-1]["position"] == 50000
     assert result[-1]["status"] == 2
+
+
+def test_web_player_paused_counter_drift_is_held_without_hiding_raw_samples(cpp_model):
+    operations = []
+    for sequence, now, raw_position in ((1, 1000, 143360), (2, 5000, 148368), (3, 9000, 153393)):
+        operations += send(encode_frames(state(play_status=2, clock_advancing=False,
+                                                position_ms=raw_position, position_age_ms=1),
+                                         1, sequence), now)
+        operations += [("P", now + 250)]
+    result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
+    assert [entry["position"] for entry in result] == [143360, 143360, 143360]
+    assert [entry["sample"] for entry in result] == [143360, 148368, 153393]
+    assert all(entry["status"] == 2 and entry["fresh"] == 1 for entry in result)
+
+
+def test_paused_seek_is_shown_on_resume_not_inferred_from_a_drifting_counter(cpp_model):
+    operations = send(encode_frames(state(play_status=2, position_ms=50000), 1, 1))
+    operations += send(encode_frames(state(play_status=2, position_ms=90000), 1, 2), 2000)
+    operations += [("P", 2250)]
+    operations += send(encode_frames(state(play_status=1, clock_advancing=True,
+                                           position_ms=90000, position_age_ms=0), 1, 3), 3000)
+    operations += [("P", 3250)]
+    result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
+    assert result[0]["position"] == 50000
+    assert result[0]["sample"] == 90000
+    assert result[1]["position"] == 90250
+    assert result[1]["status"] == 1
+
+
+@pytest.mark.parametrize("changed", [
+    dict(title="A different track"),
+    dict(artist="A different artist"),
+    dict(album="A different known album"),
+])
+def test_known_track_identity_change_starts_a_new_paused_anchor(cpp_model, changed):
+    operations = send(encode_frames(state(play_status=2, position_ms=50000), 1, 1))
+    operations += send(encode_frames(state(play_status=2, position_ms=1200, **changed), 1, 2), 2000)
+    operations += [("P", 2250)]
+    result = probe(cpp_model, operations)
+    assert result[-1]["position"] == 1200
+
+
+def test_late_album_metadata_does_not_release_a_same_track_pause_hold(cpp_model):
+    operations = send(encode_frames(state(play_status=2, position_ms=50000, album=""), 1, 1))
+    operations += send(encode_frames(state(play_status=2, position_ms=55000, album="Album"), 1, 2), 2000)
+    operations += [("P", 2250)]
+    assert probe(cpp_model, operations)[-1]["position"] == 50000
+
+
+@pytest.mark.parametrize("unavailable", [
+    dict(position_ms=None), dict(position_age_ms=None), dict(position_age_ms=5001),
+    dict(power_on=False), dict(connected=False), dict(aux=True),
+])
+def test_invalid_source_or_transport_clears_pause_hold(cpp_model, unavailable):
+    operations = send(encode_frames(state(play_status=2, position_ms=50000), 1, 1))
+    bad = state(play_status=2, position_ms=55000)
+    bad.update(unavailable)
+    operations += send(encode_frames(bad, 1, 2), 2000) + [("P", 2250)]
+    operations += send(encode_frames(state(play_status=2, position_ms=60000), 1, 3), 3000)
+    operations += [("P", 3250)]
+    result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
+    assert result[0]["position"] == UNKNOWN
+    assert result[1]["position"] == 60000
+
+
+def test_radio_expiry_then_fresh_paused_snapshot_does_not_reuse_old_anchor(cpp_model):
+    operations = send(encode_frames(state(play_status=2, position_ms=50000), 1, 1))
+    operations += [("P", 7000)]
+    operations += send(encode_frames(state(play_status=2, position_ms=90000), 1, 2), 8000)
+    operations += [("P", 8250)]
+    result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
+    assert result[0]["position"] == UNKNOWN and result[0]["fresh"] == 0
+    assert result[1]["position"] == 90000
+
+
+def test_controller_session_and_explicit_reset_retire_paused_anchor(cpp_model):
+    operations = send(encode_frames(state(play_status=2, position_ms=50000), 1, 1))
+    operations += send(encode_frames(state(play_status=2, position_ms=90000), 2, 1), 2000)
+    operations += [("P", 2250), ("R",)]
+    operations += send(encode_frames(state(play_status=2, position_ms=100000), 2, 2), 3000)
+    operations += [("P", 3250)]
+    result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
+    assert [entry["position"] for entry in result] == [90000, 100000]
+
+
+def test_track_invalidation_then_late_identity_does_not_keep_previous_track_anchor(cpp_model):
+    operations = send(encode_frames(state(play_status=2, position_ms=50000), 1, 1))
+    operations += send(encode_frames(state(play_status=2, position_ms=1000,
+                                           title="", artist="", album=""), 1, 2), 2000)
+    operations += [("P", 2250)]
+    operations += send(encode_frames(state(play_status=2, position_ms=6000,
+                                           title="New track", artist="New artist", album=""), 1, 3), 3000)
+    operations += [("P", 3250)]
+    result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
+    assert [entry["position"] for entry in result] == [1000, 1000]

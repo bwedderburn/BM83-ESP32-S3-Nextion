@@ -39,6 +39,10 @@ typedef void (*espnow_log_fn)(const char *fmt, ...);
 // and a later rescan picks the unit up once it is on.
 bool espnow_link_init(espnow_log_fn logf);
 
+// Stop callbacks/ESP-NOW/Wi-Fi before manual light sleep, preserving the
+// token sequence and counters. Reinitialize with espnow_link_init on wake.
+bool espnow_link_suspend();
+
 // Send a token frame and wait (bounded: up to 4 attempts, ~250 ms worst
 // case) for the unit's radio to ACK it. Retries reuse the same <seq>, so
 // the receiver drops any repeat that did land. Safe before init or after a

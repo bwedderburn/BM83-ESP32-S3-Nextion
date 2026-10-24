@@ -15,9 +15,8 @@
 //     wake path at all.
 //
 // Why light sleep, not deep sleep:
-//   - Light sleep preserves RAM and Wi-Fi association (via DTIM modem
-//     sleep). Execution resumes right after esp_light_sleep_start() with
-//     all UI state intact, so wake feels like flipping a light switch.
+//   - Light sleep preserves RAM and UI state. The caller quiesces SD/network
+//     work and stops Wi-Fi before sleeping, then rebuilds its association.
 //   - Deep sleep would cold-reboot, costing 3-5 s of black screen and a
 //     full Wi-Fi reconnect.
 #pragma once
@@ -26,7 +25,7 @@
 // While blocked:
 //   - Backlight is off (already the dominant power load).
 //   - ESP32 in light sleep at ~1-2 mA.
-//   - Wi-Fi modem-sleeps but stays associated; no reconnect on wake.
+//   - Wi-Fi is stopped; the caller reconnects on wake.
 // On return:
 //   - Backlight is restored to full.
 //   - Caller is responsible for resetting any dim/idle-tracking state so

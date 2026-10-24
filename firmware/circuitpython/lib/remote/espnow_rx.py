@@ -32,6 +32,9 @@ except ImportError:  # host Python, or a CircuitPython build without espnow
 
 from nextion.display import TOKENS as NEXTION_TOKENS
 
+# Retry only an already-provisioned profile. Credentials never use ESP-NOW.
+REMOTE_TOKENS = NEXTION_TOKENS | {b"NET_RETRY"}
+
 FRAME_PREFIX = b"BMR1:"
 # Channel-discovery probe from the remote. Its only job is to be ACKed by
 # this radio's hardware so the remote can find our channel; it is ignored
@@ -92,7 +95,7 @@ def fmt_mac(mac):
         return repr(mac)
 
 
-def parse_frame(msg, vocabulary=NEXTION_TOKENS):
+def parse_frame(msg, vocabulary=REMOTE_TOKENS):
     """Return (seq, token) for a well-formed BMR1 frame, else None.
 
     Strict on purpose: exact prefix, 1-10 ASCII digits, one ':' and a token
@@ -146,7 +149,7 @@ class EspNowRemote:
     injectable for host tests.
     """
 
-    def __init__(self, enabled=True, peer_mac=None, vocabulary=NEXTION_TOKENS,
+    def __init__(self, enabled=True, peer_mac=None, vocabulary=REMOTE_TOKENS,
                  espnow_module=None, clock=None, log=print, ble_active=False,
                  runtime=None):
         self.want = enabled
