@@ -17,6 +17,7 @@ from utils.ticks import (
     TICKS_PERIOD,
     ticks_add,
     ticks_diff,
+    ticks_due,
     ticks_less,
     ticks_ms,
     ticks_recent,
@@ -254,3 +255,207 @@ def test_nextion_boot_sync_then_tick_sends(clock, monkeypatch):
     clock.advance_ms(35)
     nx.tick()
     assert len(uart.written) == min(2, queued)
+
+
+# ---------------------------------------------------------------------------
+# ticks_due (deadline check with an alias horizon)
+# ---------------------------------------------------------------------------
+
+def test_ticks_due_none_past_future():
+    now = 1000
+    assert ticks_due(now, None, 60000) is True
+    assert ticks_due(now, now, 60000) is True
+    assert ticks_due(now, now - 1, 60000) is True
+    assert ticks_due(now, now + 1, 60000) is False
+    assert ticks_due(now, now + 60000, 60000) is False
+
+
+def test_ticks_due_across_wrap():
+    now = TICKS_MAX - 5
+    deadline = ticks_add(now, 20)          # lands after the wrap
+    assert ticks_due(now, deadline, 60000) is False
+    assert ticks_due(ticks_add(now, 19), deadline, 60000) is False
+    assert ticks_due(ticks_add(now, 20), deadline, 60000) is True
+
+
+def test_ticks_due_treats_aliased_far_future_as_due():
+    # A deadline set ~4 days ago aliases to ~2 days "ahead": beyond any real
+    # schedule, so it must fire rather than stall the scheduler.
+    now = 5000
+    stale = ticks_add(now, -(TICKS_HALFPERIOD + 24 * 3600 * 1000))
+    assert ticks_diff(stale, now) > 60000
+    assert ticks_due(now, stale, 60000) is True
+
+
+# ---------------------------------------------------------------------------
+# BM83 AVRCP scheduler families on ticks (issue #149 follow-up)
+# ---------------------------------------------------------------------------
+
+def _connected_bm83():
+    bm, uart = _bm83()
+    bm.connected = True
+    return bm, uart
+
+
+def _reg_event_ids(uart):
+    # avrcp_register_notification frames: AA, len_hi, len_lo, op, db,
+    # AVC payload ... with the event id after the 0x31 PDU header.
+    out = []
+    for w in uart.writes:
+        idx = w.find(bytes([0x31]))
+        if idx >= 0:
+            out.append(w)
+    return out
+
+
+def test_notif_registrations_stay_staggered_across_wrap(clock):
+    """Contract 5: initial register-notifications never go out back-to-back."""
+    bm, uart = _connected_bm83()
+    bm.schedule_avrcp_notifications(((0.25, 0x01, 0), (0.75, 0x02, 0), (1.25, 0x05, 1)))
+    sent_at = []
+    for _ in range(400):                    # 2 s of 5 ms loop passes
+        before = len(uart.writes)
+        bm.tick_notif_regs()
+        if len(uart.writes) > before:
+            sent_at.append(clock.ms)
+        clock.advance_ms(5)
+    assert len(sent_at) == 3
+    start = TICKS_PERIOD - 20
+    assert [t - start for t in sent_at] == [250, 750, 1250]   # crosses the wrap
+    gaps = [b - a for a, b in zip(sent_at, sent_at[1:])]
+    assert min(gaps) >= bm._notif_reg_min_gap_ms
+
+
+def test_notif_overdue_queue_still_spaced_by_min_gap(clock):
+    bm, uart = _connected_bm83()
+    bm.schedule_avrcp_notifications(((0.0, 0x01, 0), (0.0, 0x02, 0), (0.0, 0x05, 1)))
+    sent_at = []
+    for _ in range(300):
+        before = len(uart.writes)
+        bm.tick_notif_regs()
+        if len(uart.writes) > before:
+            sent_at.append(clock.ms)
+        clock.advance_ms(5)
+    gaps = [b - a for a, b in zip(sent_at, sent_at[1:])]
+    assert len(sent_at) == 3
+    assert all(g >= 450 for g in gaps)
+
+
+def test_notif_gap_not_blocked_by_aliased_stale_stamp(clock):
+    bm, uart = _connected_bm83()
+    bm.schedule_avrcp_notifications(((0.0, 0x01, 0),))
+    bm._last_notif_reg_at = ticks_add(ticks_ms(), -(TICKS_HALFPERIOD + 1000))
+    bm.tick_notif_regs()
+    assert len(uart.writes) == 1
+
+
+def test_play_status_poll_period_across_wrap(clock):
+    bm, uart = _connected_bm83()
+    bm.schedule_play_status(0.05)
+    polls = []
+    for _ in range(700):                    # 3.5 s
+        before = len(uart.writes)
+        bm.tick_avrcp()
+        if len(uart.writes) > before:
+            polls.append(clock.ms)
+        clock.advance_ms(5)
+    start = TICKS_PERIOD - 20
+    assert [t - start for t in polls] == [50, 1050, 2050, 3050]
+
+
+def test_play_status_aliased_stale_deadline_polls_now(clock):
+    bm, uart = _connected_bm83()
+    bm._next_playstatus_at = ticks_add(ticks_ms(), -(TICKS_HALFPERIOD + 3600 * 1000))
+    bm.tick_avrcp()
+    assert len(uart.writes) == 1
+
+
+def test_attrs_quiet_window_holds_across_wrap(clock):
+    bm, uart = _connected_bm83()
+    bm.defer_attrs(1.0)
+    assert bm.schedule_attrs(0.15, force=True) is True   # pulled up to the floor
+    clock.advance_ms(999)
+    assert bm.tick_avrcp_attrs() is False
+    clock.advance_ms(1)
+    assert bm.tick_avrcp_attrs() is True
+    assert bm._next_attrs_at is None and bm._attrs_not_before is None
+
+
+def test_attrs_throttle_on_ticks(clock):
+    bm, uart = _connected_bm83()
+    assert bm.schedule_attrs(0.0) is True
+    assert bm.tick_avrcp_attrs() is True
+    clock.advance_ms(1499)
+    assert bm.schedule_attrs(0.0) is False
+    clock.advance_ms(1)
+    assert bm.schedule_attrs(0.0) is True
+
+
+def test_attrs_stale_floor_and_pending_are_replaced(clock):
+    bm, uart = _connected_bm83()
+    far = ticks_add(ticks_ms(), TICKS_HALFPERIOD - 1000)   # aliased "~3 days ahead"
+    bm._attrs_not_before = far
+    bm._next_attrs_at = far
+    assert bm.schedule_attrs(0.2, force=True) is True
+    assert ticks_diff(bm._next_attrs_at, ticks_ms()) == 200
+    clock.advance_ms(200)
+    assert bm.tick_avrcp_attrs() is True
+
+
+def test_eq_and_reregister_throttles_across_wrap(clock):
+    bm, uart = _bm83()
+    assert bm.set_eq(bm.EQ_SEQ[1]) is not None
+    assert bm.avrcp_reregister_status_changed() is True
+    assert bm.avrcp_reregister_position_changed() is True
+    assert bm.avrcp_reregister_track_changed() is True
+    clock.advance_ms(249)                   # crosses the wrap
+    assert bm.set_eq(bm.EQ_SEQ[2]) is None
+    clock.advance_ms(1)
+    assert bm.set_eq(bm.EQ_SEQ[2]) is not None
+    clock.advance_ms(249)                   # 499 ms since the re-registrations
+    assert bm.avrcp_reregister_status_changed() is False
+    assert bm.avrcp_reregister_position_changed() is False
+    clock.advance_ms(1)
+    assert bm.avrcp_reregister_status_changed() is True
+    assert bm.avrcp_reregister_position_changed() is True
+    assert bm.avrcp_reregister_track_changed() is False
+    clock.advance_ms(1500)
+    assert bm.avrcp_reregister_track_changed() is True
+
+
+def test_throttles_not_blocked_by_aliased_stale_stamps(clock):
+    bm, uart = _bm83()
+    stale = ticks_add(ticks_ms(), -(TICKS_HALFPERIOD + 1000))
+    bm._last_eq_cmd_at = stale
+    bm._last_status_changed_reg_at = stale
+    assert bm.set_eq(bm.EQ_SEQ[1]) is not None
+    assert bm.avrcp_reregister_status_changed() is True
+
+
+def test_nextion_token_dedupe_across_wrap(clock):
+    from nextion.display import Nextion
+
+    class UART:
+        def __init__(self):
+            self.to_read = b""
+
+        @property
+        def in_waiting(self):
+            return len(self.to_read)
+
+        def read(self, n):
+            out, self.to_read = self.to_read[:n], self.to_read[n:]
+            return out
+
+        def write(self, data):
+            pass
+
+    uart = UART()
+    nx = Nextion(uart)
+    got = []
+    for step in (0, 149, 1):                # the 149 ms step crosses the wrap
+        clock.advance_ms(step)
+        uart.to_read = b"BT_PLAY\xff\xff\xff"
+        tokens, _ = nx.read()
+        got.extend(tokens)
+    assert got == [b"BT_PLAY", b"BT_PLAY"]   # middle duplicate dropped
