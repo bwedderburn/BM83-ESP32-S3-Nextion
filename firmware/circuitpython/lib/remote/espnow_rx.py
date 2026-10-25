@@ -328,7 +328,7 @@ class EspNowRemote:
                 self.rx_recoveries += 1
                 self._log("[REMOTE] ESP-NOW receive buffer restored")
                 return True
-        except Exception:
+        except Exception:  # nosec B110
             # Retain the old reference if deinit failed, so a later bounded
             # attempt can release it instead of constructing an active singleton.
             pass

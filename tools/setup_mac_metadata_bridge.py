@@ -13,7 +13,8 @@ import plistlib
 import re
 import secrets
 import stat
-import subprocess
+# Fixed local Python/launchctl argv; credentials never enter commands.
+import subprocess  # nosec B404
 import sys
 import tempfile
 
@@ -200,7 +201,9 @@ def launch_agent(plan):
 def run_command(arguments, *, check=True):
     """Bound local subprocesses and keep raw command output out of setup logs."""
     try:
-        return subprocess.run(arguments, check=check, capture_output=True, timeout=60)
+        # Callers supply fixed switches, absolute local executables and validated
+        # installation paths, never metadata, tokens or remote command text.
+        return subprocess.run(arguments, check=check, capture_output=True, timeout=60)  # nosec B603
     except (OSError, subprocess.SubprocessError):
         raise SetupError("Local helper build or LaunchAgent operation failed; no secret details were logged.") from None
 

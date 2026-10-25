@@ -136,7 +136,8 @@ class MetadataBridge:
         if self._socket is not None:
             try:
                 self._socket.close()
-            except Exception:
+            except Exception:  # nosec B110
+                # Best-effort cleanup still clears the failed socket below.
                 pass
         self._socket = None
 
@@ -156,7 +157,8 @@ class MetadataBridge:
             if not self._open_socket():
                 return False
             self._socket.settimeout(0)
-            self._socket.bind(("0.0.0.0", self._profile["port"]))
+            # The paired LAN listener uses only the existing Wi-Fi radio.
+            self._socket.bind(("0.0.0.0", self._profile["port"]))  # nosec B104
             self._buffer = bytearray(MAX_PACKET_BYTES + 1)
             self.enabled = True
             self._log("[META WIFI] receiver ready port=%d" % self._profile["port"])
@@ -206,9 +208,10 @@ class MetadataBridge:
                 continue
             try:
                 self._accept(bytes(self._buffer[:length]), now)
-            except Exception:
+            except Exception:  # nosec B112
                 # Network input must not unwind the UART/UI loop, including
                 # decoder allocation or nesting failures on the small device.
+                # Discard bad datagrams quietly to prevent a network log flood.
                 continue
 
     def snapshot(self, now=None):

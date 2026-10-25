@@ -1,4 +1,5 @@
 """Host tests for the Mac sender; no media controls or live network required."""
+import errno
 import importlib.util
 import json
 from pathlib import Path
@@ -158,12 +159,12 @@ def test_sender_rollover_starts_fresh_session():
 def test_network_errors_are_rate_limited_and_redacted():
     messages = []
     diagnostic = bridge.NetworkDiagnostics(log=messages.append)
-    error = OSError(65, "private token and receiver address must not be printed")
+    error = OSError(errno.EHOSTUNREACH, "private token and receiver address must not be printed")
     diagnostic.failed(error, now=0)
     diagnostic.failed(error, now=2)
     diagnostic.failed(error, now=29)
     assert len(messages) == 1
-    assert "errno=65" in messages[0] and "EHOSTUNREACH" in messages[0]
+    assert f"errno={errno.EHOSTUNREACH}" in messages[0] and "EHOSTUNREACH" in messages[0]
     assert "private token" not in messages[0]
     diagnostic.failed(error, now=30)
     assert len(messages) == 2

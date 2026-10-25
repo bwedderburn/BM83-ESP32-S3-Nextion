@@ -15,7 +15,8 @@ import secrets
 import signal
 import socket
 import stat
-import subprocess
+# Fixed local compiler/reader argv; no shell or network-supplied commands.
+import subprocess  # nosec B404
 import sys
 import time
 
@@ -159,8 +160,10 @@ def build_helper(output=None):
     output = Path(output) if output else BASE / "build" / "now_playing.dylib"
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(["/usr/bin/clang", "-fobjc-arc", "-dynamiclib", "-framework", "Foundation",
-                        "-framework", "CoreAudio", str(BASE / "now_playing.m"), "-o", str(output)], check=True)
+        # Fixed compiler argv and local source/output paths, no shell.
+        subprocess.run(  # nosec B603
+            ["/usr/bin/clang", "-fobjc-arc", "-dynamiclib", "-framework", "Foundation",
+             "-framework", "CoreAudio", str(BASE / "now_playing.m"), "-o", str(output)], check=True)
     except (OSError, subprocess.CalledProcessError):
         raise BridgeError("Cannot build reader; install Xcode Command Line Tools and retry.") from None
     return output
@@ -172,8 +175,10 @@ def read_snapshot(helper=None):
     if not helper.is_file():
         raise BridgeError("Native reader missing; run bridge.py --build-helper first.")
     try:
-        result = subprocess.run(["/usr/bin/perl", str(BASE / "read_now_playing.pl"), str(helper.resolve())],
-                                check=True, capture_output=True, timeout=4, text=True)
+        # Fixed local reader and resolved local helper, no shell.
+        result = subprocess.run(  # nosec B603
+            ["/usr/bin/perl", str(BASE / "read_now_playing.pl"), str(helper.resolve())],
+            check=True, capture_output=True, timeout=4, text=True)
         if len(result.stdout) > 16384:
             raise BridgeError("Native reader produced an oversized snapshot.")
         raw = json.loads(result.stdout)
