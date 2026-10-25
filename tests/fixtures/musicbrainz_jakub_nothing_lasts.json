@@ -1,0 +1,83 @@
+{
+  "created": "2026-10-25T04:12:49.673Z",
+  "count": 1,
+  "offset": 0,
+  "release-groups": [
+    {
+      "id": "14add676-8dba-44e2-80fe-84b11d20b32a",
+      "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+      "score": 100,
+      "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+      "artist-credit-id": "c776e16d-9329-381e-809e-8f822f8fcb4d",
+      "count": 1,
+      "title": "Nothing Lasts, Nothing’s Lost",
+      "first-release-date": "2019-10-03",
+      "primary-type": "Album",
+      "artist-credit": [
+        {
+          "name": "Jakub Żytecki",
+          "artist": {
+            "id": "1cbd7faf-938f-4c10-aeb1-426e83d38407",
+            "name": "Jakub Żytecki",
+            "sort-name": "Zytecki, Jakub",
+            "disambiguation": "Polish guitarist",
+            "aliases": [
+              {
+                "sort-name": "Jakub Zytecki",
+                "type-id": "1937e404-b981-3cb7-8151-4c86ebfc8d8e",
+                "name": "Jakub Zytecki",
+                "locale": null,
+                "type": "Search hint",
+                "primary": null,
+                "begin-date": null,
+                "end-date": null
+              }
+            ]
+          }
+        }
+      ],
+      "releases": [
+        {
+          "id": "99426f69-8bd3-487e-805a-07273971bed7",
+          "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+          "title": "Nothing Lasts, Nothing’s Lost",
+          "status": "Official"
+        }
+      ],
+      "tags": [
+        {
+          "count": 1,
+          "name": "alternative rock"
+        },
+        {
+          "count": 1,
+          "name": "progressive rock"
+        },
+        {
+          "count": 1,
+          "name": "progressive metal"
+        },
+        {
+          "count": 1,
+          "name": "experimental"
+        },
+        {
+          "count": 1,
+          "name": "indie rock"
+        },
+        {
+          "count": 1,
+          "name": "progressive"
+        },
+        {
+          "count": 1,
+          "name": "psychedelic rock"
+        },
+        {
+          "count": 1,
+          "name": "experimental rock"
+        }
+      ]
+    }
+  ]
+}
