@@ -1,6 +1,14 @@
 [bandit]
-# Legacy bandit config (INI-style). Mirrors the [tool.bandit] section in
-# pyproject.toml for compatibility with bandit versions or Codacy CLI
-# revisions that don't read pyproject.toml.
-exclude_dirs = tests,.venv,recovered_src
+# INI-style bandit config. `bandit -r <dir>` auto-discovers it, and Codacy's
+# bandit engine (.github/workflows/codacy.yml) runs `bandit --ini .bandit`
+# and then does NOT fall back to [tool.bandit] in pyproject.toml, so keep the
+# two in step.
+#
+# The INI key is `exclude`; `exclude_dirs` is only valid in pyproject.toml /
+# YAML configs and bandit silently ignores it here. Entries are globs matched
+# against each file path: */x/* covers absolute and ./-prefixed paths, x/*
+# covers bare relative ones. Do not use bare names (bandit also substring-
+# matches, so "tests" would hide e.g. firmware/.../selftests.py), and do not
+# put spaces after the commas (they become part of the pattern).
+exclude = */tests/*,*/.venv/*,*/recovered_src/*,tests/*,.venv/*,recovered_src/*
 skips = B101
