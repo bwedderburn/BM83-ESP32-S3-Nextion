@@ -117,9 +117,33 @@ Use this mode only after baseline `.py` behavior is validated.
 
 ### Step 1: Build Optimized Artifacts
 
+Use the CircuitPython **10.3.1** compiler selected by the repository pin. The
+automatic download is for **Linux x86_64 / x86_64 WSL only**:
+
 ```bash
-./build_mpy.sh
+./scripts/fetch_mpy_cross.sh
+bm83_mpy_cross="$PWD/tools/mpy-cross/mpy-cross"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
 ```
+
+For **macOS, Linux ARM or Windows Git Bash**, install or build a native
+CircuitPython 10.3.1 compiler for the host, then set its path explicitly. The
+Linux download does not run directly on macOS or Windows. See
+[compiler setup](README.md#prerequisites) for the source and platform choices.
+
+```bash
+# Example native macOS path; replace with your actual installed compiler.
+bm83_mpy_cross="$HOME/Tools/CircuitPython 10.3.1/mpy-cross"
+# Git Bash example instead: bm83_mpy_cross="/c/Tools/CircuitPython 10.3.1/mpy-cross.exe"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
+```
+
+The version output must start with `CircuitPython 10.3.1`; MicroPython's
+`mpy-cross` (including the package installed by `pip install mpy-cross`) is a
+different compiler. The quoted `MPY_CROSS` path selects the native executable
+and supports paths containing spaces.
 
 This creates deployable output under `dist/circuitpython/`.
 
@@ -150,7 +174,7 @@ If versions do not match, you'll typically see:
 
 If that happens:
 1. Check the device's `boot_out.txt` against `MPY_CROSS_VERSION` in `tools/mpy_cross_pin.env`. If the device was upgraded, bump the pin (key + sha256) deliberately.
-2. Fetch the pinned compiler with `./scripts/fetch_mpy_cross.sh`, then rebuild with `MPY_CROSS=tools/mpy-cross/mpy-cross ./build_mpy.sh`.
+2. Select the correct host compiler using Step 1: Linux x86_64 / x86_64 WSL can use `./scripts/fetch_mpy_cross.sh`; macOS and other hosts need a native CircuitPython compiler selected by `MPY_CROSS`. Check `"$bm83_mpy_cross" --version`, then rebuild with `MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh`.
 3. Redeploy `dist/circuitpython/`.
 
 ## Quick Rollback: Optimized (.mpy) → Baseline (.py)

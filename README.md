@@ -77,23 +77,51 @@ The repository includes a `build_mpy.sh` script to compile Python modules into b
 
 #### Prerequisites
 
-The build uses CircuitPython's `mpy-cross`, pinned to an exact version and sha256 in
-[`tools/mpy_cross_pin.env`](tools/mpy_cross_pin.env) so dist builds are reproducible.
-`build_mpy.sh` refuses any other version (set `MPY_CROSS_ALLOW_UNPINNED=1` to experiment).
+The build uses **CircuitPython 10.3.1's `mpy-cross`**. The required version and
+the Linux x86_64 download's SHA-256 are recorded in
+[`tools/mpy_cross_pin.env`](tools/mpy_cross_pin.env). `build_mpy.sh` checks the
+version on every host and records the selected compiler in `dist/BUILD_INFO.txt`.
+It refuses other versions (set `MPY_CROSS_ALLOW_UNPINNED=1` only for experiments).
+
+The automatic fetcher supports **Linux x86_64 and x86_64 WSL only**:
 
 ```bash
-# Download + verify the pinned compiler (linux-amd64 / WSL) into tools/mpy-cross/
+# Linux x86_64 / x86_64 WSL: download and verify into tools/mpy-cross/
 ./scripts/fetch_mpy_cross.sh
 ```
 
-Do not use `pip install mpy-cross` — that is MicroPython's compiler, not CircuitPython's.
+On **macOS, Linux ARM or Windows Git Bash**, install or build a native compiler
+for that host from [Adafruit's CircuitPython 10.3.1 source](https://github.com/adafruit/circuitpython/tree/10.3.1/mpy-cross),
+then select it with `MPY_CROSS` as shown below. The fetcher's Linux executable
+cannot run directly on macOS or Windows. Git Bash requires a native Windows
+compiler; alternatively, use the Linux fetcher inside x86_64 WSL.
 
-#### Building with bash (Linux/macOS/Git Bash)
+Do not use `pip install mpy-cross`: that installs MicroPython's compiler, which
+is a different compiler. Check that `--version` starts with `CircuitPython 10.3.1`.
+
+#### Building with bash
 
 ```bash
-# Run the build script with the pinned compiler
-MPY_CROSS=tools/mpy-cross/mpy-cross ./build_mpy.sh
+# Linux x86_64 / WSL, after the fetch above:
+bm83_mpy_cross="$PWD/tools/mpy-cross/mpy-cross"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
+```
 
+For macOS or another host, replace the example path with your installed native
+CircuitPython 10.3.1 compiler. Quote the path so spaces work:
+
+```bash
+# Example native macOS path; replace with your actual installed compiler.
+bm83_mpy_cross="$HOME/Tools/CircuitPython 10.3.1/mpy-cross"
+# Git Bash example instead: bm83_mpy_cross="/c/Tools/CircuitPython 10.3.1/mpy-cross.exe"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
+```
+
+Both commands produce the same output layout:
+
+```text
 # Output will be in dist/circuitpython/
 # ├── main.py           (kept as .py - entry point must not be compiled)
 # ├── settings.toml     (config file, if present)
@@ -121,8 +149,10 @@ cd /mnt/c/path/to/BM83-ESP32-S3-Nextion
 # Fetch the pinned mpy-cross if not already present
 ./scripts/fetch_mpy_cross.sh
 
-# Run the build script
-MPY_CROSS=tools/mpy-cross/mpy-cross ./build_mpy.sh
+# Check the compiler, then run the build script
+bm83_mpy_cross="$PWD/tools/mpy-cross/mpy-cross"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
 
 # The output in dist/circuitpython/ can be copied to your CIRCUITPY drive
 # from Windows Explorer at the WSL path shown after build completes
