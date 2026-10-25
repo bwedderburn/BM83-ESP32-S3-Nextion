@@ -91,7 +91,7 @@ def test_track_changed_clears_old_fields_and_rearms_once():
     assert handler.remote.snapshot()["position_ms"] is None
     assert handler.env["last_pos_ms"] is None and handler.env["last_total_ms"] is None
     handler.bm.avrcp_reregister_track_changed.assert_called_once_with()
-    handler.bm.schedule_attrs.assert_called_once_with(0.25)
+    handler.bm.schedule_attrs.assert_called_once_with(0.25, queue_if_throttled=True)
 
 
 @pytest.mark.parametrize("code,rearm", [(0x0F, False), (0x0D, True)])

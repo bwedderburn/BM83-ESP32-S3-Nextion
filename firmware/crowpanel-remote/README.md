@@ -153,6 +153,11 @@ bounded responses and rate limiting. TLS fetching requires network time
 and the explicit maintained CA bundle; there is no insecure fallback.
 Provider references, trust-store regeneration and third-party notices are
 in [lib/artwork_trust/README.md](lib/artwork_trust/README.md).
+Temporary network failures display `Retrying artwork...` while the worker
+retries automatically after one minute. Rapid track changes retain the
+controller's required metadata refresh until the existing AVRCP throttle and
+stream-start quiet window permit it; they must not discard that refresh and
+leave the CrowPanel without track details or a cover until another track event.
 
 ### SD cache
 

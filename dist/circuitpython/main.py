@@ -452,7 +452,7 @@ def main():
                     if maybe_track_changed(pos_ms, total_ms):
                         changed.extend(invalidate_track_meta())
                         dprint("[TRACK] inferred change -> request metadata")
-                        bm.schedule_attrs(0.25)
+                        bm.schedule_attrs(0.25, queue_if_throttled=True)
                     if primary_metadata_missing() and (
                         pos_ms is not None or (total_ms is not None and total_ms > 0)
                     ):
@@ -503,7 +503,7 @@ def main():
                         last_total_ms = None
                         push_meta_updates(invalidate_track_meta())
                         dprint("[AVRCP] TrackChanged -> request metadata")
-                        bm.schedule_attrs(0.25)
+                        bm.schedule_attrs(0.25, queue_if_throttled=True)
                         bm.avrcp_reregister_track_changed()
                     elif event_id == 0x05 and len(avp) >= 5:
                         pos = _normalize_track_time_ms(int.from_bytes(avp[1:5], "big"))

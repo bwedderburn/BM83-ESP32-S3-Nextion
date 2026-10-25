@@ -363,6 +363,7 @@ static void poll_artwork() {
     if (result.status != ArtworkStatus::Ready || !result.rgb565 || !result.width || !result.height) {
         clear_artwork(result.status == ArtworkStatus::Offline ? "Artwork offline" :
                       result.status == ArtworkStatus::ClockUnavailable ? "Waiting for artwork..." :
+                      result.status == ArtworkStatus::NetworkError ? "Retrying artwork..." :
                       "Artwork unavailable");
         artwork_release(result.rgb565);
         return;

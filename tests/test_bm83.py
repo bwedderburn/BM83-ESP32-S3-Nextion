@@ -1,4 +1,5 @@
 import time
+import pytest
 from bm83.bm83 import Bm83
 from utils.ticks import ticks_add, ticks_ms
 from tests.test_bm83_uart import MockUART, frame_to_bytes
@@ -270,6 +271,41 @@ def test_schedule_attrs_throttle_deadline_and_reuse_after_metadata_parse(monkeyp
     assert bm.schedule_attrs(0.05) is True
     assert bm.tick_avrcp_attrs(now[0] + 0.05) is True
     assert len(uart.writes) == 3
+
+
+@pytest.mark.parametrize("quiet_seconds", [0.0, 2.0])
+def test_required_track_refresh_queues_after_throttle_and_quiet_floor(monkeypatch, quiet_seconds):
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    assert bm.schedule_attrs(0.0)
+    assert bm.tick_avrcp_attrs()
+    first_sent = now[0]
+
+    now[0] += 0.1
+    quiet_at = bm.defer_attrs(quiet_seconds)
+    assert bm.schedule_attrs(0.25, queue_if_throttled=True)
+    due = max(first_sent + bm._attrs_throttle_s, quiet_at)
+    assert bm._next_attrs_at == pytest.approx(due)
+    for stamp in (100.4, 100.8, 101.49):
+        now[0] = stamp
+        # Repeated track events coalesce instead of producing a later burst
+        # or continually postponing the already-required metadata request.
+        assert not bm.schedule_attrs(0.25, queue_if_throttled=True)
+        assert bm._next_attrs_at == pytest.approx(due)
+        assert not bm.tick_avrcp_attrs()
+    now[0] = due - 0.001
+    assert not bm.tick_avrcp_attrs()
+    assert len(uart.writes) == 1
+    now[0] = due
+    assert bm.tick_avrcp_attrs()
+    assert bm._last_attrs_req_at - first_sent >= bm._attrs_throttle_s
+    assert len(uart.writes) == 2
+    now[0] += 0.1
+    assert not bm.tick_avrcp_attrs()
+    assert len(uart.writes) == 2
 
 
 def test_tick_avrcp_attrs_drains_pending_attrs_only_when_connected():
