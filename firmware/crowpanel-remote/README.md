@@ -8,6 +8,20 @@ solar firmware stays recoverable from that repo at any time.
 
 ## Now Playing and Settings
 
+The controller recovers separate artist and album fields from the captured
+Windows web-player form `Plini — Sunhead - EP`. Recovery requires a missing
+album, only AVRCP attributes 1/2/4 (optionally a blank 3), track number `0`,
+and exactly one spaced em dash in the artist field. Existing album fields and
+other reply profiles remain unchanged. Album suffixes such as ` - EP` stay
+intact, so artwork lookup receives the complete album name. The Nextion uses
+an ASCII dash for unavailable text rather than sending its internal Unicode
+placeholder to the display.
+
+CrowPanel metadata labels include matching Montserrat glyphs for accented
+European Latin letters such as `é` and `â`, plus European punctuation. Original
+UTF-8 text is preserved for artwork searches. See [font coverage and source
+provenance](fonts/README.md) for the supported ranges and reproducible assets.
+
 The main 800×480 page shows title, artist, album, playback state, elapsed
 time, total time and a display-only progress bar. The 200×200 artwork area
 automatically shows a matching cached or downloaded cover when available,
@@ -134,7 +148,15 @@ compilations, generic artist names and incomplete or oversized results keep
 the placeholder. This is a catalog match, so a cover is not guaranteed for
 every track or edition. The matching cover is fetched from the Cover Art
 Archive's `front-250` endpoint, decoded as JPEG and fitted into the artwork
-area. Online searches send the relevant track text to those public services.
+area. When MusicBrainz identifies an album but Cover Art Archive returns no
+cover (HTTP 404), the worker also searches Deezer for that exact artist and
+album. It accepts only one matching album identity and never substitutes
+live/deluxe versions or another artist. This second provider requires album
+metadata; title-only searches keep the existing MusicBrainz/CAA path. Primary
+network/TLS failures remain retryable rather than triggering another catalog.
+Deezer's medium JPEG is tried first; if its encoding is unsupported, the worker
+tries the provider's canonical smaller thumbnail once. No audio is downloaded.
+Online searches send the relevant track text to these public services.
 
 A background worker owns network requests, decoding and SD operations;
 LVGL updates remain in the main task. Lookup failures, missing artwork,
@@ -145,6 +167,11 @@ bounded responses and rate limiting. TLS fetching requires network time
 and the explicit maintained CA bundle; there is no insecure fallback.
 Provider references, trust-store regeneration and third-party notices are
 in [lib/artwork_trust/README.md](lib/artwork_trust/README.md).
+Temporary network failures display `Retrying artwork...` while the worker
+retries automatically after one minute. Rapid track changes retain the
+controller's required metadata refresh until the existing AVRCP throttle and
+stream-start quiet window permit it; they must not discard that refresh and
+leave the CrowPanel without track details or a cover until another track event.
 
 ### SD cache
 
@@ -158,6 +185,12 @@ including before time synchronization. A missing or unwritable card
 disables persistent caching; an online cover can still be displayed.
 The matching-policy update retries older cached misses while preserving
 existing positive covers and their filenames.
+The second-provider update likewise retries earlier misses. Successfully decoded
+Deezer covers use the same bounded SD cache and verified MusicBrainz album ID;
+returning to an album needs no computer, provider account or runtime helper.
+Deezer API content is used for this private, noncommercial unit under its
+[developer terms](https://developers.deezer.com/termsofuse) and
+[firmware guidelines](https://developers.deezer.com/guidelines).
 
 ### One-time Wi-Fi setup
 

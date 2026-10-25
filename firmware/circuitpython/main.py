@@ -19,6 +19,7 @@ from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
 from utils.ticks import ticks_diff, ticks_ms
+from utils.metadata_fields import recover_metadata_fields
 
 NX_BAUD = 9600
 BM83_BAUD = 115200
@@ -452,7 +453,7 @@ def main():
                     if maybe_track_changed(pos_ms, total_ms):
                         changed.extend(invalidate_track_meta())
                         dprint("[TRACK] inferred change -> request metadata")
-                        bm.schedule_attrs(0.25)
+                        bm.schedule_attrs(0.25, queue_if_throttled=True)
                     if primary_metadata_missing() and (
                         pos_ms is not None or (total_ms is not None and total_ms > 0)
                     ):
@@ -503,7 +504,7 @@ def main():
                         last_total_ms = None
                         push_meta_updates(invalidate_track_meta())
                         dprint("[AVRCP] TrackChanged -> request metadata")
-                        bm.schedule_attrs(0.25)
+                        bm.schedule_attrs(0.25, queue_if_throttled=True)
                         bm.avrcp_reregister_track_changed()
                     elif event_id == 0x05 and len(avp) >= 5:
                         pos = _normalize_track_time_ms(int.from_bytes(avp[1:5], "big"))
@@ -522,6 +523,7 @@ def main():
                 if gea:
                     last_avrcp_rx_at = time.monotonic()
                     _resp, attrs = gea
+                    attrs = recover_metadata_fields(attrs)
                     remote_state.note_attributes(attrs)
                     print("[META] GetElementAttributes received:", sorted(attrs.keys()))
                     changed = []
@@ -583,6 +585,11 @@ def main():
                     print("[AUX] Ignoring BT_NEXT while AUX IN is active")
                 else:
                     bm.next()
+            elif tok == b"BT_MUTE":
+                if aux_mode:
+                    print("[AUX] Ignoring BT_MUTE while AUX IN is active")
+                else:
+                    ble.mute()
             elif tok == b"BT_EQ":
                 mode = bm.next_eq()
                 next_label = bm.EQ_L.get(mode, "OFF")

@@ -5,7 +5,7 @@ This project implements a CircuitPython-based remote control system for audio de
 - **ESP32-S3 DevKitC-1**
 - **BM83 Bluetooth module** (A2DP, AVRCP, HID)
 - **Nextion NX3224F028** UART touchscreen
-- **BLE HID** volume/mute support (for iOS/macOS)
+- **BLE HID** consumer-control-only volume/mute support (for iOS/macOS)
 
 ## 📦 Features
 
@@ -183,6 +183,18 @@ Hardware behavior is only partially covered by host tests; see [docs/hardware-te
 
 ## 🆘 Troubleshooting
 
+- The volume remote exposes only Consumer Control HID reports, with keyboard,
+  mouse and boot-keyboard interfaces omitted. It should not make an iPhone
+  treat the unit as a typing keyboard. After updating from the old composite
+  HID profile, the phone may need to forget and re-pair the BLE control device
+  to discard its cached profile. Verify volume up/down, mute and the onscreen
+  keyboard together; normal audio/metadata still use BM83 Bluetooth.
+- CrowPanel's Now Playing `Mute` button sends `BT_MUTE` through the same
+  paired remote path as its other controls. It sends the source's native
+  Consumer Control mute command; it does not claim a mute state that the
+  source has not reported. It is ignored during AUX playback. A later
+  Nextion HMI button can send `print "BT_MUTE"` using the existing terminator
+  convention; this firmware update does not modify the Nextion HMI project.
 - If BLE doesn't work on iOS, try **Forget Device** and trigger `BT_EBIND`.
 - If metadata stops updating, ensure AVRCP is supported by the source device.
 - If CircuitPython auto-reloads on file save, it's disabled in code.

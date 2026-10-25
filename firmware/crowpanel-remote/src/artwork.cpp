@@ -1,5 +1,6 @@
 // Native CrowPanel artwork worker; see ../lib/artwork_trust/README.md for trust provenance.
 #include "artwork.h"
+#include "album_fallback.h"
 #include "matching.h"
 #include "tls_time.h"
 
@@ -38,8 +39,9 @@ const char USER_AGENT[] =
     "BM83-CrowPanel/0.1 (https://github.com/bwedderburn/BM83-ESP32-S3-Nextion)";
 const char META_MAGIC_V1[8] = {'B','M','A','R','T','0','0','1'};
 const char META_MAGIC_V2[8] = {'B','M','A','R','T','0','0','2'};
-// Same on-card layout and keys; v3 marks misses after typed release matching.
-const char META_MAGIC[8] = {'B','M','A','R','T','0','0','3'};
+const char META_MAGIC_V3[8] = {'B','M','A','R','T','0','0','3'};
+// Same layout/MB identity and keys; old misses must try the second provider.
+const char META_MAGIC[8] = {'B','M','A','R','T','0','0','4'};
 
 struct Job {
     uint32_t id;
@@ -192,7 +194,8 @@ bool read_meta(const String &hash, Meta &meta) {
            file.read(reinterpret_cast<uint8_t *>(&meta), sizeof(meta)) == sizeof(meta) &&
            (memcmp(meta.magic, META_MAGIC, sizeof(META_MAGIC)) == 0 ||
             memcmp(meta.magic, META_MAGIC_V1, sizeof(META_MAGIC_V1)) == 0 ||
-            memcmp(meta.magic, META_MAGIC_V2, sizeof(META_MAGIC_V2)) == 0) && meta.negative <= 1 &&
+            memcmp(meta.magic, META_MAGIC_V2, sizeof(META_MAGIC_V2)) == 0 ||
+            memcmp(meta.magic, META_MAGIC_V3, sizeof(META_MAGIC_V3)) == 0) && meta.negative <= 1 &&
            meta.group[36] == '\0' &&
            (meta.negative || artwork_matching::valid_mbid(meta.group));
 }
@@ -385,7 +388,7 @@ String request_host(const String &url) {
 bool archive_host(const String &host) {
     return host == "archive.org" || host.endsWith(".archive.org");
 }
-bool allowed_url(String &url) {
+bool allowed_url(String &url, bool json) {
     // CAA currently documents HTTP redirect URLs; upgrade before any request.
     if (url.startsWith("http://")) url = "https://" + url.substring(7);
     if (!url.startsWith("https://") || url.length() > 1536) return false;
@@ -393,6 +396,11 @@ bool allowed_url(String &url) {
     const String host = request_host(url);
     if (host.indexOf('@') >= 0 || host.indexOf(':') >= 0 || host.indexOf('%') >= 0 ||
         host.indexOf('?') >= 0 || host.indexOf('#') >= 0) return false;
+    if (host == "api.deezer.com")
+        return json ? url.startsWith("https://api.deezer.com/search/album?")
+                    : album_fallback::valid_api_image_url(url.c_str());
+    if (host == "cdn-images.dzcdn.net")
+        return !json && album_fallback::valid_image_url(url.c_str());
     return host == "musicbrainz.org" || host == "coverartarchive.org" || archive_host(host);
 }
 class BodySink : public Stream {
@@ -422,7 +430,7 @@ int fetch(const Job &job, uint32_t started, String url, uint8_t *buffer,
           size_t capacity, size_t &length, bool json) {
     length = 0;
     for (unsigned redirects = 0; redirects <= 3; ++redirects) {
-        if (!allowed_url(url) || !active(job, started) || WiFi.status() != WL_CONNECTED) return -1;
+        if (!allowed_url(url, json) || !active(job, started) || WiFi.status() != WL_CONNECTED) return -1;
         while (have_http && static_cast<uint32_t>(millis() - last_http) < HTTP_GAP_MS) {
             if (!active(job, started)) return -1;
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -462,7 +470,7 @@ int fetch(const Job &job, uint32_t started, String url, uint8_t *buffer,
                 next = (slash < 0 ? url : url.substring(0, slash)) + next;
             }
             http.end();
-            if (redirects == 3 || !allowed_url(next)) return -1;
+            if (redirects == 3 || !allowed_url(next, json)) return -1;
             url = next;
             continue;
         }
@@ -658,6 +666,53 @@ ArtworkStatus resolve(const Job &job, uint32_t started, char group[37]) {
     // limit as the strict search. There is no third search or recursive retry.
     return resolve_search(job, started, String(fallback.c_str()), group, zero_results);
 }
+ArtworkStatus resolve_album_fallback(const Job &job, uint32_t started,
+                                    String &image, String &canonical_image) {
+    const artwork_matching::Query query = {job.artist, job.album, job.title};
+    std::string search;
+    if (!album_fallback::search_query(query, search)) return ArtworkStatus::NoMatch;
+    const String url = "https://api.deezer.com/search/album?limit=8&q=" + url_encode(search.c_str());
+    auto *body = static_cast<uint8_t *>(heap_caps_malloc(JSON_MAX + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!body) return ArtworkStatus::NetworkError;
+    size_t length;
+    const int code = fetch(job, started, url, body, JSON_MAX, length, true);
+    if (code != 200) { heap_caps_free(body); return ArtworkStatus::NetworkError; }
+    body[length] = 0;
+    JsonBudget allocator;
+    JsonDocument document(&allocator);
+    const DeserializationError error = deserializeJson(document, body, length, DeserializationOption::NestingLimit(12));
+    heap_caps_free(body);
+    if (error || document.overflowed() || !document["total"].is<unsigned>() ||
+        !document["data"].is<JsonArray>()) return ArtworkStatus::NetworkError;
+    const unsigned total = document["total"].as<unsigned>();
+    if (total > album_fallback::MAX_CANDIDATES) return ArtworkStatus::NoMatch;
+    JsonArrayConst data = document["data"].as<JsonArrayConst>();
+    if (data.size() != total || !document["next"].isNull()) return ArtworkStatus::NetworkError;
+    album_fallback::Candidate candidates[album_fallback::MAX_CANDIDATES];
+    size_t count = 0;
+    for (JsonVariantConst item : data) {
+        if (!item.is<JsonObjectConst>() || !item["id"].is<uint64_t>() ||
+            !item["artist"]["id"].is<uint64_t>()) return ArtworkStatus::NetworkError;
+        const char *type = text(item["type"]);
+        if (!type || strcmp(type, "album") != 0 || item["artist"]["id"].as<uint64_t>() == 0)
+            return ArtworkStatus::NetworkError;
+        const char *artist = text(item["artist"]["name"]), *album = text(item["title"]);
+        const char *record_type = text(item["record_type"]), *cover = text(item["cover_medium"]);
+        if (!artist || !*artist || !album || !*album || !record_type || !*record_type || !cover || !*cover)
+            return ArtworkStatus::NetworkError;
+        candidates[count++] = {artist, album, item["id"].as<uint64_t>(), record_type, cover};
+    }
+    const auto selection = album_fallback::select(query, candidates, count);
+    if (selection.outcome != artwork_matching::Outcome::Matched) return ArtworkStatus::NoMatch;
+    const auto &candidate = candidates[selection.index];
+    image = candidate.image_url;
+    // Use the provider's canonical endpoint for a smaller baseline thumbnail
+    // if its medium JPEG is progressive (unsupported by this decoder).
+    char id[21];
+    snprintf(id, sizeof(id), "%llu", static_cast<unsigned long long>(candidate.id));
+    canonical_image = String("https://api.deezer.com/album/") + id + "/image";
+    return ArtworkStatus::Ready;
+}
 ArtworkResult process(const Job &job) {
     ArtworkResult result;
     result.request_id = job.id;
@@ -688,11 +743,33 @@ ArtworkResult process(const Job &job) {
     if (!jpeg) { result.status = ArtworkStatus::InvalidImage; return result; }
     size_t length;
     const String url = String("https://coverartarchive.org/release-group/") + result.release_group + "/front-250";
-    const int code = fetch(job, started, url, jpeg, JPEG_MAX, length, false);
+    int code = fetch(job, started, url, jpeg, JPEG_MAX, length, false);
+    bool decoded = false;
+    if (code == 404 && job.album[0]) {
+        // Only a proven MusicBrainz album with absent CAA art reaches here.
+        // The cache continues to store that real MB identity, not a provider ID.
+        log_i("[artwork-fetch] image-fallback=deezer");
+        String image, canonical_image;
+        result.status = resolve_album_fallback(job, started, image, canonical_image);
+        if (result.status != ArtworkStatus::Ready) {
+            if (result.status == ArtworkStatus::NoMatch && active(job, started))
+                store_cache(hash, nullptr, nullptr, 0, true);
+            heap_caps_free(jpeg);
+            return result;
+        }
+        code = fetch(job, started, image, jpeg, JPEG_MAX, length, false);
+        if (code == 200) {
+            decoded = decode_jpeg(job, started, jpeg, length, result);
+            if (!decoded && active(job, started)) {
+                log_i("[artwork-fetch] image-fallback=deezer-canonical");
+                code = fetch(job, started, canonical_image, jpeg, JPEG_MAX, length, false);
+            }
+        }
+    }
     if (code == 404) {
         result.status = ArtworkStatus::NoMatch;
         store_cache(hash, nullptr, nullptr, 0, true);
-    } else if (code == 200 && decode_jpeg(job, started, jpeg, length, result)) {
+    } else if (code == 200 && (decoded || decode_jpeg(job, started, jpeg, length, result))) {
         result.status = ArtworkStatus::Ready;
         if (active(job, started)) store_cache(hash, result.release_group, jpeg, length, false);
     } else result.status = code == 200 ? ArtworkStatus::InvalidImage : ArtworkStatus::NetworkError;

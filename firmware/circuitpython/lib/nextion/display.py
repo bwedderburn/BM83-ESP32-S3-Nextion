@@ -31,7 +31,7 @@ EQ_MAP = {
 # Token sets for test compatibility
 TOK_BT = {
     b"BT_POWER", b"BT_POWEROFF", b"BT_PAIR", b"BT_PLAY", b"BT_PREV",
-    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN",
+    b"BT_NEXT", b"BT_EQ", b"BT_VOLUP", b"BT_VOLDN", b"BT_MUTE",
     # Retain documented Erase Bonds token for HMI/docs compatibility.
     b"BT_EBIND",
     # Press/release tokens for hold-and-repeat volume controls
@@ -289,4 +289,10 @@ class Nextion:
 
     def set_text_active_page(self, obj, txt):
         safe = _sanitize_text(txt)
+        # Keep the internal unknown-value sentinel for metadata retry logic,
+        # but use an ASCII placeholder on the HMI. CircuitPython's codec can
+        # still emit UTF-8 for encode("ascii", "replace"), so relying on the
+        # UART encoder to replace the em dash leaves unsupported glyph boxes.
+        if safe == "—":
+            safe = "-"
         self.enqueue('%s.txt="%s"' % (obj, safe))

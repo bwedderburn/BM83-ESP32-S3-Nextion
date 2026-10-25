@@ -30,6 +30,7 @@
 #include "display_init.h"
 #include "espnow_link.h"
 #include "now_playing.h"
+#include "metadata_fonts.h"
 #include "artwork.h"
 #include "artwork_ca_bundle.h"
 #include "network_setup.h"
@@ -202,6 +203,7 @@ static const char *action_name(const char *token) {
     if (strcmp(token, "BT_PREV") == 0) return "Previous track";
     if (strcmp(token, "BT_NEXT") == 0) return "Next track";
     if (strcmp(token, "BT_PLAY") == 0) return "Play/Pause";
+    if (strcmp(token, "BT_MUTE") == 0) return "Mute";
     if (strncmp(token, "BT_VOLUP", 8) == 0) return "Volume up";
     if (strncmp(token, "BT_VOLDN", 8) == 0) return "Volume down";
     if (strcmp(token, "BT_EQ") == 0) return "EQ";
@@ -363,6 +365,7 @@ static void poll_artwork() {
     if (result.status != ArtworkStatus::Ready || !result.rgb565 || !result.width || !result.height) {
         clear_artwork(result.status == ArtworkStatus::Offline ? "Artwork offline" :
                       result.status == ArtworkStatus::ClockUnavailable ? "Waiting for artwork..." :
+                      result.status == ArtworkStatus::NetworkError ? "Retrying artwork..." :
                       "Artwork unavailable");
         artwork_release(result.rgb565);
         return;
@@ -518,9 +521,9 @@ static void ui_set_now_playing(uint32_t now) {
     snprintf(eq_text, sizeof(eq_text), "EQ: %s", fresh && state.power_on ? eq_name(state.eq_index) : "--");
     set_label(g_eq_label, eq_text);
     if (bluetooth) {
-        log_missing_glyphs(0, "title", state.title, &lv_font_montserrat_28);
-        log_missing_glyphs(1, "artist", state.artist, &lv_font_montserrat_20);
-        log_missing_glyphs(2, "album", state.album, &lv_font_montserrat_18);
+        log_missing_glyphs(0, "title", state.title, metadata_fonts::title());
+        log_missing_glyphs(1, "artist", state.artist, metadata_fonts::artist());
+        log_missing_glyphs(2, "album", state.album, metadata_fonts::album());
     }
 
     const uint32_t position = bluetooth ? g_now_playing.position(now) : now_playing::UNKNOWN;
@@ -543,6 +546,29 @@ static void ui_set_now_playing(uint32_t now) {
     if (lv_bar_get_value(g_progress_bar) != progress) {
         lv_bar_set_value(g_progress_bar, progress, LV_ANIM_OFF);
     }
+}
+
+static void build_transport_controls(lv_obj_t *scr) {
+    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_PREV "  Prev", 24, 392, 120, 52),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_PREV");
+    lv_obj_t *play_button = make_button(scr, LV_SYMBOL_PLAY "  Play/Pause",
+                                        156, 392, 168, 52, true);
+    g_play_button_label = lv_obj_get_child(play_button, 0);
+    lv_obj_add_event_cb(play_button, cb_click, LV_EVENT_CLICKED, (void *)"BT_PLAY");
+    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_NEXT "  Next", 336, 392, 120, 52),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_NEXT");
+    // Mute is a one-shot media command. The source does not report its mute
+    // state, so the button must not latch a local muted/unmuted indication.
+    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_MUTE "  Mute", 468, 392, 88, 52),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_MUTE");
+    lv_obj_t *vdn = make_button(scr, "Vol -", 568, 392, 96, 52);
+    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLDN");
+    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLDN");
+    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLDN");
+    lv_obj_t *vup = make_button(scr, "Vol +", 676, 392, 100, 52);
+    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLUP");
+    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLUP");
+    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLUP");
 }
 
 static void build_ui() {
@@ -593,16 +619,16 @@ static void build_ui() {
     lv_obj_add_flag(g_artwork_image, LV_OBJ_FLAG_HIDDEN);
 
     g_title_label = make_label(g_now_page, "Waiting for audio unit", 228, 8,
-                               &lv_font_montserrat_28, COLOR_FG);
+                               metadata_fonts::title(), COLOR_FG);
     lv_obj_set_size(g_title_label, 524, 76);
     lv_label_set_long_mode(g_title_label, LV_LABEL_LONG_DOT);
     g_artist_label = make_label(g_now_page, "", 228, 100,
-                                &lv_font_montserrat_20, 0xBAC7D3);
+                                metadata_fonts::artist(), 0xBAC7D3);
     lv_obj_set_width(g_artist_label, 524);
     lv_label_set_long_mode(g_artist_label, LV_LABEL_LONG_DOT);
     g_album_label = make_label(g_now_page, "", 228, 140,
-                               &lv_font_montserrat_18, 0x9AAAB8);
-    lv_obj_set_size(g_album_label, 524, 44);
+                               metadata_fonts::album(), 0x9AAAB8);
+    lv_obj_set_size(g_album_label, 524, 48);
     lv_label_set_long_mode(g_album_label, LV_LABEL_LONG_DOT);
     g_playback_label = make_label(g_now_page, "Waiting for current playback information",
                                   228, 192, &lv_font_montserrat_14, 0x9AAAB8);
@@ -651,22 +677,7 @@ static void build_ui() {
     make_label(g_settings_page, "Playback and volume controls remain available below.",
                 0, 246, &lv_font_montserrat_14, 0x9AAAB8);
 
-    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_PREV "  Prev", 24, 392, 120, 52),
-                        cb_click, LV_EVENT_CLICKED, (void *)"BT_PREV");
-    lv_obj_t *play_button = make_button(scr, LV_SYMBOL_PLAY "  Play/Pause",
-                                        156, 392, 168, 52, true);
-    g_play_button_label = lv_obj_get_child(play_button, 0);
-    lv_obj_add_event_cb(play_button, cb_click, LV_EVENT_CLICKED, (void *)"BT_PLAY");
-    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_NEXT "  Next", 336, 392, 120, 52),
-                        cb_click, LV_EVENT_CLICKED, (void *)"BT_NEXT");
-    lv_obj_t *vdn = make_button(scr, "Vol -", 568, 392, 96, 52);
-    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLDN");
-    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLDN");
-    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLDN");
-    lv_obj_t *vup = make_button(scr, "Vol +", 676, 392, 100, 52);
-    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLUP");
-    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLUP");
-    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLUP");
+    build_transport_controls(scr);
 
     g_status_label = make_label(scr, "Ready", 24, 456,
                                 &lv_font_montserrat_12, 0x9AAAB8);

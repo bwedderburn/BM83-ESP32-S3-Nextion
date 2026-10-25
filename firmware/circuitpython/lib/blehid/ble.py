@@ -51,6 +51,26 @@ from utils.ticks import ticks_add, ticks_less, ticks_ms, ticks_recent
 # Each gap is still at least this long -- never shorter.
 _BLE_STABILIZE_MS = 50
 
+# Keep the existing two-byte Consumer Control report (ID 3), without the
+# default HIDService keyboard and mouse collections. Advertising a keyboard
+# makes iOS treat this volume remote as a physical typing device and can hide
+# its onscreen keyboard. No keyboard, mouse, LED or boot-keyboard reports are
+# needed for the volume/mute controls used by this unit.
+_CONSUMER_ONLY_HID_DESCRIPTOR = bytes((
+    0x05, 0x0C,        # Usage Page (Consumer)
+    0x09, 0x01,        # Usage (Consumer Control)
+    0xA1, 0x01,        # Collection (Application)
+    0x85, 0x03,        # Report ID (3), as in the existing consumer report
+    0x75, 0x10,        # Report Size (16 bits)
+    0x95, 0x01,        # Report Count (1)
+    0x15, 0x01,        # Logical Minimum (1)
+    0x26, 0x8C, 0x02,  # Logical Maximum (0x028C)
+    0x19, 0x01,        # Usage Minimum (1)
+    0x2A, 0x8C, 0x02,  # Usage Maximum (0x028C)
+    0x81, 0x00,        # Input (Data, Array, Absolute)
+    0xC0,              # End Collection
+))
+
 # Bond-erase stages, advanced at most one per tick() and only once the
 # previous stage's settle deadline has passed. 0 = idle.
 _ERASE_IDLE = 0
@@ -293,7 +313,15 @@ class BleHid:
             # will classify the device under "Other devices" in the
             # Bluetooth settings list, which is cosmetic -- the HID
             # Consumer Control pipe still works for volume keys.
-            self._hid = HIDService()
+            class ConsumerOnlyHIDService(HIDService):
+                # Service eagerly binds inherited Characteristic descriptors.
+                # A report-map change alone would leave keyboard boot reports
+                # and boot/report switching advertised in the GATT service.
+                boot_keyboard_in = None
+                boot_keyboard_out = None
+                protocol_mode = None
+
+            self._hid = ConsumerOnlyHIDService(hid_descriptor=_CONSUMER_ONLY_HID_DESCRIPTOR)
             self._adv = ProvideServicesAdvertisement(self._hid)
             self._cc = ConsumerControl(self._hid.devices)
             self._CCC = CCC

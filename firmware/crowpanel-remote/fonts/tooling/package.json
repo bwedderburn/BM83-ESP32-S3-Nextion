@@ -1,0 +1,7 @@
+{
+  "name": "bm83-metadata-font-tooling",
+  "private": true,
+  "dependencies": {
+    "lv_font_conv": "1.5.3"
+  }
+}
