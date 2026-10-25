@@ -2,6 +2,7 @@
 __pycache__/
 *.mpy
 .env
+.artwork_wifi.json
 .venv
 *.pyc
 *.egg-info/

@@ -130,6 +130,15 @@ def test_parse_frame_accepts_bytearray():
     assert parse_frame(bytearray(b"BMR1:3:BT_NEXT")) == (3, b"BT_NEXT")
 
 
+def test_network_retry_is_management_only_and_requires_paired_sender():
+    assert parse_frame(frame(3, b"NET_RETRY")) == (3, b"NET_RETRY")
+    assert b"NET_RETRY" not in nextion.TOKENS
+    remote, _radio, clock, _logs = make_remote()
+    assert remote.accept(OTHER_MAC_B, frame(3, b"NET_RETRY"), clock()) is None
+    assert remote.accept(REMOTE_MAC_B, frame(3, b"NET_RETRY"), clock()) == b"NET_RETRY"
+    assert remote.accept(REMOTE_MAC_B, frame(3, b"NET_RETRY"), clock()) is None
+
+
 # ----------------------------------------------------------------------------
 # MAC helpers
 # ----------------------------------------------------------------------------
