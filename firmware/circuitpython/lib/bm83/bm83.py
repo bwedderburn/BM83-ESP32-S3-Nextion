@@ -124,6 +124,14 @@ class Bm83:
     EVT_AVC_VENDOR_RSP = const(0x1A)
     EVT_AVRCP_VENDOR_DEP_RSP = const(0x5D)
 
+    # Ceiling on a reassembled GetElementAttributes (0x5D) response. The wire
+    # total_len is 16-bit, so without this a malformed header could make the
+    # fragment buffer grow toward 64 KiB across otherwise-valid frames. We ask
+    # for 7 attributes (8-byte header each), so 2 KiB allows roughly 280
+    # value bytes per attribute while staying below the 4 KiB RX cap. Supported
+    # source responses must be checked against this aggregate byte ceiling.
+    GEA_MAX_LEN = const(2048)
+
     MMI_POWER_ON_PRESS = const(0x51)
     MMI_POWER_ON_RELEASE = const(0x52)
     MMI_POWER_OFF_PRESS = const(0x53)
@@ -1363,6 +1371,10 @@ class Bm83:
             return False
         if now is None:
             now = ticks_ms()
+        # A stale pending stamp can alias to "due" across a tick wrap. Keep
+        # the live stream-start floor authoritative even on that recovery path.
+        if self._attrs_floor(now) is not None:
+            return False
         if ticks_due(now, self._next_attrs_at, _SCHED_HORIZON_MS):
             self._last_attrs_req_at = now
             self._next_attrs_at = None
@@ -1401,6 +1413,16 @@ class Bm83:
             self._gea_expect_len = None
             self._gea_frag_at = 0.0
             dprint("[META] drop empty GEA response")
+            return None
+        if total_len > self.GEA_MAX_LEN:
+            # Reject before buffering anything, and drop any partial
+            # reassembly so the next in-bounds response starts clean. Every
+            # fragment of the oversized response repeats the same header, so
+            # each one is rejected here too.
+            self._gea_frag = bytearray()
+            self._gea_expect_len = None
+            self._gea_frag_at = 0.0
+            print("[META] drop oversize GEA total_len=%d>%d" % (total_len, self.GEA_MAX_LEN))
             return None
         now = time.monotonic()
         # Age out a fragment that was never completed — a dropped final packet

@@ -233,49 +233,34 @@ def test_schedule_attrs_force_bypasses_throttle():
     assert bm._next_attrs_at is not None
 
 
-class _MsClock:
-    """time.monotonic() stand-in counted in whole ms (mid-ms, so the host
-    ticks_ms() fallback's int(seconds * 1000) never lands one ms short)."""
-
-    def __init__(self, ms):
-        self.ms = ms
-
-    def __call__(self):
-        return (self.ms + 0.5) / 1000.0
-
-
 def test_schedule_attrs_throttle_deadline_and_reuse_after_metadata_parse(monkeypatch):
-    """Attribute scheduling respects throttle and due-time boundaries across a parsed response."""
     uart = MockUART()
     bm = Bm83(uart)
     bm.connected = True
-    clock = _MsClock(100000)
-    monkeypatch.setattr(time, "monotonic", clock)
-    throttle = bm._attrs_throttle_ms
+    now = [100000]
+    monkeypatch.setattr("utils.ticks._hw_ticks_ms", lambda: now[0])
+    monkeypatch.setattr(time, "monotonic", lambda: now[0] / 1000.0)
 
-    # First request goes out immediately.
     assert bm.schedule_attrs(0.0) is True
     assert bm.tick_avrcp_attrs() is True
     assert len(uart.writes) == 1
-    first_sent_ms = clock.ms
+    first_sent_at = bm._last_attrs_req_at
 
-    # Retries before the throttle floor are rejected deterministically.
-    clock.ms += 1000
+    now[0] += 1000
     assert bm.schedule_attrs(0.15) is False
     assert bm.tick_avrcp_attrs() is False
-    clock.ms = first_sent_ms + throttle - 1
+    now[0] = ticks_add(first_sent_at, bm._attrs_throttle_ms - 1)
     assert bm.schedule_attrs(0.15) is False
 
-    # At the floor, scheduling is allowed and request timing is exact.
-    clock.ms = first_sent_ms + throttle
+    now[0] = ticks_add(first_sent_at, bm._attrs_throttle_ms)
     assert bm.schedule_attrs(0.15) is True
-    due = ticks_add(ticks_ms(), 150)
-    assert bm._next_attrs_at == due
+    due = ticks_add(now[0], 150)
+    assert ticks_diff(bm._next_attrs_at, due) == 0
     assert bm.tick_avrcp_attrs(ticks_add(due, -1)) is False
     assert bm.tick_avrcp_attrs(due) is True
     assert len(uart.writes) == 2
 
-    # A non-empty metadata response should parse cleanly and not poison future polls.
+    # A parsed reply must not reset the request throttle or poison later polls.
     title = b"Song"
     payload = (1).to_bytes(4, "big") + b"\x00\x00" + len(title).to_bytes(2, "big") + title
     params = bytes([0x20, 0x00, 0x01, 0x01, 0x01]) + len(payload).to_bytes(2, "big") + payload
@@ -283,10 +268,9 @@ def test_schedule_attrs_throttle_deadline_and_reuse_after_metadata_parse(monkeyp
     assert resp == 0x01
     assert attrs[1] == "Song"
 
-    # Later retries still resume normally if metadata is needed again.
-    clock.ms = first_sent_ms + throttle + 150 + throttle   # second send + one throttle
+    now[0] = ticks_add(bm._last_attrs_req_at, bm._attrs_throttle_ms)
     assert bm.schedule_attrs(0.05) is True
-    assert bm.tick_avrcp_attrs(ticks_add(ticks_ms(), 50)) is True
+    assert bm.tick_avrcp_attrs(ticks_add(now[0], 50)) is True
     assert len(uart.writes) == 3
 
 
@@ -295,36 +279,32 @@ def test_required_track_refresh_queues_after_throttle_and_quiet_floor(monkeypatc
     uart = MockUART()
     bm = Bm83(uart)
     bm.connected = True
-    clock = _MsClock(100000)
-    monkeypatch.setattr(time, "monotonic", clock)
-    throttle = bm._attrs_throttle_ms
+    now = [100000]
+    monkeypatch.setattr("utils.ticks._hw_ticks_ms", lambda: now[0])
     assert bm.schedule_attrs(0.0)
     assert bm.tick_avrcp_attrs()
-    first_sent_ms = clock.ms
-    first_sent = bm._last_attrs_req_at
+    first_sent = now[0]
 
-    clock.ms += 100
-    quiet_ms = clock.ms + int(quiet_seconds * 1000)
+    now[0] += 100
     bm.defer_attrs(quiet_seconds)
     assert bm.schedule_attrs(0.25, queue_if_throttled=True)
-    due_ms = max(first_sent_ms + throttle, quiet_ms)
-    due = ticks_add(first_sent, due_ms - first_sent_ms)
-    assert bm._next_attrs_at == due
-    for stamp_ms in (100400, 100800, 101490):
-        clock.ms = stamp_ms
-        # Repeated track events coalesce instead of producing a later burst
-        # or continually postponing the already-required metadata request.
+    due_delta = max(bm._attrs_throttle_ms, 100 + int(quiet_seconds * 1000))
+    due = ticks_add(first_sent, due_delta)
+    assert ticks_diff(bm._next_attrs_at, first_sent) == due_delta
+    for elapsed in (400, 800, 1490):
+        now[0] = ticks_add(first_sent, elapsed)
+        # Repeated invalidations keep the earliest required refresh.
         assert not bm.schedule_attrs(0.25, queue_if_throttled=True)
-        assert bm._next_attrs_at == due
+        assert ticks_diff(bm._next_attrs_at, due) == 0
         assert not bm.tick_avrcp_attrs()
-    clock.ms = due_ms - 1
+    now[0] = ticks_add(due, -1)
     assert not bm.tick_avrcp_attrs()
     assert len(uart.writes) == 1
-    clock.ms = due_ms
+    now[0] = due
     assert bm.tick_avrcp_attrs()
-    assert ticks_diff(bm._last_attrs_req_at, first_sent) >= throttle
+    assert ticks_diff(bm._last_attrs_req_at, first_sent) >= bm._attrs_throttle_ms
     assert len(uart.writes) == 2
-    clock.ms += 100
+    now[0] = ticks_add(now[0], 100)
     assert not bm.tick_avrcp_attrs()
     assert len(uart.writes) == 2
 
@@ -708,7 +688,7 @@ def test_avrcp_suspends_polling_through_reconnect(monkeypatch):
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
 
     assert bm.note_btm_state(0x06) == "CONNECTED"
-    bm._next_playstatus_at = t[0]  # a poll is due right now
+    bm._next_playstatus_at = ticks_ms()  # a poll is due right now (integer ticks)
     baseline = len(uart.writes)
 
     # AVRCP teardown arrives while the debounce still holds connected=True
@@ -1715,3 +1695,42 @@ def test_soft_off_reply_events_are_not_power_evidence(monkeypatch):
     bm2 = Bm83(MockUART())
     bm2.note_btm_state(0x06)
     assert bm2.power_on is True
+
+
+def test_empty_metadata_after_reconnect_retries_at_throttle_cadence(monkeypatch):
+    uart = MockUART()
+    bm = Bm83(uart)
+    now = [20000000]
+    monkeypatch.setattr("utils.ticks._hw_ticks_ms", lambda: now[0])
+    monkeypatch.setattr(time, "monotonic", lambda: now[0] / 1000.0)
+
+    def gea_requests():
+        return [w for w in uart.writes if w[3] == Bm83.OP_AVRCP_VENDOR_DEP_CMD]
+
+    empty_rsp = bytes([0x20, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00])
+    bm.connected = True
+    bm._next_attrs_at = ticks_add(now[0], 500)
+    bm._mark_disconnected()
+    assert bm._next_attrs_at is None
+    assert bm.tick_avrcp_attrs(ticks_add(now[0], 1000)) is False
+    bm.connected = True
+    assert bm.schedule_attrs(2.0) is True
+
+    sent_at = []
+    next_status = now[0] + 1000
+    end = now[0] + 20000
+    while now[0] < end:
+        now[0] += 50
+        if bm.tick_avrcp_attrs():
+            sent_at.append(now[0])
+            assert bm.parse_gea_0x5d(empty_rsp) is None
+            assert bm._gea_expect_len is None
+        if now[0] >= next_status:
+            next_status += 1000
+            bm.schedule_attrs(0.15)
+
+    assert len(gea_requests()) == len(sent_at)
+    gaps = [ticks_diff(b, a) for a, b in zip(sent_at, sent_at[1:])]
+    assert all(g >= bm._attrs_throttle_ms for g in gaps)
+    assert len(sent_at) == 10
+    assert all(abs(g - 2000) < 200 for g in gaps)

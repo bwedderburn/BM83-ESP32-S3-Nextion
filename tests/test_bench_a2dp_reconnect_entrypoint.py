@@ -286,8 +286,8 @@ def test_quiet_blocks_all_nonessential_tx_and_scheduler_work(bench):
     enter_quiet(bench)
     bm = bench.bm
     before = list(bench.uart.writes)
-    bm._pending_notif_regs = [(0.0, 0x02, 0)]
-    bm._next_attrs_at = 1.0
+    bm._pending_notif_regs = [(0, 0x02, 0)]
+    bm._next_attrs_at = 1000
     bm._avrcp_suspend_at = 1.0
     bm._boot_init_at = 1.0
     bm.tick_avrcp()
@@ -301,8 +301,8 @@ def test_quiet_blocks_all_nonessential_tx_and_scheduler_work(bench):
     bm.send(0x04, b"\x00\x05")
     bm.send(0x02, b"\x00\x82")
     assert bench.uart.writes == before
-    assert bm._pending_notif_regs == [(0.0, 0x02, 0)]
-    assert bm._next_attrs_at == 1.0
+    assert bm._pending_notif_regs == [(0, 0x02, 0)]
+    assert bm._next_attrs_at == 1000
     bm.ack_event(0x01)
     assert bench.uart.writes[-1] == (0x14, b"\x01")
 
