@@ -289,4 +289,10 @@ class Nextion:
 
     def set_text_active_page(self, obj, txt):
         safe = _sanitize_text(txt)
+        # Keep the internal unknown-value sentinel for metadata retry logic,
+        # but use an ASCII placeholder on the HMI. CircuitPython's codec can
+        # still emit UTF-8 for encode("ascii", "replace"), so relying on the
+        # UART encoder to replace the em dash leaves unsupported glyph boxes.
+        if safe == "—":
+            safe = "-"
         self.enqueue('%s.txt="%s"' % (obj, safe))

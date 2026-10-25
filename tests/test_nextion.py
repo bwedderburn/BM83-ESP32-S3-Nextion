@@ -1,5 +1,6 @@
 from nextion.display import AUX_OBJ_PAGE0, AUX_OBJ_PAGE1, Nextion
 from unittest import mock
+import pytest
 
 
 class DummyUART:
@@ -39,6 +40,20 @@ def test_nextion_read_token():
     nx = Nextion(uart)
     tokens, _ = nx.read()
     assert tokens == [b"BT_EQ"]
+
+
+@pytest.mark.parametrize("value", [None, "", " \t ", "—"])
+def test_unknown_metadata_uses_ascii_placeholder_on_nextion_wire(value):
+    from utils.common import _sanitize_text
+    # The main-loop retry predicate uses this sentinel; rendering must not
+    # change it into a value that falsely counts as known source metadata.
+    assert _sanitize_text(value) == "—"
+    uart = DummyUART()
+    panel = Nextion(uart)
+    panel.set_text_active_page("tAlbum", value)
+    assert panel.tx_queue[0] == 'tAlbum.txt="-"'
+    panel.tick()
+    assert uart.written[0] == b'tAlbum.txt="-"\xff\xff\xff'
 
 
 def test_nextion_queue_overflow():

@@ -272,3 +272,33 @@ def test_rapid_track_change_eventually_refreshes_cleared_remote_metadata(monkeyp
     assert (final["title"], final["artist"], final["album"]) == ("New Song", "New Artist", "New Album")
     assert text[NX_RUNTIME["title"]] == "New Song"
     assert text[NX_RUNTIME["artist"]] == "New Artist"
+
+
+@pytest.mark.parametrize("gea_hex,title,nextion_title", [
+    ("20000c0103003300000001006a00044b696e6400000002006a0016506c696e6920e280942053756e68656164202d204550"
+     "00000004006a000130", "Kind", "Kind"),
+    ("20000c0103004800000001006a0019466cc3a26e6575722028666561742e20416e6f6d616c69652900000002006a0016"
+     "506c696e6920e280942053756e68656164202d20455000000004006a000130",
+     "Flâneur (feat. Anomalie)", "Fl neur (feat. Anomalie)"),
+])
+def test_windows_captured_gea_restores_album_for_both_displays(monkeypatch, gea_hex, title, nextion_title):
+    # Exact 0x5D parameter bytes from the Windows web-player capture: UTF-8
+    # charset106, attributes1/2/4 only, and combined artist/album in attr2.
+    params = bytes.fromhex(gea_hex)
+    bm = Bm83(None)
+    _response, raw = bm.parse_gea_0x5d(params)
+    assert raw == {1: title, 2: "Plini — Sunhead - EP", 4: "0"}
+    assert 3 not in raw
+
+    snapshots = []
+    script = [(100.0, (frame_to_bytes(Bm83.EVT_AVRCP_VENDOR_DEP_RSP, params),)),
+              (100.1, ()), (100.2, ())]
+    writes, text = _run_main(monkeypatch, script, snapshots)
+    assert text[NX_RUNTIME["title"]] == nextion_title
+    assert text[NX_RUNTIME["artist"]] == "Plini"
+    assert text[NX_RUNTIME["album"]] == "Sunhead - EP"
+    final = snapshots[-1][1]
+    assert (final["title"], final["artist"], final["album"]) == (title, "Plini", "Sunhead - EP")
+    assert raw == {1: title, 2: "Plini — Sunhead - EP", 4: "0"}
+    assert any(frame[3:5] == bytes((Bm83.OP_EVENT_ACK, Bm83.EVT_AVRCP_VENDOR_DEP_RSP))
+               for _stamp, frame in writes)

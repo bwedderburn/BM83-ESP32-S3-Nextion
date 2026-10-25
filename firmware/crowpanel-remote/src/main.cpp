@@ -30,6 +30,7 @@
 #include "display_init.h"
 #include "espnow_link.h"
 #include "now_playing.h"
+#include "metadata_fonts.h"
 #include "artwork.h"
 #include "artwork_ca_bundle.h"
 #include "network_setup.h"
@@ -520,9 +521,9 @@ static void ui_set_now_playing(uint32_t now) {
     snprintf(eq_text, sizeof(eq_text), "EQ: %s", fresh && state.power_on ? eq_name(state.eq_index) : "--");
     set_label(g_eq_label, eq_text);
     if (bluetooth) {
-        log_missing_glyphs(0, "title", state.title, &lv_font_montserrat_28);
-        log_missing_glyphs(1, "artist", state.artist, &lv_font_montserrat_20);
-        log_missing_glyphs(2, "album", state.album, &lv_font_montserrat_18);
+        log_missing_glyphs(0, "title", state.title, metadata_fonts::title());
+        log_missing_glyphs(1, "artist", state.artist, metadata_fonts::artist());
+        log_missing_glyphs(2, "album", state.album, metadata_fonts::album());
     }
 
     const uint32_t position = bluetooth ? g_now_playing.position(now) : now_playing::UNKNOWN;
@@ -618,16 +619,16 @@ static void build_ui() {
     lv_obj_add_flag(g_artwork_image, LV_OBJ_FLAG_HIDDEN);
 
     g_title_label = make_label(g_now_page, "Waiting for audio unit", 228, 8,
-                               &lv_font_montserrat_28, COLOR_FG);
+                               metadata_fonts::title(), COLOR_FG);
     lv_obj_set_size(g_title_label, 524, 76);
     lv_label_set_long_mode(g_title_label, LV_LABEL_LONG_DOT);
     g_artist_label = make_label(g_now_page, "", 228, 100,
-                                &lv_font_montserrat_20, 0xBAC7D3);
+                                metadata_fonts::artist(), 0xBAC7D3);
     lv_obj_set_width(g_artist_label, 524);
     lv_label_set_long_mode(g_artist_label, LV_LABEL_LONG_DOT);
     g_album_label = make_label(g_now_page, "", 228, 140,
-                               &lv_font_montserrat_18, 0x9AAAB8);
-    lv_obj_set_size(g_album_label, 524, 44);
+                               metadata_fonts::album(), 0x9AAAB8);
+    lv_obj_set_size(g_album_label, 524, 48);
     lv_label_set_long_mode(g_album_label, LV_LABEL_LONG_DOT);
     g_playback_label = make_label(g_now_page, "Waiting for current playback information",
                                   228, 192, &lv_font_montserrat_14, 0x9AAAB8);

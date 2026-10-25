@@ -19,6 +19,7 @@ from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
 from bm83.bm83 import Bm83
 from blehid.ble import BleHid
 from utils.ticks import ticks_diff, ticks_ms
+from utils.metadata_fields import recover_metadata_fields
 
 NX_BAUD = 9600
 BM83_BAUD = 115200
@@ -522,6 +523,7 @@ def main():
                 if gea:
                     last_avrcp_rx_at = time.monotonic()
                     _resp, attrs = gea
+                    attrs = recover_metadata_fields(attrs)
                     remote_state.note_attributes(attrs)
                     print("[META] GetElementAttributes received:", sorted(attrs.keys()))
                     changed = []

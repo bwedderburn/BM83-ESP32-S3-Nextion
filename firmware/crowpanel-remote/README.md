@@ -8,6 +8,20 @@ solar firmware stays recoverable from that repo at any time.
 
 ## Now Playing and Settings
 
+The controller recovers separate artist and album fields from the captured
+Windows web-player form `Plini — Sunhead - EP`. Recovery requires a missing
+album, only AVRCP attributes 1/2/4 (optionally a blank 3), track number `0`,
+and exactly one spaced em dash in the artist field. Existing album fields and
+other reply profiles remain unchanged. Album suffixes such as ` - EP` stay
+intact, so artwork lookup receives the complete album name. The Nextion uses
+an ASCII dash for unavailable text rather than sending its internal Unicode
+placeholder to the display.
+
+CrowPanel metadata labels include matching Montserrat glyphs for accented
+European Latin letters such as `é` and `â`, plus European punctuation. Original
+UTF-8 text is preserved for artwork searches. See [font coverage and source
+provenance](fonts/README.md) for the supported ranges and reproducible assets.
+
 The main 800×480 page shows title, artist, album, playback state, elapsed
 time, total time and a display-only progress bar. The 200×200 artwork area
 automatically shows a matching cached or downloaded cover when available,
