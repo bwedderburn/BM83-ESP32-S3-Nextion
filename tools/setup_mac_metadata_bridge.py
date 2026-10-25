@@ -17,6 +17,7 @@ import stat
 import subprocess  # nosec B404
 import sys
 import tempfile
+import time
 
 LABEL = "com.bwedderburn.bm83-metadata-bridge"
 SOURCE_FILES = ("bridge.py", "now_playing.m", "read_now_playing.pl")
@@ -198,14 +199,27 @@ def launch_agent(plan):
             "StandardOutPath": str(app / "bridge.log"), "StandardErrorPath": str(app / "bridge-error.log")}
 
 
-def run_command(arguments, *, check=True):
+def run_command(arguments, *, check=True, timeout=60):
     """Bound local subprocesses and keep raw command output out of setup logs."""
     try:
         # Callers supply fixed switches, absolute local executables and validated
         # installation paths, never metadata, tokens or remote command text.
-        return subprocess.run(arguments, check=check, capture_output=True, timeout=60)  # nosec B603
+        return subprocess.run(arguments, check=check, capture_output=True, timeout=timeout)  # nosec B603
     except (OSError, subprocess.SubprocessError):
         raise SetupError("Local helper build or LaunchAgent operation failed; no secret details were logged.") from None
+
+
+def wait_for_agent_removal(target):
+    """Allow asynchronous bootout to finish before loading the same label."""
+    deadline = time.monotonic() + 10.0
+    while True:
+        result = run_command(["/bin/launchctl", "print", target], check=False, timeout=2)
+        if result.returncode != 0:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SetupError("Previous login agent is still unloading; retry setup after it exits.")
+        time.sleep(min(0.1, remaining))
 
 
 def install(plan):
@@ -231,10 +245,14 @@ def install(plan):
                 if path.exists() else None for path in paths}
     domain = "gui/" + str(os.getuid())
     stopped = False
+    changed_profiles = set()
     try:
         for key, path in (("host", plan["config_path"]), ("receiver", plan["receiver_path"])):
             data = (json.dumps(plan[key], separators=(",", ":")) + "\n").encode("utf-8")
-            atomic_write(path, data, host_file=key == "host")
+            if data != previous[path]:
+                # Track before writing: replacement can precede a read-back failure.
+                changed_profiles.add(path)
+                atomic_write(path, data, host_file=key == "host")
         atomic_write(agent, plistlib.dumps(launch_agent(plan)))
         for name in ("bridge.log", "bridge-error.log"):
             path = app / name
@@ -244,16 +262,24 @@ def install(plan):
                 read_regular(path, private=True, limit=16777216)
         run_command(["/bin/launchctl", "bootout", domain + "/" + LABEL], check=False)
         stopped = True
+        wait_for_agent_removal(domain + "/" + LABEL)
         run_command(["/bin/launchctl", "bootstrap", domain, str(agent)])
     except Exception:
         for path, data in previous.items():
+            if path != agent and path not in changed_profiles:
+                continue
             if data is None:
                 if safe_path(path).exists():
                     path.unlink()
             else:
                 atomic_write(path, data, host_file=path != plan["receiver_path"])
         if stopped and previous[agent] is not None:
-            run_command(["/bin/launchctl", "bootstrap", domain, str(agent)], check=False)
+            try:
+                wait_for_agent_removal(domain + "/" + LABEL)
+                run_command(["/bin/launchctl", "bootstrap", domain, str(agent)], check=False)
+            except SetupError:  # nosec B110
+                # Preserve the original setup error if bounded rollback also fails.
+                pass
         raise
 
 

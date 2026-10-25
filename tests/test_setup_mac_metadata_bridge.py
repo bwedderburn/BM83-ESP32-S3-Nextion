@@ -36,10 +36,11 @@ def profile(path, token="a" * 64, **fields):
     path.chmod(0o600)
 
 
-def fake_commands(monkeypatch, *, fail_build=False, fail_bootstrap=False):
+def fake_commands(monkeypatch, *, fail_build=False, fail_bootstrap=False, unloading_polls=0):
     calls = []
 
-    def command(arguments, check=True):
+    def command(arguments, check=True, timeout=60):
+        nonlocal unloading_polls
         calls.append((arguments, check))
         if "--build-helper" in arguments:
             if fail_build:
@@ -47,6 +48,12 @@ def fake_commands(monkeypatch, *, fail_build=False, fail_bootstrap=False):
             Path(arguments[-1]).write_bytes(b"test native helper")
         if "bootstrap" in arguments and fail_bootstrap and check:
             raise setup.SetupError("Agent startup failed.")
+        if "print" in arguments:
+            if unloading_polls:
+                unloading_polls -= 1
+                return setup.subprocess.CompletedProcess(arguments, 0)
+            return setup.subprocess.CompletedProcess(arguments, 113)
+        return setup.subprocess.CompletedProcess(arguments, 0)
 
     monkeypatch.setattr(setup, "run_command", command)
     monkeypatch.setattr(setup.sys, "platform", "darwin")
@@ -185,6 +192,79 @@ def test_failed_build_leaves_existing_profiles_and_agent_intact(staged, monkeypa
     with pytest.raises(setup.SetupError, match="build failed"):
         setup.install(plan)
     assert all(path.read_bytes() == data for path, data in previous.items())
+
+
+@pytest.mark.parametrize("fail_bootstrap", [False, True])
+def test_matching_profiles_are_not_rewritten_on_install_or_rollback(staged, monkeypatch, fail_bootstrap):
+    fake_commands(monkeypatch)
+    plan = setup.prepare_setup(**staged)
+    setup.install(plan)
+    profiles = (plan["config_path"], plan["receiver_path"])
+    previous = {path: path.read_bytes() for path in profiles}
+    fake_commands(monkeypatch, fail_bootstrap=fail_bootstrap)
+    writes = []
+    original_write = setup.atomic_write
+
+    def record_write(path, data, **kwargs):
+        writes.append(path)
+        original_write(path, data, **kwargs)
+
+    monkeypatch.setattr(setup, "atomic_write", record_write)
+    rerun = setup.prepare_setup(**staged)
+    if fail_bootstrap:
+        with pytest.raises(setup.SetupError, match="Agent startup failed"):
+            setup.install(rerun)
+    else:
+        setup.install(rerun)
+    assert all(path not in writes for path in profiles)
+    assert all(path.read_bytes() == data for path, data in previous.items())
+
+
+def test_new_and_changed_profiles_are_written(staged, monkeypatch):
+    fake_commands(monkeypatch)
+    writes = []
+    original_write = setup.atomic_write
+
+    def record_write(path, data, **kwargs):
+        writes.append(path)
+        original_write(path, data, **kwargs)
+
+    monkeypatch.setattr(setup, "atomic_write", record_write)
+    first = setup.prepare_setup(**staged)
+    profiles = (first["config_path"], first["receiver_path"])
+    setup.install(first)
+    assert all(writes.count(path) == 1 for path in profiles)
+    writes.clear()
+    changed = setup.prepare_setup(**staged, port=8767)
+    setup.install(changed)
+    assert all(writes.count(path) == 1 for path in profiles)
+    assert all(json.loads(path.read_text())["port"] == 8767 for path in profiles)
+
+
+def test_install_waits_for_previous_agent_removal_before_bootstrap(staged, monkeypatch):
+    calls = fake_commands(monkeypatch, unloading_polls=2)
+    pauses = []
+    monkeypatch.setattr(setup.time, "sleep", pauses.append)
+    setup.install(setup.prepare_setup(**staged))
+    lifecycle = [arguments[1] for arguments, _check in calls if arguments[0] == "/bin/launchctl"]
+    assert lifecycle == ["bootout", "print", "print", "print", "bootstrap"]
+    assert pauses == [0.1, 0.1]
+
+
+def test_agent_removal_wait_is_bounded(monkeypatch):
+    calls = []
+
+    def still_loaded(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return setup.subprocess.CompletedProcess(arguments, 0)
+
+    clock = iter((0.0, 11.0))
+    monkeypatch.setattr(setup, "run_command", still_loaded)
+    monkeypatch.setattr(setup.time, "monotonic", lambda: next(clock))
+    with pytest.raises(setup.SetupError, match="still unloading"):
+        setup.wait_for_agent_removal("gui/501/" + setup.LABEL)
+    assert len(calls) == 1
+    assert calls[0][1] == {"check": False, "timeout": 2}
 
 
 def test_agent_startup_failure_restores_paired_profiles(staged, monkeypatch):
