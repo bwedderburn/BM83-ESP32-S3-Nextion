@@ -16,7 +16,9 @@ from nextion.display import Nextion, NX_RUNTIME, EQ_MAP, EQ_OBJ_PAGE0, EQ_OBJ_PA
 from remote import EspNowRemote
 from remote.state_tx import StatePublisher
 from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
+from remote.metadata_bridge import MetadataBridge
 from bm83.bm83 import Bm83
+from bm83.link_probe import StartupLinkProbe
 from blehid.ble import BleHid
 from utils.ticks import ticks_diff, ticks_ms
 from utils.metadata_fields import recover_metadata_fields
@@ -84,6 +86,9 @@ def main():
     remote.setup()
     remote_poll = remote.poll
     remote_state = StatePublisher(remote)
+    metadata_bridge = MetadataBridge()
+    metadata_bridge.setup()
+    startup_link_probe = StartupLinkProbe(bm, enabled=metadata_bridge.enabled)
 
     # Local bindings for speed/low allocation on mpy
     monotonic = time.monotonic
@@ -158,6 +163,11 @@ def main():
     last_pos_ms = None
     last_total_ms = None
     last_play_status = None
+    native_metadata_seen = False
+    bridge_active = False
+    bridge_packet = None
+    bridge_text = None
+    bridge_clock_at = None
 
     # Hold-and-repeat state for volume controls. Timestamps are ticks_ms()
     # values, not time.monotonic(): after a few days of uptime the float
@@ -198,7 +208,15 @@ def main():
         session would never register PlaybackStatus / TrackChanged / Position
         notifications and its metadata would stay frozen.
         """
-        nonlocal avrcp_notifs_registered
+        nonlocal avrcp_notifs_registered, native_metadata_seen
+        nonlocal bridge_active, bridge_packet, bridge_text, bridge_clock_at
+        metadata_bridge.reset()
+        native_metadata_seen = False
+        if bridge_active:
+            push_meta_updates(invalidate_track_meta(clear_primary=True))
+        bridge_active = False
+        bridge_packet = bridge_text = None
+        bridge_clock_at = None
         remote_state.clear_track()
         print("[BTM] Connected -> register notifications + request metadata")
         # Stagger the initial registrations instead of sending all three
@@ -341,6 +359,7 @@ def main():
         # blip from stranding the firmware in a permanently "disconnected"
         # state with no way back (2026-08-26 field failure).
         bm_tick_boot_init(now)
+        startup_link_probe.tick(now)
         bm_tick_avrcp_resume(now)
         bm_tick_link_recovery(now)
 
@@ -398,6 +417,7 @@ def main():
 
         for op, params in bm_poll():
             bm_ack(op)
+            startup_link_probe.note_event(op, params, now)
             if op == bm.EVT_BTM_STATUS and params:
                 state = params[0]
                 print("[BTM_Status] state=0x%02X" % state)
@@ -449,6 +469,10 @@ def main():
                         # First "playing" after an AVRCP resume fires the
                         # one-shot muted-path stream kick (no-op otherwise).
                         bm.maybe_stream_kick()
+                    if bridge_active:
+                        # macOS supplies zero AVRCP timing; the fresh Wi-Fi
+                        # source owns its display clock until native text wins.
+                        continue
                     changed = []
                     if maybe_track_changed(pos_ms, total_ms):
                         changed.extend(invalidate_track_meta())
@@ -477,7 +501,8 @@ def main():
                         # between GetPlayStatus polling intervals.
                         prev_status = last_play_status
                         last_play_status = avp[1]
-                        remote_state.note_status(last_play_status)
+                        if not bridge_active:
+                            remote_state.note_status(last_play_status)
                         if last_play_status in PLAYING_STATES:
                             bm.maybe_stream_kick()
                         if notification_changed:
@@ -502,7 +527,8 @@ def main():
                     elif event_id == 0x02 and notification_changed:
                         last_pos_ms = None
                         last_total_ms = None
-                        push_meta_updates(invalidate_track_meta())
+                        if not bridge_active:
+                            push_meta_updates(invalidate_track_meta())
                         dprint("[AVRCP] TrackChanged -> request metadata")
                         bm.schedule_attrs(0.25, queue_if_throttled=True)
                         bm.avrcp_reregister_track_changed()
@@ -511,8 +537,9 @@ def main():
                         # Playback Position Changed notifications may still be emitted
                         # around state transitions. Avoid advancing the UI clock while
                         # paused/stopped to prevent "counting while paused" behavior.
-                        remote_state.note_position(pos)
-                        if pos is not None and last_play_status in PLAYING_STATES:
+                        if not bridge_active:
+                            remote_state.note_position(pos)
+                        if not bridge_active and pos is not None and last_play_status in PLAYING_STATES:
                             changed = []
                             meta_set("time_cur", _fmt_ms(pos), changed)
                             push_meta_updates(changed)
@@ -524,6 +551,18 @@ def main():
                     last_avrcp_rx_at = time.monotonic()
                     _resp, attrs = gea
                     attrs = recover_metadata_fields(attrs)
+                    if attrs.get(1) or attrs.get(2):
+                        # Native source metadata wins for this entire Bluetooth
+                        # session, even if a trusted Mac sender is still alive.
+                        native_metadata_seen = True
+                        if bridge_active:
+                            push_meta_updates(invalidate_track_meta(clear_primary=True))
+                        bridge_active = False
+                        bridge_packet = bridge_text = None
+                        bridge_clock_at = None
+                        metadata_bridge.reset()
+                    if bridge_active:
+                        continue
                     remote_state.note_attributes(attrs)
                     print("[META] GetElementAttributes received:", sorted(attrs.keys()))
                     changed = []
@@ -682,6 +721,54 @@ def main():
                             volume_step(False)
                         vol_last_repeat_at = tnow
                         vol_repeat_count += 1
+
+        # Wi-Fi supplies the Mac's missing track text and its OS-estimated
+        # source clock. Power, Bluetooth link and AUX remain chip decisions.
+        metadata_bridge.poll(now)
+        bridge_allowed = (bm.power_on and bm.connected and not aux_mode
+                          and not bm.avrcp_suspended and not native_metadata_seen)
+        if not bridge_allowed:
+            metadata_bridge.reset()
+        packet = metadata_bridge.snapshot(now) if bridge_allowed else None
+        if packet is not None:
+            if packet is not bridge_packet:
+                track_changed = (bridge_packet is None or any(
+                    packet.get(key, "") != bridge_packet.get(key, "")
+                    for key in ("title", "artist", "album")))
+                if not bridge_active or track_changed:
+                    push_meta_updates(invalidate_track_meta(clear_primary=True))
+                bridge_packet = packet
+                bridge_text = {key: _sanitize_text(packet.get(key, "")) or "—"
+                               for key in ("title", "artist", "album")}
+                if not bridge_active:
+                    print("[META WIFI] Mac metadata active")
+                # A cached packet must never become a new timing observation.
+                remote_state.note_source_timing(1 if packet["state"] == "playing" else 2,
+                                               packet.get("position_ms"), packet.get("duration_ms"))
+                bridge_clock_at = None
+            bridge_active = True
+            changed = []
+            for key in ("title", "artist", "album"):
+                meta_set(key, bridge_text[key], changed)
+            # Reapply after any native track-clear event in this same loop.
+            remote_state.note_attributes({1: packet.get("title", ""),
+                                          2: packet.get("artist", ""),
+                                          3: packet.get("album", "")})
+            clock_now = ticks_ms()
+            if bridge_clock_at is None or ticks_diff(clock_now, bridge_clock_at) >= 1000:
+                bridge_clock_at = clock_now
+                source = remote_state.snapshot(clock_now)
+                position = remote_state.display_position(clock_now)
+                duration = source["duration_ms"]
+                meta_set("time_cur", _fmt_ms(position) if position is not None else TIME_UNKNOWN, changed)
+                meta_set("time", _fmt_ms(duration) if duration is not None else TIME_UNKNOWN, changed)
+            push_meta_updates(changed)
+        elif bridge_active:
+            bridge_active = False
+            bridge_packet = bridge_text = None
+            bridge_clock_at = None
+            push_meta_updates(invalidate_track_meta(clear_primary=True))
+            print("[META WIFI] Mac metadata cleared")
 
         # Publish cached observations only: no extra AVRCP polling, and at
         # most one small ESP-NOW frame is queued after UART/input servicing.

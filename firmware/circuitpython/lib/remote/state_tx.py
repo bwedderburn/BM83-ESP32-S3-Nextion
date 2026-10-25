@@ -1,7 +1,8 @@
-"""Paced Now Playing snapshots using existing AVRCP observations only.
+"""Paced Now Playing snapshots from AVRCP or authenticated Mac metadata.
 
-No BM83 commands are sent here. Source time is a real position sample plus
-its age, so frequent radio snapshots cannot revive a stalled playback clock.
+No BM83 commands are sent here. Source time retains its original sample age,
+so repeated radio snapshots cannot revive missing source updates. The Mac's
+position is its OS-estimated clock, not an independent audio-motion sensor.
 """
 import os
 
@@ -102,10 +103,24 @@ class StatePublisher:
             self._duration = duration_ms
             self._dirty(restart=False)
 
+    def note_source_timing(self, status, position_ms, duration_ms):
+        """Replace complete bridge timing, including explicitly unknown fields.
+
+        Call once per fresh source packet. Native AVRCP notifications remain
+        partial observations and keep their existing note_* methods.
+        """
+        self.note_status(status)
+        if duration_ms is None or duration_ms <= 0:
+            if self._duration is not None:
+                self._duration = None
+                self._dirty(restart=False)
+            duration_ms = None
+        self.note_position(position_ms, duration_ms)
+
     def note_position(self, position_ms, duration_ms=None):
         """Observe source clock motion independently of its playback label.
 
-        Some sources keep reporting PLAYING while paused. Only genuine
+        Some sources keep reporting PLAYING while paused. Only reported
         position advances permit interpolation; radio repeats are not source
         observations. Closely spaced duplicate GPS/notification samples must
         not freeze a coarse, one-second-resolution source clock.
@@ -166,6 +181,17 @@ class StatePublisher:
             "title": self._title if active else "", "artist": self._artist if active else "",
             "album": self._album if active else "",
         }
+
+    def display_position(self, now=None):
+        """Project the selected source clock for Nextion using the radio's age rules."""
+        value = self.snapshot(now)
+        position = value["position_ms"]
+        if position is None:
+            return None
+        if value["clock_advancing"] and value["play_status"] == 1:
+            position += value["position_age_ms"] or 0
+        duration = value["duration_ms"]
+        return min(position, duration) if duration is not None else position
 
     def tick(self):
         """Pace complete periodic snapshots; failures leave controls running."""

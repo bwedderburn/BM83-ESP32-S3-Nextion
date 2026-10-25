@@ -48,7 +48,7 @@ class Handler:
         self.meta = {"title": "Current title", "artist": "Current artist", "time_cur": "0:12", "time": "3:00"}
         self.env = dict(bm=self.bm, remote_state=self.remote, time=SimpleNamespace(monotonic=lambda: 123.0),
                         last_play_status=play_status, last_pos_ms=12000, last_total_ms=180000,
-                        last_avrcp_rx_at=0, PLAYING_STATES=(1, 3, 4), desired_meta=self.meta,
+                        last_avrcp_rx_at=0, PLAYING_STATES=(1, 3, 4), desired_meta=self.meta, bridge_active=False,
                         TIME_UNKNOWN=TIME_UNKNOWN, _normalize_track_time_ms=_normalize_track_time_ms,
                         _fmt_ms=_fmt_ms, maybe_track_changed=lambda _pos, _total: False,
                         primary_metadata_missing=lambda: self.meta["title"] == "—",

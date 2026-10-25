@@ -3,6 +3,7 @@ __pycache__/
 *.mpy
 .env
 .artwork_wifi.json
+.metadata_bridge.json
 .venv
 *.pyc
 *.egg-info/

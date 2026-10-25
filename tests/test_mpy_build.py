@@ -81,6 +81,7 @@ def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
     (source / "assets/public.txt").write_text("keep this asset\n")
     for parent in (source, source / "assets"):
         (parent / ".artwork_wifi.json").write_text('{"password":"synthetic-fixture"}\n')
+        (parent / ".metadata_bridge.json").write_text('{"token":"synthetic-fixture"}\n')
     compiler = tmp_path / "fake-mpy"
     compiler.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\n"
                         "if sys.argv[1:] == ['--version']:\n"
@@ -103,5 +104,6 @@ def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
     assert result.returncode == 0, result.stdout + result.stderr
     package = tmp_path / "dist/circuitpython"
     assert not list(package.rglob(".artwork_wifi.json"))
+    assert not list(package.rglob(".metadata_bridge.json"))
     assert (package / "assets/public.txt").read_text() == "keep this asset\n"
     assert (package / "lib/example.mpy").read_bytes() == b"test-mpy"
