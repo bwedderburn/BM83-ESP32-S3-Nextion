@@ -1,4 +1,5 @@
 import time
+import pytest
 from bm83.bm83 import Bm83
 from utils.ticks import ticks_add, ticks_diff, ticks_ms
 from tests.test_bm83_uart import MockUART, frame_to_bytes
@@ -230,6 +231,102 @@ def test_schedule_attrs_force_bypasses_throttle():
 
     assert bm.schedule_attrs(0.2, force=True) is True
     assert bm._next_attrs_at is not None
+
+
+class _MsClock:
+    """time.monotonic() stand-in counted in whole ms (mid-ms, so the host
+    ticks_ms() fallback's int(seconds * 1000) never lands one ms short)."""
+
+    def __init__(self, ms):
+        self.ms = ms
+
+    def __call__(self):
+        return (self.ms + 0.5) / 1000.0
+
+
+def test_schedule_attrs_throttle_deadline_and_reuse_after_metadata_parse(monkeypatch):
+    """Attribute scheduling respects throttle and due-time boundaries across a parsed response."""
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    clock = _MsClock(100000)
+    monkeypatch.setattr(time, "monotonic", clock)
+    throttle = bm._attrs_throttle_ms
+
+    # First request goes out immediately.
+    assert bm.schedule_attrs(0.0) is True
+    assert bm.tick_avrcp_attrs() is True
+    assert len(uart.writes) == 1
+    first_sent_ms = clock.ms
+
+    # Retries before the throttle floor are rejected deterministically.
+    clock.ms += 1000
+    assert bm.schedule_attrs(0.15) is False
+    assert bm.tick_avrcp_attrs() is False
+    clock.ms = first_sent_ms + throttle - 1
+    assert bm.schedule_attrs(0.15) is False
+
+    # At the floor, scheduling is allowed and request timing is exact.
+    clock.ms = first_sent_ms + throttle
+    assert bm.schedule_attrs(0.15) is True
+    due = ticks_add(ticks_ms(), 150)
+    assert bm._next_attrs_at == due
+    assert bm.tick_avrcp_attrs(ticks_add(due, -1)) is False
+    assert bm.tick_avrcp_attrs(due) is True
+    assert len(uart.writes) == 2
+
+    # A non-empty metadata response should parse cleanly and not poison future polls.
+    title = b"Song"
+    payload = (1).to_bytes(4, "big") + b"\x00\x00" + len(title).to_bytes(2, "big") + title
+    params = bytes([0x20, 0x00, 0x01, 0x01, 0x01]) + len(payload).to_bytes(2, "big") + payload
+    resp, attrs = bm.parse_gea_0x5d(params)
+    assert resp == 0x01
+    assert attrs[1] == "Song"
+
+    # Later retries still resume normally if metadata is needed again.
+    clock.ms = first_sent_ms + throttle + 150 + throttle   # second send + one throttle
+    assert bm.schedule_attrs(0.05) is True
+    assert bm.tick_avrcp_attrs(ticks_add(ticks_ms(), 50)) is True
+    assert len(uart.writes) == 3
+
+
+@pytest.mark.parametrize("quiet_seconds", [0.0, 2.0])
+def test_required_track_refresh_queues_after_throttle_and_quiet_floor(monkeypatch, quiet_seconds):
+    uart = MockUART()
+    bm = Bm83(uart)
+    bm.connected = True
+    clock = _MsClock(100000)
+    monkeypatch.setattr(time, "monotonic", clock)
+    throttle = bm._attrs_throttle_ms
+    assert bm.schedule_attrs(0.0)
+    assert bm.tick_avrcp_attrs()
+    first_sent_ms = clock.ms
+    first_sent = bm._last_attrs_req_at
+
+    clock.ms += 100
+    quiet_ms = clock.ms + int(quiet_seconds * 1000)
+    bm.defer_attrs(quiet_seconds)
+    assert bm.schedule_attrs(0.25, queue_if_throttled=True)
+    due_ms = max(first_sent_ms + throttle, quiet_ms)
+    due = ticks_add(first_sent, due_ms - first_sent_ms)
+    assert bm._next_attrs_at == due
+    for stamp_ms in (100400, 100800, 101490):
+        clock.ms = stamp_ms
+        # Repeated track events coalesce instead of producing a later burst
+        # or continually postponing the already-required metadata request.
+        assert not bm.schedule_attrs(0.25, queue_if_throttled=True)
+        assert bm._next_attrs_at == due
+        assert not bm.tick_avrcp_attrs()
+    clock.ms = due_ms - 1
+    assert not bm.tick_avrcp_attrs()
+    assert len(uart.writes) == 1
+    clock.ms = due_ms
+    assert bm.tick_avrcp_attrs()
+    assert ticks_diff(bm._last_attrs_req_at, first_sent) >= throttle
+    assert len(uart.writes) == 2
+    clock.ms += 100
+    assert not bm.tick_avrcp_attrs()
+    assert len(uart.writes) == 2
 
 
 def test_tick_avrcp_attrs_drains_pending_attrs_only_when_connected():
@@ -1550,14 +1647,18 @@ def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
     t = [71000.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
 
-    # Fresh boot, chip off, central flapping -- via BOTH paths.
-    for st in (0x15, 0x11, 0x15, 0x11, 0x0F):
+    flap_states = (0x08, 0x0C, 0x15, 0x11, 0x0F)
+
+    # Fresh boot, chip off, central flapping must not flip power_on.
+    for st in flap_states:
         bm.note_btm_state(st)
         assert bm.power_on is False, "state 0x%02X faked power_on" % st
-    uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x15"))
-    uart.in_waiting = len(uart.to_read)
-    bm.poll()
-    assert bm.power_on is False
+    for st in flap_states:
+        params = bytes((st,))
+        uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, params))
+        uart.in_waiting = len(uart.to_read)
+        assert bm.poll() == [(Bm83.EVT_BTM_STATUS, params)]
+        assert bm.power_on is False, "parsed state 0x%02X faked power_on" % st
 
     # The first press must therefore send power-ON.
     n = len(uart.writes)
@@ -1571,9 +1672,15 @@ def test_acl_flaps_from_off_chip_do_not_set_power_on(monkeypatch):
     assert bm.power_on is True
     assert bm._power_confirm_deadline == 0.0
 
-    # And 0x15 while ALREADY on is left alone (no demotion, no churn).
-    bm.note_btm_state(0x15)
-    assert bm.power_on is True
+    # Once on, link-flap edge transitions must keep the state stable.
+    for st in flap_states:
+        bm.note_btm_state(st)
+        assert bm.power_on is True, "state 0x%02X demoted power_on" % st
+        params = bytes((st,))
+        uart.to_read = bytearray(frame_to_bytes(Bm83.EVT_BTM_STATUS, params))
+        uart.in_waiting = len(uart.to_read)
+        assert bm.poll() == [(Bm83.EVT_BTM_STATUS, params)]
+        assert bm.power_on is True, "parsed state 0x%02X demoted power_on" % st
 
 
 def test_soft_off_reply_events_are_not_power_evidence(monkeypatch):

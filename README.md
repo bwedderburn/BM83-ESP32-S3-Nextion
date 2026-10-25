@@ -5,7 +5,7 @@ This project implements a CircuitPython-based remote control system for audio de
 - **ESP32-S3 DevKitC-1**
 - **BM83 Bluetooth module** (A2DP, AVRCP, HID)
 - **Nextion NX3224F028** UART touchscreen
-- **BLE HID** volume/mute support (for iOS/macOS)
+- **BLE HID** consumer-control-only volume/mute support (for iOS/macOS)
 
 ## 📦 Features
 
@@ -77,22 +77,51 @@ The repository includes a `build_mpy.sh` script to compile Python modules into b
 
 #### Prerequisites
 
-You need `mpy-cross` installed:
+The build uses **CircuitPython 10.3.1's `mpy-cross`**. The required version and
+the Linux x86_64 download's SHA-256 are recorded in
+[`tools/mpy_cross_pin.env`](tools/mpy_cross_pin.env). `build_mpy.sh` checks the
+version on every host and records the selected compiler in `dist/BUILD_INFO.txt`.
+It refuses other versions (set `MPY_CROSS_ALLOW_UNPINNED=1` only for experiments).
+
+The automatic fetcher supports **Linux x86_64 and x86_64 WSL only**:
 
 ```bash
-# Install via pip
-pip install mpy-cross
-
-# Or download from CircuitPython releases
-# https://github.com/adafruit/circuitpython/releases
+# Linux x86_64 / x86_64 WSL: download and verify into tools/mpy-cross/
+./scripts/fetch_mpy_cross.sh
 ```
 
-#### Building with bash (Linux/macOS/Git Bash)
+On **macOS, Linux ARM or Windows Git Bash**, install or build a native compiler
+for that host from [Adafruit's CircuitPython 10.3.1 source](https://github.com/adafruit/circuitpython/tree/10.3.1/mpy-cross),
+then select it with `MPY_CROSS` as shown below. The fetcher's Linux executable
+cannot run directly on macOS or Windows. Git Bash requires a native Windows
+compiler; alternatively, use the Linux fetcher inside x86_64 WSL.
+
+Do not use `pip install mpy-cross`: that installs MicroPython's compiler, which
+is a different compiler. Check that `--version` starts with `CircuitPython 10.3.1`.
+
+#### Building with bash
 
 ```bash
-# Run the build script
-./build_mpy.sh
+# Linux x86_64 / WSL, after the fetch above:
+bm83_mpy_cross="$PWD/tools/mpy-cross/mpy-cross"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
+```
 
+For macOS or another host, replace the example path with your installed native
+CircuitPython 10.3.1 compiler. Quote the path so spaces work:
+
+```bash
+# Example native macOS path; replace with your actual installed compiler.
+bm83_mpy_cross="$HOME/Tools/CircuitPython 10.3.1/mpy-cross"
+# Git Bash example instead: bm83_mpy_cross="/c/Tools/CircuitPython 10.3.1/mpy-cross.exe"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
+```
+
+Both commands produce the same output layout:
+
+```text
 # Output will be in dist/circuitpython/
 # ├── main.py           (kept as .py - entry point must not be compiled)
 # ├── settings.toml     (config file, if present)
@@ -117,11 +146,13 @@ pip install mpy-cross
 # Open WSL terminal (Ubuntu, Debian, etc.)
 cd /mnt/c/path/to/BM83-ESP32-S3-Nextion
 
-# Install mpy-cross if not already installed
-pip install mpy-cross
+# Fetch the pinned mpy-cross if not already present
+./scripts/fetch_mpy_cross.sh
 
-# Run the build script
-./build_mpy.sh
+# Check the compiler, then run the build script
+bm83_mpy_cross="$PWD/tools/mpy-cross/mpy-cross"
+"$bm83_mpy_cross" --version
+MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
 
 # The output in dist/circuitpython/ can be copied to your CIRCUITPY drive
 # from Windows Explorer at the WSL path shown after build completes
@@ -140,7 +171,7 @@ pip install mpy-cross
 
 **Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All modules under `firmware/circuitpython/lib/` are compiled to `.mpy` and placed in `dist/circuitpython/lib/`.
 
-**Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. If you encounter `ValueError: incompatible .mpy file` errors, reinstall `mpy-cross` matching your CircuitPython version.
+**Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. The pin in `tools/mpy_cross_pin.env` records which version that is; when the device's CircuitPython is upgraded, bump the pin in the same change. If you encounter `ValueError: incompatible .mpy file` errors, check the device version against the pin.
 
 **Quick rollback (.mpy → .py)**:
 1. Delete deployed project folders/files from `CIRCUITPY` (`lib/bm83`, `lib/nextion`, `lib/blehid`, `lib/utils`, and project `main.py` if needed).
@@ -183,6 +214,18 @@ Hardware behavior is only partially covered by host tests; see [docs/hardware-te
 
 ## 🆘 Troubleshooting
 
+- The volume remote exposes only Consumer Control HID reports, with keyboard,
+  mouse and boot-keyboard interfaces omitted. It should not make an iPhone
+  treat the unit as a typing keyboard. After updating from the old composite
+  HID profile, the phone may need to forget and re-pair the BLE control device
+  to discard its cached profile. Verify volume up/down, mute and the onscreen
+  keyboard together; normal audio/metadata still use BM83 Bluetooth.
+- CrowPanel's Now Playing `Mute` button sends `BT_MUTE` through the same
+  paired remote path as its other controls. It sends the source's native
+  Consumer Control mute command; it does not claim a mute state that the
+  source has not reported. It is ignored during AUX playback. A later
+  Nextion HMI button can send `print "BT_MUTE"` using the existing terminator
+  convention; this firmware update does not modify the Nextion HMI project.
 - If BLE doesn't work on iOS, try **Forget Device** and trigger `BT_EBIND`.
 - If metadata stops updating, ensure AVRCP is supported by the source device.
 - If CircuitPython auto-reloads on file save, it's disabled in code.
