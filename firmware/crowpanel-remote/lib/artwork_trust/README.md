@@ -6,7 +6,10 @@ The array is artwork_trust::kMozillaCaBundle; its pointer has static lifetime.
 The application passes it explicitly to WiFiClientSecure::setCACertBundle.
 The same header also contains artwork_trust::kArchiveRootG2Pem, extracted
 from this exact Mozilla store for ordinary PEM verification of the exact
-archive.org host. Other hosts, including archive CDN subdomains, use the bundle.
+archive.org host. Allowed archive CDN subdomains use the full bundle first;
+one narrowly gated retry can use that same existing G2 PEM when the pinned
+SDK reports the observed fatal X.509 cross-chain error. Other hosts use the
+bundle.
 
 This snapshot is dated 2026-10-20 and contains 118 unique roots / 54,752 bytes.
 Bundle SHA256: 8ca330673e7ecd07610eecfaffd23aba8b9ceca10a381d3878f268348edf5aec.
@@ -83,8 +86,33 @@ issuer can require a reviewed root-store/anchor update; there is no insecure
 retry. The generator fails if G2 is absent from the maintained Mozilla store.
 Archive CDN subdomains can use another issuer: the observed
 dn721608.ca.archive.org chain uses Let's Encrypt and validates with the
-maintained full bundle. A parent domain's G2 anchor is never assumed to apply
-to all of its subdomains.
+maintained full bundle. Each allowed CDN request therefore starts with the
+full bundle. A request is retried once on a fresh client with the existing G2
+PEM only when its HTTP operation returns a negative status and the TLS error
+is `MBEDTLS_ERR_X509_FATAL_ERROR` (`-0x3000`, decimal `-12288`). The hostname
+must have passed the artwork URL allowlist and the exact `archive.org` or
+dot-delimited subdomain policy. The exact archive.org host continues to use
+G2 PEM on its first attempt. A request already using PEM cannot retry again;
+a redirect begins the ordinary trust selection for its new host. The existing
+redirect and whole-job bounds still apply. HTTP status failures, generic
+timeouts and application date-check failures do not select this retry.
+
+On 2026-10-25, the Weightless / Animals as Leaders artwork redirected to
+`ia801907.us.archive.org`. That server presented
+`*.us.archive.org -> GoDaddy Secure CA G2 -> cross-signed Root G2 -> legacy Class2`,
+reproducing the parent host's redundant tail. The cross-signed G2 certificate's
+public key matches the retained self-signed G2 anchor exactly (SPKI SHA256
+`2a8f2d8af0eb123898f74c866ac3fa669054e23c17bc7a95bd0234192dc635d0`).
+Read-only Mac TLS 1.2 checks verified this CDN with both the maintained bundle
+and the existing G2 PEM; an incorrect hostname and an unrelated issuer were
+rejected with the G2 PEM. The returned cover was a baseline 250x250 JPEG.
+These host checks establish the public chain and negative cases; they do not
+replace hardware validation of the SDK compatibility path.
+
+Both attempts retain normal issuer/signature, requested-hostname and every
+peer-certificate date check. No root is added, the Mozilla bundle and shipped
+header remain unchanged, and legacy Class2 is not trusted. A different CDN
+issuer continues to use the full bundle; a failed G2 retry fails closed.
 Source details are retained in ca/archive-root-provenance.json.
 The optional `python ca/verify_archive_host.py` host check makes public TLS 1.2
 handshakes only: the archive hostname must verify with G2, an unrelated issuer

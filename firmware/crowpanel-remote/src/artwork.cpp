@@ -1,5 +1,7 @@
 // Native CrowPanel artwork worker; see ../lib/artwork_trust/README.md for trust provenance.
 #include "artwork.h"
+#include "artwork_network_budget.h"
+#include "artwork_tls_policy.h"
 #include "album_fallback.h"
 #include "artist_aliases.h"
 #include "matching.h"
@@ -432,7 +434,8 @@ private:
 int fetch(const Job &job, uint32_t started, String url, uint8_t *buffer,
           size_t capacity, size_t &length, bool json) {
     length = 0;
-    for (unsigned redirects = 0; redirects <= 3; ++redirects) {
+    bool retry_archive_pem = false;
+    for (unsigned redirects = 0; redirects <= 3;) {
         if (!allowed_url(url, json) || !active(job, started) || WiFi.status() != WL_CONNECTED) return -1;
         while (have_http && static_cast<uint32_t>(millis() - last_http) < HTTP_GAP_MS) {
             if (!active(job, started)) return -1;
@@ -445,11 +448,20 @@ int fetch(const Job &job, uint32_t started, String url, uint8_t *buffer,
         // its trusted G2 anchor. Ordinary PEM trust lets mbedTLS build the
         // shorter valid path; the anchor is from the same Mozilla root set.
         // CDN subdomains can use different issuers; retain their full bundle.
-        if (host == "archive.org" && configuration.archive_ca_pem) client.setCACert(configuration.archive_ca_pem);
+        const bool using_archive_pem = configuration.archive_ca_pem &&
+                                      (host == "archive.org" || retry_archive_pem);
+        if (using_archive_pem) client.setCACert(configuration.archive_ca_pem);
         else if (configuration.ca_bundle) client.setCACertBundle(configuration.ca_bundle);
         else if (configuration.ca_pem) client.setCACert(configuration.ca_pem);
         else return -1;
-        client.setHandshakeTimeout(4);
+        // A four-second TLS budget can expire while verifying CAA's longer
+        // certificate chain on the ESP32, even after the root validates.
+        // Allow the handshake to finish without starting beyond this job's
+        // remaining window. TCP and HTTP read timeouts stay independent.
+        const uint32_t handshake_seconds =
+            artwork_network_budget::handshake_seconds(started, millis(), JOB_MS);
+        if (!handshake_seconds) return -1;
+        client.setHandshakeTimeout(handshake_seconds);
         client.setTimeout(6);
         HTTPClient http;
         http.setConnectTimeout(4000);
@@ -461,11 +473,27 @@ int fetch(const Job &job, uint32_t started, String url, uint8_t *buffer,
         if (!http.begin(client, url)) return -1;
         last_http = millis();
         have_http = true;
+        const uint32_t request_started = millis();
         const int code = http.GET();
+        char tls_diagnostic[1] = {};
+        const int tls_error = client.lastError(tls_diagnostic, sizeof(tls_diagnostic));
         // Bound diagnostics to provider hostname/stage/status only. URLs and
         // query strings contain track text and must not enter this log.
-        log_i("[artwork-fetch] stage=%s host=%s http=%d redirect=%u",
-              json ? "metadata" : "image", host.c_str(), code, redirects);
+        log_i("[artwork-fetch] stage=%s host=%s http=%d redirect=%u elapsed_ms=%lu tls_budget_s=%lu",
+              json ? "metadata" : "image", host.c_str(), code, redirects,
+              static_cast<unsigned long>(millis() - request_started),
+              static_cast<unsigned long>(handshake_seconds));
+        if (!active(job, started)) { http.end(); return -1; }
+        if (artwork_tls_policy::use_archive_pem_retry(host.c_str(), code, tls_error,
+                                                     using_archive_pem, configuration.archive_ca_pem != nullptr)) {
+            // Some archive CDNs now send the same redundant G2/Class2 chain
+            // as archive.org. Retry once with the existing trusted G2 anchor;
+            // DNS hostname, issuer signatures and all peer dates still verify.
+            http.end();
+            retry_archive_pem = true;
+            log_i("[artwork-tls] host=%s retry=verified-g2-pem", host.c_str());
+            continue;
+        }
         if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
             String next = http.header("Location");
             if (next.startsWith("/")) {
@@ -475,6 +503,8 @@ int fetch(const Job &job, uint32_t started, String url, uint8_t *buffer,
             http.end();
             if (redirects == 3 || !allowed_url(next, json)) return -1;
             url = next;
+            retry_archive_pem = false;
+            ++redirects;
             continue;
         }
         if (code != 200) { http.end(); return code; }
