@@ -363,12 +363,6 @@ def main():
         bm_tick_avrcp_resume(now)
         bm_tick_link_recovery(now)
 
-        # A self-healed relink never produces a BTM_Status CONNECTED edge, so
-        # arm the session-scoped registrations here or the recovered session
-        # would receive no AVRCP notifications at all.
-        if bm.consume_relink() and not avrcp_notifs_registered:
-            arm_avrcp_session()
-
         # aux_mode is driven by the BM83's own audio-source reporting.
         # Datasheet "AudioUARTCommandSet v2.09" 7.2 BTM_Status describes
         # states 0x80/0x81/0x82 = current audio source is (none / AUX / A2DP).
@@ -418,6 +412,12 @@ def main():
         for op, params in bm_poll():
             bm_ack(op)
             startup_link_probe.note_event(op, params, now)
+            # poll() can recover a disconnected link from this AVRCP batch.
+            # Arm before its attributes claim native ownership, preserving any
+            # preceding BTM teardown/up ordering and consuming the relink once.
+            if (op in (bm.EVT_AVC_VENDOR_RSP, bm.EVT_AVRCP_VENDOR_DEP_RSP)
+                    and bm.consume_relink() and not avrcp_notifs_registered):
+                arm_avrcp_session()
             if op == bm.EVT_BTM_STATUS and params:
                 state = params[0]
                 print("[BTM_Status] state=0x%02X" % state)

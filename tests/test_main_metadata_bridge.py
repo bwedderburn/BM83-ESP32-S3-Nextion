@@ -6,6 +6,7 @@ import pytest
 from bm83.bm83 import Bm83
 from nextion.display import NX_RUNTIME
 from remote import metadata_bridge as module
+from tests import test_main_metadata_retry as harness
 from tests.test_main_metadata_retry import _avc_reply, _metadata, _run_main
 from tests.test_bm83_uart import frame_to_bytes
 from tests.test_metadata_bridge import Socket, TOKEN, packet
@@ -15,11 +16,43 @@ def play_status(duration_ms=0, position_ms=0, state=1):
     return _avc_reply(0x30, duration_ms.to_bytes(4, "big") + position_ms.to_bytes(4, "big") + bytes([state]))
 
 
-def run_bridge_main(monkeypatch, script, packets):
+def run_bridge_main(monkeypatch, script, packets, initially_connected=True):
     socket = Socket()
     base_class = module.MetadataBridge
     bridge = base_class(clock=lambda: time.monotonic(), profile={"v": 1, "token": TOKEN},
                         socket=socket, log=lambda _message: None)
+    if not initially_connected:
+        instances = []
+
+        class RecoveringBm83(harness.Bm83):
+            def __init__(self, uart):
+                super().__init__(uart)
+                self.session_arms = self.relinks_consumed = 0
+                instances.append(self)
+
+            def schedule_avrcp_notifications(self, specs):
+                self.session_arms += 1
+                return super().schedule_avrcp_notifications(specs)
+
+            def consume_relink(self):
+                result = super().consume_relink()
+                self.relinks_consumed += int(result)
+                return result
+
+        monkeypatch.setattr(harness, "Bm83", RecoveringBm83)
+        original_setup = bridge.setup
+
+        def disconnected_setup():
+            # The common harness creates an established session. Reset it
+            # before main's first iteration so real UART parsing must recover.
+            bm = instances[-1]
+            bm.connected = bm.power_on = False
+            bm.audio_source = None
+            bm._source_ever_seen = False
+            bridge.observed_bm = bm
+            return original_setup()
+
+        bridge.setup = disconnected_setup
     sent_at = set()
     original_poll = bridge.poll
 
@@ -139,3 +172,25 @@ def test_new_bluetooth_session_releases_native_priority_but_rejects_old_mac_pack
     assert snapshots[2][1]["title"] == ""
     assert snapshots[-1][1]["title"] == "Mac new session"
     assert text[NX_RUNTIME["title"]] == "Mac new session"
+
+
+@pytest.mark.parametrize("order", ["metadata-first", "status-first", "metadata-before-up", "up-before-metadata"])
+def test_native_attributes_recover_disconnected_session_before_mac_can_claim_it(monkeypatch, order):
+    native = _metadata((1, "Phone song"), (2, "Phone artist"))
+    status = play_status(duration_ms=180000, position_ms=12000)
+    up = frame_to_bytes(Bm83.EVT_BTM_STATUS, b"\x0b")
+    frames = {"metadata-first": (native, status), "status-first": (status, native),
+              "metadata-before-up": (native, up), "up-before-metadata": (up, native)}[order]
+    script = [(100.0, frames), (101.0, ()), (102.0, ())]
+    _writes, text, snapshots, bridge = run_bridge_main(monkeypatch, script, {
+        100.0: [packet(title="Mac must not win")],
+        101.0: [packet(seq=2, title="Mac heartbeat after native recovery")],
+        102.0: [packet(seq=3, title="Another Mac heartbeat")],
+    }, initially_connected=False)
+    assert all(snapshot["title"] == "Phone song" for _now, snapshot in snapshots)
+    assert text[NX_RUNTIME["title"]] == "Phone song"
+    assert text[NX_RUNTIME["artist"]] == "Phone artist"
+    assert bridge.observed_bm.power_on and bridge.observed_bm.connected
+    assert bridge.observed_bm.session_arms == 1
+    assert bridge.observed_bm.relinks_consumed == 1
+    assert not bridge.observed_bm._relinked
