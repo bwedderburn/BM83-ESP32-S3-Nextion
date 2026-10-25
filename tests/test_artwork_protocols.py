@@ -11,7 +11,7 @@ INCLUDE = ROOT / "firmware/crowpanel-remote/include"
 HOST = ROOT / "tests/crowpanel_host"
 
 
-@pytest.mark.parametrize("name", ["matching", "tls_time", "network_setup_parser"])
+@pytest.mark.parametrize("name", ["matching", "album_fallback", "tls_time", "network_setup_parser"])
 def test_artwork_host_helpers(name, tmp_path):
     compiler = shutil.which("clang++") or shutil.which("g++")
     if not compiler:

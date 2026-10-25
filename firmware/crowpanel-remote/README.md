@@ -134,7 +134,15 @@ compilations, generic artist names and incomplete or oversized results keep
 the placeholder. This is a catalog match, so a cover is not guaranteed for
 every track or edition. The matching cover is fetched from the Cover Art
 Archive's `front-250` endpoint, decoded as JPEG and fitted into the artwork
-area. Online searches send the relevant track text to those public services.
+area. When MusicBrainz identifies an album but Cover Art Archive returns no
+cover (HTTP 404), the worker also searches Deezer for that exact artist and
+album. It accepts only one matching album identity and never substitutes
+live/deluxe versions or another artist. This second provider requires album
+metadata; title-only searches keep the existing MusicBrainz/CAA path. Primary
+network/TLS failures remain retryable rather than triggering another catalog.
+Deezer's medium JPEG is tried first; if its encoding is unsupported, the worker
+tries the provider's canonical smaller thumbnail once. No audio is downloaded.
+Online searches send the relevant track text to these public services.
 
 A background worker owns network requests, decoding and SD operations;
 LVGL updates remain in the main task. Lookup failures, missing artwork,
@@ -158,6 +166,12 @@ including before time synchronization. A missing or unwritable card
 disables persistent caching; an online cover can still be displayed.
 The matching-policy update retries older cached misses while preserving
 existing positive covers and their filenames.
+The second-provider update likewise retries earlier misses. Successfully decoded
+Deezer covers use the same bounded SD cache and verified MusicBrainz album ID;
+returning to an album needs no computer, provider account or runtime helper.
+Deezer API content is used for this private, noncommercial unit under its
+[developer terms](https://developers.deezer.com/termsofuse) and
+[firmware guidelines](https://developers.deezer.com/guidelines).
 
 ### One-time Wi-Fi setup
 
