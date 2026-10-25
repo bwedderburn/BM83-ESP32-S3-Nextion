@@ -13,7 +13,7 @@ SPEC.loader.exec_module(module)
 
 
 def response(nonce="a" * 32, **changes):
-    profile = {"ssid": "Test", "password": "private-password", "bssid": "02:12:34:56:78:90", "channel": 6}
+    profile = {"ssid": "Test", "password": "private-password", "bssid": "02:12:34:56:78:90", "channel": 6}  # nosec B105 - synthetic USB-provisioning fixture
     profile.update(changes)
     return b"BMWIFI_PROFILE:" + nonce.encode() + b":" + base64.b64encode(json.dumps(profile).encode())
 
@@ -25,7 +25,7 @@ def test_exact_nonce_and_validated_fields():
 
 
 @pytest.mark.parametrize("line", [response(channel=0), response(bssid="FF:FF:FF:FF:FF:FF"),
-                                   response(password="short"), b"BMWIFI_PROFILE:" + b"a" * 32 + b":not-base64"])
+                                   response(password="short"), b"BMWIFI_PROFILE:" + b"a" * 32 + b":not-base64"])  # nosec B106 - invalid synthetic response
 def test_invalid_response_errors_do_not_leak_secret(line):
     with pytest.raises(ValueError) as caught:
         module.decode_profile(line, "a" * 32)

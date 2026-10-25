@@ -13,7 +13,7 @@ SPEC.loader.exec_module(module)
 
 
 def profile(**changes):
-    data = {"ssid": "Artwork test", "password": "private-passphrase", "bssid": "02:12:34:56:78:90", "channel": 6}
+    data = {"ssid": "Artwork test", "password": "private-passphrase", "bssid": "02:12:34:56:78:90", "channel": 6}  # nosec B105 - synthetic host-test profile
     data.update(changes)
     return data
 
@@ -25,8 +25,8 @@ def write_profile(tmp_path, data=None):
 
 
 @pytest.mark.parametrize("changes", [
-    {"ssid": ""}, {"ssid": "é" * 17}, {"ssid": "bad\0ssid"}, {"password": "short"},
-    {"password": "x" * 64}, {"password": 123}, {"channel": 0}, {"channel": 14},
+    {"ssid": ""}, {"ssid": "é" * 17}, {"ssid": "bad\0ssid"}, {"password": "short"},  # nosec B105 - invalid synthetic profile
+    {"password": "x" * 64}, {"password": 123}, {"channel": 0}, {"channel": 14},  # nosec B105 - invalid synthetic length/type
     {"channel": True}, {"channel": 6.0}, {"bssid": "FF:FF:FF:FF:FF:FF"},
     {"bssid": "00:00:00:00:00:00"}, {"bssid": "02:12:34:56:78"},
     {"bssid": "02:12:34:56:78:GG"}, {"version": 2},
@@ -38,7 +38,7 @@ def test_rejects_invalid_profiles_without_secret_in_error(changes):
 
 
 def test_profile_limits_and_open_network():
-    assert module.validate_profile(profile(password=""))["password"] == ""
+    assert module.validate_profile(profile(password=""))["password"] == ""  # nosec B106 - open-network fixture
     assert module.validate_profile(profile(ssid="é" * 16))["ssid"] == "é" * 16
 
 
@@ -98,7 +98,7 @@ def test_network_retry_only_restarts_with_a_valid_existing_profile(tmp_path):
 
 
 def test_invalid_network_retry_does_not_restart_or_expose_credentials(tmp_path):
-    path = write_profile(tmp_path, profile(password="short"))
+    path = write_profile(tmp_path, profile(password="short"))  # nosec B106 - invalid synthetic profile
     called, logs = [], []
     assert not module.retry_artwork_wifi(path, reload_fn=lambda: called.append(True), log=logs.append)
     assert called == []

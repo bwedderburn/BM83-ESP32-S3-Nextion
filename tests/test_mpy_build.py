@@ -89,7 +89,7 @@ def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
     if with_rsync:
         (executables / "rsync").symlink_to(rsync)
     env = dict(os.environ, PATH=str(executables), MPY_CROSS=str(compiler))
-    result = subprocess.run([bash, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True)
+    result = subprocess.run([bash, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True)  # nosec B603 - fixed repository script and isolated test argv
     assert result.returncode == 0, result.stdout + result.stderr
     package = tmp_path / "dist/circuitpython"
     assert not list(package.rglob(".artwork_wifi.json"))
