@@ -101,6 +101,8 @@ static Meta seed(unsigned version, bool negative) {
     write_meta(HASH, meta);
     if (!negative) files[path_for(HASH, ".jpg")] = JPEG;
     files["/holiday-photo.jpg"] = {9, 8, 7};
+    files["/bm83-artwork/holiday-photo.jpg"] = {6, 5, 4};
+    files["/bm83-artwork/notes.txt"] = {3, 2, 1};
     return meta;
 }
 
@@ -112,16 +114,16 @@ static bool load(ArtworkResult &result) {
 }
 
 static void negative_migration() {
-    for (unsigned version : {1U, 2U, 3U}) {
+    for (unsigned version : {1U, 2U, 3U, 4U}) {
         seed(version, true);
         const auto before = files;
         Meta meta;
         ArtworkResult result;
         assert(read_meta(HASH, meta));  // Still managed for cleanup/eviction.
-        assert(!load(result));          // An old miss must try the new provider.
+        assert(!load(result));          // An old miss must try the alias-aware matcher.
         assert(files == before && decoded == 0);
     }
-    seed(4, true);
+    seed(5, true);
     ArtworkResult result;
     const auto before = files;
     now = 499;
@@ -136,7 +138,7 @@ static void negative_migration() {
 static void positive_migration() {
     const String meta_path = String("/bm83-artwork/aw-") + HASH + ".meta";
     const String image_path = String("/bm83-artwork/aw-") + HASH + ".jpg";
-    for (unsigned version : {1U, 2U, 3U, 4U}) {
+    for (unsigned version : {1U, 2U, 3U, 4U, 5U}) {
         seed(version, false);
         const auto before = files;
         now = 0;  // Positive covers must remain usable without network time.
@@ -154,15 +156,17 @@ static void positive_migration() {
         assert(read_meta(HASH, updated));
         assert(updated.used == 101 && updated.magic[7] == static_cast<char>('0' + version));
         assert(std::strcmp(updated.group, GROUP) == 0 && !updated.negative);
-        assert(files.size() == before.size());
-        assert(files[image_path] == before.at(image_path));
-        assert(files["/holiday-photo.jpg"] == before.at("/holiday-photo.jpg"));
+        // Only access time may rewrite the existing metadata file. Its key,
+        // image and every unrelated file, including inside CACHE_DIR, survive.
+        auto unchanged = files;
+        unchanged[meta_path] = before.at(meta_path);
+        assert(unchanged == before);
     }
 }
 
 static void damaged_metadata() {
     for (size_t size : {sizeof(Meta) - 1, sizeof(Meta) + 1}) {
-        seed(4, false);
+        seed(5, false);
         files[path_for(HASH, ".meta")].resize(size);
         const auto before = files;
         Meta meta;
@@ -170,14 +174,14 @@ static void damaged_metadata() {
         assert(!read_meta(HASH, meta) && !load(result));
         assert(files == before && decoded == 0);
     }
-    seed(4, false);
+    seed(5, false);
     read_limits[path_for(HASH, ".meta")] = sizeof(Meta) - 1;
     ArtworkResult result;
     assert(!load(result) && decoded == 0);
 
     for (unsigned damage = 0; damage < 5; ++damage) {
-        Meta meta = seed(4, false);
-        if (damage == 0) meta.magic[7] = '5';
+        Meta meta = seed(5, false);
+        if (damage == 0) meta.magic[7] = '6';
         if (damage == 1) meta.negative = 2;
         if (damage == 2) meta.group[0] = 'z';
         if (damage == 3) meta.group[36] = 'x';
@@ -187,7 +191,7 @@ static void damaged_metadata() {
         assert(!read_meta(HASH, meta) && !load(result));
         assert(files == before && decoded == 0);
     }
-    Meta meta = seed(4, false);
+    Meta meta = seed(5, false);
     std::strcpy(meta.group, "00000000-0000-0000-0000-000000000000");
     write_meta(HASH, meta);
     assert(!read_meta(HASH, meta) && !load(result));
@@ -196,30 +200,31 @@ static void damaged_metadata() {
 static void damaged_images_and_io() {
     ArtworkResult result;
     for (size_t size : {size_t(0), JPEG_MAX + 1}) {
-        seed(4, false);
+        seed(5, false);
         files[path_for(HASH, ".jpg")].resize(size);
         const auto before = files;
         assert(!load(result) && files == before && decoded == 0);
     }
-    seed(4, false);
+    seed(5, false);
     files.erase(path_for(HASH, ".jpg"));
     assert(!load(result) && decoded == 0);
-    seed(4, false);
+    seed(5, false);
     read_limits[path_for(HASH, ".jpg")] = JPEG.size() - 1;
     assert(!load(result) && decoded == 0);
-    seed(4, false);
+    seed(5, false);
     allocation_fails = true;
     assert(!load(result) && decoded == 0);
-    seed(4, false);
+    seed(5, false);
     decode_fails = true;
     assert(!load(result) && decoded == 1);
-    seed(4, false);
+    seed(5, false);
     sd_ready = false;
     assert(!load(result) && opened.empty());
 }
 
 int main() {
     static_assert(sizeof(Meta) == 64, "Existing on-card metadata layout changed");
+    assert(std::memcmp(META_MAGIC, "BMART005", sizeof(META_MAGIC)) == 0);
     negative_migration();
     positive_migration();
     damaged_metadata();

@@ -1,6 +1,7 @@
 // Native CrowPanel artwork worker; see ../lib/artwork_trust/README.md for trust provenance.
 #include "artwork.h"
 #include "album_fallback.h"
+#include "artist_aliases.h"
 #include "matching.h"
 #include "tls_time.h"
 
@@ -40,8 +41,9 @@ const char USER_AGENT[] =
 const char META_MAGIC_V1[8] = {'B','M','A','R','T','0','0','1'};
 const char META_MAGIC_V2[8] = {'B','M','A','R','T','0','0','2'};
 const char META_MAGIC_V3[8] = {'B','M','A','R','T','0','0','3'};
-// Same layout/MB identity and keys; old misses must try the second provider.
-const char META_MAGIC[8] = {'B','M','A','R','T','0','0','4'};
+const char META_MAGIC_V4[8] = {'B','M','A','R','T','0','0','4'};
+// Same layout/MB identity and keys; old misses must retry declared aliases.
+const char META_MAGIC[8] = {'B','M','A','R','T','0','0','5'};
 
 struct Job {
     uint32_t id;
@@ -195,7 +197,8 @@ bool read_meta(const String &hash, Meta &meta) {
            (memcmp(meta.magic, META_MAGIC, sizeof(META_MAGIC)) == 0 ||
             memcmp(meta.magic, META_MAGIC_V1, sizeof(META_MAGIC_V1)) == 0 ||
             memcmp(meta.magic, META_MAGIC_V2, sizeof(META_MAGIC_V2)) == 0 ||
-            memcmp(meta.magic, META_MAGIC_V3, sizeof(META_MAGIC_V3)) == 0) && meta.negative <= 1 &&
+            memcmp(meta.magic, META_MAGIC_V3, sizeof(META_MAGIC_V3)) == 0 ||
+            memcmp(meta.magic, META_MAGIC_V4, sizeof(META_MAGIC_V4)) == 0) && meta.negative <= 1 &&
            meta.group[36] == '\0' &&
            (meta.negative || artwork_matching::valid_mbid(meta.group));
 }
@@ -544,10 +547,29 @@ unsigned score(JsonVariantConst value) {
     }
     return result <= 100 ? result : 0;
 }
-const char *credited_artist(JsonArrayConst credit) {
+const char *credited_artist(JsonArrayConst credit, const char *requested) {
     if (credit.size() != 1) return nullptr;
     const char *name = text(credit[0]["name"]);
-    return name ? name : text(credit[0]["artist"]["name"]);
+    const JsonVariantConst artist = credit[0]["artist"];
+    const char *canonical = text(artist["name"]);
+    if (const char *direct = artist_aliases::direct_match(requested, name, canonical)) return direct;
+    const char *owner_id = text(artist["id"]);
+    if (!artist.is<JsonObjectConst>() || !artwork_matching::valid_mbid(owner_id)) return nullptr;
+    // A canonical alternative to a different display credit needs the same
+    // owning-artist proof as aliases, but does not require an alias array.
+    if (const char *owned = artist_aliases::select(requested, name, canonical, owner_id, nullptr, 0)) return owned;
+    if (!artist["aliases"].is<JsonArrayConst>()) return nullptr;
+    const JsonArrayConst source = artist["aliases"].as<JsonArrayConst>();
+    if (!source.size() || source.size() > artist_aliases::MAX_ALIASES) return nullptr;
+    artist_aliases::Alias aliases[artist_aliases::MAX_ALIASES];
+    size_t count = 0;
+    for (JsonVariantConst alias : source) {
+        if (!alias.is<JsonObjectConst>()) return nullptr;
+        const char *type = text(alias["type"]);
+        if (!alias["type"].isNull() && !type) return nullptr;
+        aliases[count++] = {text(alias["name"]), type};
+    }
+    return artist_aliases::select(requested, name, canonical, owner_id, aliases, count);
 }
 bool compilation(JsonVariantConst group) {
     for (JsonVariantConst item : group["secondary-types"].as<JsonArrayConst>()) {
@@ -618,14 +640,14 @@ ArtworkStatus resolve_search(const Job &job, uint32_t started, const String &sea
         if (album) {
             if (count == artwork_matching::MAX_CANDIDATES) return ArtworkStatus::NoMatch;
             JsonArrayConst credits = item["artist-credit"].as<JsonArrayConst>();
-            candidates[count++] = {credited_artist(credits), text(item["title"]), nullptr, text(item["id"]),
+            candidates[count++] = {credited_artist(credits, job.artist), text(item["title"]), nullptr, text(item["id"]),
                                     rank, static_cast<unsigned>(credits.size()), compilation(item),
                                     text(item["primary-type"])};
         } else {
             // Recording search embeds releases. Require their artist credit and
             // release-group identity too; absent fields keep the placeholder.
             JsonArrayConst recording_credit = item["artist-credit"].as<JsonArrayConst>();
-            const char *recording_artist = credited_artist(recording_credit);
+            const char *recording_artist = credited_artist(recording_credit, job.artist);
             const char *disambiguation = text(item["disambiguation"]);
             if (disambiguation && *disambiguation) continue;
             if (!recording_artist || artwork_matching::normalized_key(recording_artist) !=
@@ -635,7 +657,7 @@ ArtworkStatus resolve_search(const Job &job, uint32_t started, const String &sea
                 JsonArrayConst credit = release["artist-credit"].as<JsonArrayConst>();
                 JsonVariantConst release_group = release["release-group"];
                 if (nonstudio_group(release_group)) continue;
-                candidates[count++] = {credited_artist(credit), text(release["title"]), text(item["title"]),
+                candidates[count++] = {credited_artist(credit, job.artist), text(release["title"]), text(item["title"]),
                                         text(release_group["id"]), rank,
                                         static_cast<unsigned>(credit.size()), compilation(release_group),
                                         text(release_group["primary-type"])};
