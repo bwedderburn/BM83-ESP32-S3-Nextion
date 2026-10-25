@@ -202,6 +202,7 @@ static const char *action_name(const char *token) {
     if (strcmp(token, "BT_PREV") == 0) return "Previous track";
     if (strcmp(token, "BT_NEXT") == 0) return "Next track";
     if (strcmp(token, "BT_PLAY") == 0) return "Play/Pause";
+    if (strcmp(token, "BT_MUTE") == 0) return "Mute";
     if (strncmp(token, "BT_VOLUP", 8) == 0) return "Volume up";
     if (strncmp(token, "BT_VOLDN", 8) == 0) return "Volume down";
     if (strcmp(token, "BT_EQ") == 0) return "EQ";
@@ -546,6 +547,29 @@ static void ui_set_now_playing(uint32_t now) {
     }
 }
 
+static void build_transport_controls(lv_obj_t *scr) {
+    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_PREV "  Prev", 24, 392, 120, 52),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_PREV");
+    lv_obj_t *play_button = make_button(scr, LV_SYMBOL_PLAY "  Play/Pause",
+                                        156, 392, 168, 52, true);
+    g_play_button_label = lv_obj_get_child(play_button, 0);
+    lv_obj_add_event_cb(play_button, cb_click, LV_EVENT_CLICKED, (void *)"BT_PLAY");
+    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_NEXT "  Next", 336, 392, 120, 52),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_NEXT");
+    // Mute is a one-shot media command. The source does not report its mute
+    // state, so the button must not latch a local muted/unmuted indication.
+    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_MUTE "  Mute", 468, 392, 88, 52),
+                        cb_click, LV_EVENT_CLICKED, (void *)"BT_MUTE");
+    lv_obj_t *vdn = make_button(scr, "Vol -", 568, 392, 96, 52);
+    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLDN");
+    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLDN");
+    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLDN");
+    lv_obj_t *vup = make_button(scr, "Vol +", 676, 392, 100, 52);
+    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLUP");
+    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLUP");
+    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLUP");
+}
+
 static void build_ui() {
     lv_obj_t *scr = lv_scr_act();
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x101418), 0);
@@ -652,22 +676,7 @@ static void build_ui() {
     make_label(g_settings_page, "Playback and volume controls remain available below.",
                 0, 246, &lv_font_montserrat_14, 0x9AAAB8);
 
-    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_PREV "  Prev", 24, 392, 120, 52),
-                        cb_click, LV_EVENT_CLICKED, (void *)"BT_PREV");
-    lv_obj_t *play_button = make_button(scr, LV_SYMBOL_PLAY "  Play/Pause",
-                                        156, 392, 168, 52, true);
-    g_play_button_label = lv_obj_get_child(play_button, 0);
-    lv_obj_add_event_cb(play_button, cb_click, LV_EVENT_CLICKED, (void *)"BT_PLAY");
-    lv_obj_add_event_cb(make_button(scr, LV_SYMBOL_NEXT "  Next", 336, 392, 120, 52),
-                        cb_click, LV_EVENT_CLICKED, (void *)"BT_NEXT");
-    lv_obj_t *vdn = make_button(scr, "Vol -", 568, 392, 96, 52);
-    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLDN");
-    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLDN");
-    lv_obj_add_event_cb(vdn, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLDN");
-    lv_obj_t *vup = make_button(scr, "Vol +", 676, 392, 100, 52);
-    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESSED, (void *)"BT_VOLUP");
-    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_RELEASED, (void *)"BT_VOLUP");
-    lv_obj_add_event_cb(vup, cb_press_release, LV_EVENT_PRESS_LOST, (void *)"BT_VOLUP");
+    build_transport_controls(scr);
 
     g_status_label = make_label(scr, "Ready", 24, 456,
                                 &lv_font_montserrat_12, 0x9AAAB8);

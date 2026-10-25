@@ -583,6 +583,11 @@ def main():
                     print("[AUX] Ignoring BT_NEXT while AUX IN is active")
                 else:
                     bm.next()
+            elif tok == b"BT_MUTE":
+                if aux_mode:
+                    print("[AUX] Ignoring BT_MUTE while AUX IN is active")
+                else:
+                    ble.mute()
             elif tok == b"BT_EQ":
                 mode = bm.next_eq()
                 next_label = bm.EQ_L.get(mode, "OFF")
