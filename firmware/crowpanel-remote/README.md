@@ -240,6 +240,12 @@ between the new and previously saved albums.
 The typed release-label correction also found Plini's `Sunhead` cover from
 Apple Music's `Sunhead - EP` metadata. The user confirmed the correct cover,
 metadata, clocks and CrowPanel pause/resume on iPhone with that revision.
+With the final controller and CrowPanel updates, the user confirmed that all
+three covers—Sithu Aye's `Senpai III`, Chimp Spanner's `At the Dreams Edge`
+and Plini's `Sunhead - EP`—returned correctly and promptly. The final Windows
+web-player check also passed for artwork, metadata and clocks, including a
+ten-second pause and resume. The final iPhone check included a five-second
+pause and resume with correct Plini artwork and metadata.
 
 The public host suite, real target build, production JPEG decoder and cache
 compatibility checks pass. Battery sleep/wake with associated Wi-Fi, offline
