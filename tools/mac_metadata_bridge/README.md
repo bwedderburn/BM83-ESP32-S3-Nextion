@@ -45,6 +45,11 @@ when another app can reach the receiver.
 For an installed copy, pass `--helper /absolute/path/now_playing.dylib` to both
 commands. Building requires only the local source and Apple toolchain.
 
+The installed login job uses launchd's `Interactive` resource class for its
+user-visible two-second display updates and does not request low-priority I/O.
+Live testing found CoreAudio startup stalls in the former `Background` job.
+The reader retains its four-second timeout and clears metadata on failure.
+
 ## Private sender profile
 
 The setup tool installs a profile separately from the source tree. Its JSON keys

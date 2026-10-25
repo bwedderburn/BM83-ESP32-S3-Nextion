@@ -177,6 +177,10 @@ def test_pairing_install_and_plist_paths_remain_separate_arguments(staged, monke
         "--helper", str(plan["app"] / "now_playing.dylib"),
     ]
     assert agent["RunAtLoad"] and agent["KeepAlive"]
+    # Two-second visible updates must not inherit discretionary background
+    # throttling while the native helper initializes CoreAudio.
+    assert agent["ProcessType"] == "Interactive"
+    assert "LowPriorityIO" not in agent
     assert all(host["token"] not in str(arguments) for arguments, _check in calls)
     assert calls[-1][0] == ["/bin/launchctl", "bootstrap", "gui/" + str(os.getuid()), str(plan["agent"])]
 

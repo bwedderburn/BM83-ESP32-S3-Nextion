@@ -191,11 +191,13 @@ def atomic_write(path, data, *, host_file=True):
 def launch_agent(plan):
     """Keep every path a separate plist argument, including paths with spaces."""
     app = plan["app"]
+    # The visible display depends on two-second snapshots. Background CPU/I/O
+    # throttling can exhaust the reader's bounded CoreAudio startup budget.
     return {"Label": LABEL,
             "ProgramArguments": [plan["python"], "-u", str(app / "bridge.py"),
                                  "--config", str(plan["config_path"]), "--helper", str(app / "now_playing.dylib")],
             "WorkingDirectory": str(app), "RunAtLoad": True, "KeepAlive": True,
-            "ThrottleInterval": 10, "ProcessType": "Background", "LowPriorityIO": True,
+            "ThrottleInterval": 10, "ProcessType": "Interactive",
             "StandardOutPath": str(app / "bridge.log"), "StandardErrorPath": str(app / "bridge-error.log")}
 
 
