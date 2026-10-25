@@ -510,8 +510,7 @@ def main():
                         # Playback Position Changed notifications may still be emitted
                         # around state transitions. Avoid advancing the UI clock while
                         # paused/stopped to prevent "counting while paused" behavior.
-                        if pos is not None:
-                            remote_state.note_position(pos)
+                        remote_state.note_position(pos)
                         if pos is not None and last_play_status in PLAYING_STATES:
                             changed = []
                             meta_set("time_cur", _fmt_ms(pos), changed)

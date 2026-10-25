@@ -126,6 +126,30 @@ def test_paused_interim_position_seeds_crowpanel_without_advancing_nextion():
     handler.bm.avrcp_reregister_position_changed.assert_not_called()
 
 
+@pytest.mark.parametrize("code,rearm", [(0x0F, False), (0x0D, True)])
+@pytest.mark.parametrize("play_status", [1, 2])
+def test_unavailable_position_notification_clears_crowpanel_sample_and_motion(code, rearm, play_status):
+    handler = Handler(play_status=play_status)
+    handler.remote.note_position(13000)
+    before = handler.remote.snapshot()
+    assert before["position_ms"] == 13000
+    assert before["clock_advancing"] == (play_status == 1)
+    before_meta = dict(handler.meta)
+
+    handler.run(response(0x31, b"\x05" + b"\xff" * 4, code=code))
+
+    after = handler.remote.snapshot()
+    assert after["position_ms"] is None and after["position_age_ms"] is None
+    assert not after["clock_advancing"]
+    assert after["play_status"] == play_status
+    for key in ("title", "artist", "album", "duration_ms"):
+        assert after[key] == before[key]
+    assert handler.meta == before_meta
+    assert handler.invalidations == 0
+    assert handler.bm.avrcp_reregister_position_changed.call_count == int(rearm)
+    handler.bm.schedule_attrs.assert_not_called()
+
+
 @pytest.mark.parametrize("code", [0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0E])
 @pytest.mark.parametrize("avp", [b"\x01\x02", b"\x02" + b"\x00" * 8, b"\x05" + (90000).to_bytes(4, "big")])
 def test_rejected_or_unrelated_notification_responses_leave_state_and_requests_untouched(code, avp):
