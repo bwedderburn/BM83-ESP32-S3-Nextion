@@ -79,6 +79,35 @@ def test_unknown_duration_zero_position_never_starts_clock():
     assert state.snapshot()["duration_ms"] is None
 
 
+def test_real_elapsed_time_survives_missing_total_duration():
+    clock = Clock()
+    state = StatePublisher(Sink(), clock=clock, session=1)
+    state.set_transport(True, True, False)
+    state.note_status(1)
+    state.note_position(12000)
+    assert state.snapshot()["position_ms"] == 12000
+    assert state.snapshot()["duration_ms"] is None
+    assert not state.snapshot()["clock_advancing"]
+    clock.value = 1000
+    state.note_position(13000)
+    assert state.snapshot()["position_ms"] == 13000
+    assert state.snapshot()["clock_advancing"]
+    clock.value = 6001
+    assert state.snapshot()["position_ms"] is None
+    clock.value = 20
+    assert state.snapshot()["position_ms"] is None
+
+
+def test_unknown_duration_zero_replaces_previous_positive_elapsed_time():
+    state = StatePublisher(Sink(), clock=Clock(), session=1)
+    state.set_transport(True, True, False)
+    state.note_status(1)
+    state.note_position(12000)
+    state.note_position(0)
+    assert state.snapshot()["position_ms"] is None
+    assert not state.snapshot()["clock_advancing"]
+
+
 def test_track_change_clears_every_old_field_until_new_data():
     state, _sink, _clock = publisher()
     state.clear_track()

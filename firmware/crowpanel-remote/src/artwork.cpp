@@ -37,8 +37,9 @@ const char CACHE_DIR[] = "/bm83-artwork";
 const char USER_AGENT[] =
     "BM83-CrowPanel/0.1 (https://github.com/bwedderburn/BM83-ESP32-S3-Nextion)";
 const char META_MAGIC_V1[8] = {'B','M','A','R','T','0','0','1'};
-// Same on-card layout and keys; v2 marks misses from the revised matcher.
-const char META_MAGIC[8] = {'B','M','A','R','T','0','0','2'};
+const char META_MAGIC_V2[8] = {'B','M','A','R','T','0','0','2'};
+// Same on-card layout and keys; v3 marks misses after typed release matching.
+const char META_MAGIC[8] = {'B','M','A','R','T','0','0','3'};
 
 struct Job {
     uint32_t id;
@@ -190,7 +191,8 @@ bool read_meta(const String &hash, Meta &meta) {
     return file && file.size() == sizeof(meta) &&
            file.read(reinterpret_cast<uint8_t *>(&meta), sizeof(meta)) == sizeof(meta) &&
            (memcmp(meta.magic, META_MAGIC, sizeof(META_MAGIC)) == 0 ||
-            memcmp(meta.magic, META_MAGIC_V1, sizeof(META_MAGIC_V1)) == 0) && meta.negative <= 1 &&
+            memcmp(meta.magic, META_MAGIC_V1, sizeof(META_MAGIC_V1)) == 0 ||
+            memcmp(meta.magic, META_MAGIC_V2, sizeof(META_MAGIC_V2)) == 0) && meta.negative <= 1 &&
            meta.group[36] == '\0' &&
            (meta.negative || artwork_matching::valid_mbid(meta.group));
 }
@@ -609,7 +611,8 @@ ArtworkStatus resolve_search(const Job &job, uint32_t started, const String &sea
             if (count == artwork_matching::MAX_CANDIDATES) return ArtworkStatus::NoMatch;
             JsonArrayConst credits = item["artist-credit"].as<JsonArrayConst>();
             candidates[count++] = {credited_artist(credits), text(item["title"]), nullptr, text(item["id"]),
-                                    rank, static_cast<unsigned>(credits.size()), compilation(item)};
+                                    rank, static_cast<unsigned>(credits.size()), compilation(item),
+                                    text(item["primary-type"])};
         } else {
             // Recording search embeds releases. Require their artist credit and
             // release-group identity too; absent fields keep the placeholder.
@@ -626,7 +629,8 @@ ArtworkStatus resolve_search(const Job &job, uint32_t started, const String &sea
                 if (nonstudio_group(release_group)) continue;
                 candidates[count++] = {credited_artist(credit), text(release["title"]), text(item["title"]),
                                         text(release_group["id"]), rank,
-                                        static_cast<unsigned>(credit.size()), compilation(release_group)};
+                                        static_cast<unsigned>(credit.size()), compilation(release_group),
+                                        text(release_group["primary-type"])};
             }
         }
     }

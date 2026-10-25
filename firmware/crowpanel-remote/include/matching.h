@@ -2,9 +2,9 @@
 // No JSON, HTTP, Arduino, LVGL, filesystem or hardware dependencies.
 //
 // MusicBrainz search score is only a filter, not proof of identity. Callers
-// must populate complete credited artist names, artist-credit counts and
-// Compilation secondary-type flags from the JSON response. art_id is a
-// RELEASE-GROUP MBID, never a specific pressing/edition's release MBID.
+// must populate complete credited artist names, artist-credit counts,
+// primary types and Compilation secondary-type flags from the JSON response.
+// art_id is a RELEASE-GROUP MBID, never a specific pressing/edition's release MBID.
 // Primary schemas: https://musicbrainz.org/doc/MusicBrainz_API/Search
 //                 https://musicbrainz.org/doc/Cover_Art_Archive/API
 #pragma once
@@ -36,6 +36,7 @@ struct Candidate {
     unsigned score;     // MusicBrainz search score, 0..100.
     unsigned artist_credit_count;
     bool compilation;
+    const char *primary_type;  // MusicBrainz's exact primary-type, or nullptr.
 };
 
 enum class Outcome { NoMatch, Matched, Ambiguous };
@@ -170,6 +171,32 @@ inline bool identity_normalized(const char *text, bool strip, std::string &out) 
     return true;
 }
 
+// Store labels are not removed by the cache-key normalizer. This helper is
+// used only on a separate album comparison/retrieval string. A candidate that
+// needs this compatibility path must supply the corresponding primary type.
+inline const char *strip_source_album_label(std::string &album) {
+    const char *suffixes[] = {" - ep", " - single"};
+    const char *types[] = {"EP", "Single"};
+    for (size_t i = 0; i < 2; ++i) {
+        const size_t size = strlen(suffixes[i]);
+        if (album.size() > size && album.compare(album.size() - size, size, suffixes[i]) == 0) {
+            album.resize(album.size() - size);
+            return types[i];
+        }
+    }
+    return nullptr;
+}
+
+inline void append_quoted(std::string &output, const std::string &text) {
+    output += '"';
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char value = text[i];
+        if (value == '"' || value == '\\') output += '\\';
+        output += value;
+    }
+    output += '"';
+}
+
 inline bool generic_artist(const std::string &artist) {
     return artist.empty() || artist == "various artists" || artist == "various" ||
            artist == "unknown artist" || artist == "[unknown]";
@@ -222,6 +249,24 @@ inline bool album_fallback_query(const Query &query, std::string &output) {
             return false;
     }
 
+    const bool typed_album = detail::strip_source_album_label(album) != nullptr;
+    bool unicode_album = false;
+    for (size_t i = 0; i < album.size(); ++i)
+        if (static_cast<uint8_t>(album[i]) >= 0x80) unicode_album = true;
+
+    // Non-ASCII bases cannot use the deliberately ASCII-only fuzzy tokenizer.
+    // A recognized store label permits one strictly quoted base-title search;
+    // returned candidates still need exact album identity and primary type.
+    if (typed_album && unicode_album) {
+        std::string result = "releasegroup:";
+        detail::append_quoted(result, album);
+        result += " AND artist:";
+        detail::append_quoted(result, original_artist);
+        if (result.size() > MAX_FALLBACK_QUERY_BYTES) return false;
+        output.swap(result);
+        return true;
+    }
+
     std::string words[MAX_FALLBACK_TOKENS];
     size_t count = 0;
     bool in_word = false;
@@ -248,13 +293,8 @@ inline bool album_fallback_query(const Query &query, std::string &output) {
         result += words[i];
         if (words[i].size() >= 4) result += "~1";
     }
-    result += ") AND artist:\"";
-    for (size_t i = 0; i < original_artist.size(); ++i) {
-        const char value = original_artist[i];
-        if (value == '"' || value == '\\') result += '\\';
-        result += value;
-    }
-    result += '"';
+    result += ") AND artist:";
+    detail::append_quoted(result, original_artist);
     if (result.size() > MAX_FALLBACK_QUERY_BYTES) return false;
     output.swap(result);
     return true;
@@ -288,6 +328,8 @@ inline Selection select(const Query &query, const Candidate *candidates, size_t 
     if (recording) {
         if (!identity_normalized(query.title, true, title) || title.empty()) return none;
     } else if (album.empty()) return none;
+    std::string base_album = album;
+    const char *album_type = strip_source_album_label(base_album);
 
     int selected = -1;
     for (size_t i = 0; i < count; ++i) {
@@ -299,7 +341,12 @@ inline Selection select(const Query &query, const Candidate *candidates, size_t 
             credited_artist != artist) continue;
         if (!album.empty()) {
             std::string candidate_album;
-            if (!identity_normalized(candidate.album, true, candidate_album) || candidate_album != album) continue;
+            if (!identity_normalized(candidate.album, true, candidate_album)) continue;
+            // Full title identity always retains its previous acceptance. Only
+            // removal of a source's trailing store label requires a type check.
+            if (candidate_album != album &&
+                (!album_type || candidate_album != base_album || !candidate.primary_type ||
+                 strcmp(candidate.primary_type, album_type) != 0)) continue;
         }
         if (recording) {
             std::string candidate_title;

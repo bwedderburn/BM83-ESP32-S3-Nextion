@@ -79,7 +79,7 @@ public:
         memset(&state, 0, sizeof(state));
         state.play_status = state.eq_index = 0xFF;
         state.duration_ms = state.position_ms = state.position_age_ms = UNKNOWN;
-        have_ = assembling_ = retired_valid_ = expired_ = false;
+        have_ = assembling_ = assembly_resync_ = retired_valid_ = expired_ = false;
         paused_hold_valid_ = false;
         paused_position_ = UNKNOWN;
         session_ = assembly_session_ = retired_session_ = committed_at_ = sample_at_ = 0;
@@ -100,6 +100,11 @@ public:
         if (!fresh(now_ms) || !state.power_on || !state.connected || state.aux ||
             state.position_ms == UNKNOWN || state.position_age_ms == UNKNOWN ||
             state.position_age_ms > EXTRAPOLATE_MS) return UNKNOWN;
+        // Source freshness expires even when interpolation is disabled. Radio
+        // receipt and a paused/frozen clock do not make an old sample current.
+        const uint64_t age = static_cast<uint64_t>(state.position_age_ms) +
+                             static_cast<uint32_t>(now_ms - sample_at_);
+        if (age > EXTRAPOLATE_MS) return UNKNOWN;
         // Some sources explicitly report PAUSED while their raw position
         // counter keeps increasing. Retain the first valid paused observation
         // until a real state/track boundary, rather than displaying that drift.
@@ -108,9 +113,6 @@ public:
         // sources retain PLAYING while paused; their frozen samples must hold.
         // Fast-forward/reverse have no known rate: show source snapshots only.
         if (state.play_status == 1 && state.clock_advancing) {
-            const uint64_t age = static_cast<uint64_t>(state.position_age_ms) +
-                                 static_cast<uint32_t>(now_ms - sample_at_);
-            if (age > EXTRAPOLATE_MS) return UNKNOWN;
             result += age;
         }
         if (state.duration_ms != UNKNOWN && result > state.duration_ms) result = state.duration_ms;
@@ -130,17 +132,33 @@ public:
         const size_t piece = remaining < FRAGMENT_SIZE ? remaining : FRAGMENT_SIZE;
         if (len != HEADER_SIZE + piece) return false;
         if (retired_valid_ && session == retired_session_) return false;
-        if (have_ && session == session_ && !newer(seq, seq_)) return false;
 
-        if (assembling_ && static_cast<uint32_t>(now_ms - assembly_at_) >= FRESH_MS) assembling_ = false;
+        if (assembling_ && static_cast<uint32_t>(now_ms - assembly_at_) >= FRESH_MS) {
+            assembling_ = assembly_resync_ = false;
+        }
+        const bool expired_snapshot = have_ && !fresh(now_ms);
+        const bool continuing_resync = assembling_ && assembly_resync_ &&
+            session == assembly_session_ && seq == assembly_seq_;
+        if (have_ && session == session_) {
+            if (seq == seq_) return false;  // Duplicates never extend freshness.
+            if (!newer(seq, seq_) &&
+                !(expired_snapshot && (index == 0 || continuing_resync))) return false;
+        }
         if (!assembling_ || session != assembly_session_ || seq != assembly_seq_) {
-            if (assembling_ && session == assembly_session_ && !newer(seq, assembly_seq_)) return false;
+            // After a long loss, a 16-bit sequence can pass the serial-number
+            // half-window. Only a validated fragment-zero header may begin a
+            // resync while the last snapshot is expired. No state/freshness is
+            // changed until all fragments pass CRC and payload validation.
+            const bool resync_start = expired_snapshot && session == session_ && index == 0;
+            if (assembling_ && session == assembly_session_ && !newer(seq, assembly_seq_) &&
+                !resync_start) return false;
             // A different boot starts only at fragment zero, preventing an old
             // trailing fragment from displacing a live session's assembly.
             if ((have_ && session != session_) || (assembling_ && session != assembly_session_)) {
                 if (index != 0) return false;
             }
             assembling_ = true;
+            assembly_resync_ = resync_start;
             assembly_session_ = session;
             assembly_seq_ = seq;
             assembly_size_ = size;
@@ -155,7 +173,7 @@ public:
         memcpy(payload_ + offset, frame + HEADER_SIZE, piece);
         mask_ |= bit;
         if (mask_ != static_cast<uint8_t>((1U << count) - 1U)) return false;
-        assembling_ = false;
+        assembling_ = assembly_resync_ = false;
         if (crc16(payload_, size) != crc) return false;
         NowPlayingState incoming = {};
         if (!decode(incoming, size)) return false;
@@ -166,7 +184,9 @@ public:
             known_text_changed(state.artist, incoming.artist) || known_text_changed(state.album, incoming.album);
         const bool valid_paused_sample = incoming.play_status == 2 && incoming.power_on &&
             incoming.connected && !incoming.aux && incoming.position_ms != UNKNOWN &&
-            incoming.position_age_ms != UNKNOWN && incoming.position_age_ms <= EXTRAPOLATE_MS;
+            incoming.position_age_ms != UNKNOWN &&
+            static_cast<uint64_t>(incoming.position_age_ms) +
+                static_cast<uint32_t>(now_ms - assembly_at_) <= EXTRAPOLATE_MS;
         if (boundary || !valid_paused_sample) paused_hold_valid_ = false;
         if (valid_paused_sample && !paused_hold_valid_) {
             paused_position_ = incoming.position_ms;
@@ -184,7 +204,7 @@ public:
     }
 
 private:
-    bool have_, assembling_, retired_valid_;
+    bool have_, assembling_, assembly_resync_, retired_valid_;
     bool paused_hold_valid_;
     uint32_t paused_position_;
     mutable bool expired_;

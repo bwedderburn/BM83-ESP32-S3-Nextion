@@ -90,6 +90,8 @@ is checked before frames enter a bounded 16-frame queue; WiFi callbacks never
 call LVGL. Sequences and boot sessions reject duplicates and old snapshots.
 Periodic full snapshots heal loss and refresh a waking panel. Rescanning after
 wake discards buffered frames and the display awaits fresh source state.
+After expiry, a new fragment-zero-led, validated snapshot can resynchronize
+the sequence even after a long outage; partial frames cannot revive old state.
 
 The controller permits one outstanding state send and spaces frames by at
 least 40 ms. Ordinary timing updates do not abort a snapshot in flight;
@@ -103,6 +105,9 @@ driver's memory-exhaustion path.
 Snapshots expire after six seconds without a new complete update. Playing
 time advances only from a genuine source position, for at most five seconds
 without another source sample; radio refreshes do not make old timing fresh.
+This source-age limit also applies to paused or stalled displayed positions.
+Genuine nonzero source positions remain usable when the total duration is
+unknown; a zero position with unknown duration remains unavailable.
 An explicit clock-motion flag permits interpolation only after actual source
 positions advance. Equal positions persisting at least 500 ms hold the clock,
 even if a source still reports Playing. Closely spaced duplicate observations
@@ -121,6 +126,9 @@ the candidates must identify one release group. Album/track comparison permits
 an omitted in-word apostrophe, such as `Dreams` versus `Dream's`; artist identity
 remains strict. Only a complete successful empty album search permits one
 bounded fallback query, followed by the same identity and uniqueness checks.
+Apple Music's trailing album labels ` - EP` and ` - Single` can match an
+unlabelled catalog title only when its release type also matches. Literal full
+titles and genuine hyphens are preserved; track-title labels are not stripped.
 Ambiguous results,
 compilations, generic artist names and incomplete or oversized results keep
 the placeholder. This is a catalog match, so a cover is not guaranteed for
@@ -160,7 +168,11 @@ supported. Router channel changes can be followed by rejoining the saved
 BSSID; replacing the AP requires enrollment again.
 
 1. Install the artwork-capable firmware on both boards and connect both
-   boards to the setup computer by USB. Pause playback for setup, which
+   boards to a macOS or Linux setup computer by USB. The utility requires
+   POSIX private-file permissions and checks support before changing anything.
+   This enrollment-host requirement does not restrict Windows playback after setup.
+   Windows remains a supported playback source without a runtime helper.
+   Pause playback for setup, which
    briefly restarts the audio controller. Ensure its writable `CIRCUITPY`
    volume is mounted and Python with `pyserial` is available.
 2. Close serial monitors and captures. From the repository root, start the
@@ -225,6 +237,9 @@ The final punctuation correction downloaded the correct Chimp Spanner cover
 on the actual panel. The user then confirmed that both the Chimp Spanner and
 Sithu Aye covers appeared correctly and returned promptly when switching
 between the new and previously saved albums.
+The typed release-label correction also found Plini's `Sunhead` cover from
+Apple Music's `Sunhead - EP` metadata. The user confirmed the correct cover,
+metadata, clocks and CrowPanel pause/resume on iPhone with that revision.
 
 The public host suite, real target build, production JPEG decoder and cache
 compatibility checks pass. Battery sleep/wake with associated Wi-Fi, offline

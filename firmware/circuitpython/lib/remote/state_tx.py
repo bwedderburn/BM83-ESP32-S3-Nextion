@@ -147,7 +147,8 @@ class StatePublisher:
         active = power and connected and not aux and not suspended
         # Unknown duration + zero position is what unsupported Mac sources
         # return. Do not animate a convincing but invented clock from that.
-        position = self._position if active and self._duration is not None else None
+        valid_time = self._duration is not None or (self._position is not None and self._position > 0)
+        position = self._position if active and valid_time else None
         age = None
         if position is not None and self._position_at is not None:
             age = ticks_diff(now, self._position_at)

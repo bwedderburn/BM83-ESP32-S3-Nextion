@@ -13,7 +13,7 @@ static const char *GROUP_B = "b1234567-1234-1234-1234-123456789abc";
 
 static Candidate match(const char *artist = "Artist", const char *album = "Album",
                        const char *title = "Song", const char *group = GROUP_A) {
-    return {artist, album, title, group, 100, 1, false};
+    return {artist, album, title, group, 100, 1, false, nullptr};
 }
 
 static void exact_album() {
@@ -200,6 +200,112 @@ static void unsafe_or_overlong_fallback_is_not_emitted() {
     assert(output.empty());
 }
 
+static void typed_source_album_labels() {
+    Candidate ep = match("Plini", "Sunhead", "Kind");
+    ep.primary_type = "EP";
+    const Query query = {"Plini", "Sunhead - EP", "Kind"};
+    assert(artwork_matching::select_album(query, &ep, 1).outcome == Outcome::Matched);
+    assert(artwork_matching::select_recording(query, &ep, 1).outcome == Outcome::Matched);
+    Candidate single = match("Artist", "Song", "Song");
+    single.primary_type = "Single";
+    assert(artwork_matching::select_album({"Artist", "Song - Single", ""}, &single, 1).outcome == Outcome::Matched);
+    // Existing punctuation/whitespace normalization applies before identifying
+    // the exact trailing label, without altering the stored cache key.
+    assert(artwork_matching::select_album({"Plini", " SUNHEAD \xE2\x80\x93 EP ", ""}, &ep, 1).outcome == Outcome::Matched);
+    const Candidate apostrophe = {"Artist", "Dream's", "Song", GROUP_A, 100, 1, false, "EP"};
+    assert(artwork_matching::select_album({"Artist", "Dreams - EP", ""}, &apostrophe, 1).outcome == Outcome::Matched);
+    assert(artwork_matching::normalized_key("Sunhead - EP", true) == "sunhead - ep");
+    assert(artwork_matching::normalized_key("Song - Single", true) == "song - single");
+    assert(artwork_matching::normalized_key("Dream's - EP", true) == "dream's - ep");
+    assert(artwork_matching::identity_key("Sunhead - EP", true) == "sunhead - ep");
+}
+
+static void typed_labels_require_exact_primary_type_only_when_needed() {
+    Candidate candidate = match("Plini", "Sunhead", "Kind");
+    const Query query = {"Plini", "Sunhead - EP", "Kind"};
+    const char *types[] = {nullptr, "", "Album", "Single", "ep", "EP ", "EP/Single"};
+    for (const char *type : types) {
+        candidate.primary_type = type;
+        assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::NoMatch);
+        assert(artwork_matching::select_recording(query, &candidate, 1).outcome == Outcome::NoMatch);
+    }
+    candidate.primary_type = "EP";
+    assert(artwork_matching::select_album({"Plini", "Sunhead - Single", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.primary_type = "Single";
+    assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::NoMatch);
+    const char *wrong_single_types[] = {nullptr, "", "Album", "EP", "single", "Single "};
+    for (const char *type : wrong_single_types) {
+        candidate.primary_type = type;
+        assert(artwork_matching::select_album({"Plini", "Sunhead - Single", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    }
+    candidate.album = "Sunhead - EP";
+    // A literal title ending in EP was accepted before typed compatibility;
+    // it still matches with no type or even a different primary type.
+    for (const char *type : types) {
+        candidate.primary_type = type;
+        assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::Matched);
+    }
+    candidate.album = "Sunhead - Single";
+    candidate.primary_type = nullptr;
+    assert(artwork_matching::select_album({"Plini", "Sunhead - Single", ""}, &candidate, 1).outcome == Outcome::Matched);
+    candidate.album = "Sunhead - EP";
+    candidate.primary_type = "EP";
+    // Only source-label removal is supported, not stripping candidate titles.
+    assert(artwork_matching::select_album({"Plini", "Sunhead", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+}
+
+static void typed_labels_preserve_other_identity_and_ambiguity_rules() {
+    Candidate candidate = match("Artist", "Left - Right", "Song - EP");
+    candidate.primary_type = "EP";
+    assert(artwork_matching::select_album({"Artist", "Left - Right - EP", ""}, &candidate, 1).outcome == Outcome::Matched);
+    assert(artwork_matching::select_album({"Artist", "Left Right - EP", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    assert(artwork_matching::select_recording({"Artist", "", "Song"}, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.album = "Album";
+    const char *unchanged[] = {"Album - Live", "Album - Remix", "Album - Deluxe", "Album EP", "Album-Single", "Album (EP)"};
+    for (const char *album : unchanged)
+        assert(artwork_matching::select_album({"Artist", album, ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.primary_type = "EP";
+    candidate.score = 94;
+    assert(artwork_matching::select_album({"Artist", "Album - EP", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.score = 100;
+    candidate.artist_credit_count = 2;
+    assert(artwork_matching::select_album({"Artist", "Album - EP", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.artist_credit_count = 1;
+    candidate.compilation = true;
+    assert(artwork_matching::select_album({"Artist", "Album - EP", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.compilation = false;
+    assert(artwork_matching::select_album({"Artist!", "Album - EP", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    Candidate ambiguous[] = {candidate, match("Artist", "Album", "Song", GROUP_B)};
+    ambiguous[1].primary_type = "EP";
+    assert(artwork_matching::select_album({"Artist", "Album - EP", ""}, ambiguous, 2).outcome == Outcome::Ambiguous);
+    ambiguous[1].album = "Album - EP";
+    ambiguous[1].primary_type = nullptr;
+    assert(artwork_matching::select_album({"Artist", "Album - EP", ""}, ambiguous, 2).outcome == Outcome::Ambiguous);
+}
+
+static void typed_label_candidate_query_is_bounded_and_escaped() {
+    std::string output;
+    assert(artwork_matching::album_fallback_query({"Plini", "Sunhead - EP", ""}, output));
+    assert(output == "releasegroup:(sunhead~1) AND artist:\"Plini\"");
+    assert(artwork_matching::album_fallback_query({"Artist", "Dream's - Single", ""}, output));
+    assert(output == "releasegroup:(dreams~1) AND artist:\"Artist\"");
+    assert(artwork_matching::album_fallback_query({"Artist", "\xE6\x9D\xB1\xE4\xBA\xAC - EP", ""}, output));
+    assert(output == "releasegroup:\"\xE6\x9D\xB1\xE4\xBA\xAC\" AND artist:\"Artist\"");
+    assert(artwork_matching::album_fallback_query({"A \"Quoted\" \\ Artist", "\xE6\x9D\xB1\"\\\xE4\xBA\xAC - Single", ""}, output));
+    assert(output == "releasegroup:\"\xE6\x9D\xB1\\\"\\\\\xE4\xBA\xAC\" AND artist:\"A \\\"Quoted\\\" \\\\ Artist\"");
+    assert(artwork_matching::album_fallback_query({"Artist", "a b c d e f g h - EP", ""}, output));
+    const char *invalid[] = {"a b c d e f g h i - EP", "AC/DC - EP", "Album (Deluxe) - Single",
+                             "\xE6\x9D\xB1\xE4\xBA\xAC - Album", " - EP", " - Single"};
+    for (const char *album : invalid) {
+        output = "clear me";
+        assert(!artwork_matching::album_fallback_query({"Artist", album, ""}, output));
+        assert(output.empty());
+    }
+    const std::string long_artist(370, 'a');
+    assert(!artwork_matching::album_fallback_query({long_artist.c_str(), "\xE6\x9D\xB1\xE4\xBA\xAC - EP", ""}, output));
+    assert(output.empty());
+}
+
 int main() {
     exact_album();
     normalized_identity();
@@ -215,5 +321,9 @@ int main() {
     apostrophe_equivalence_does_not_relax_artist_or_other_identity_rules();
     bounded_fallback_query_emission();
     unsafe_or_overlong_fallback_is_not_emitted();
-    std::cout << "14 matching scenarios passed\n";
+    typed_source_album_labels();
+    typed_labels_require_exact_primary_type_only_when_needed();
+    typed_labels_preserve_other_identity_and_ambiguity_rules();
+    typed_label_candidate_query_is_bounded_and_escaped();
+    std::cout << "18 matching scenarios passed\n";
 }

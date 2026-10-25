@@ -3,6 +3,7 @@
 Enter credentials on CrowPanel and press Save. This utility receives them only
 over its physical UART, validates them, updates the connected controller and
 then permits CrowPanel to join the same AP. Credentials are never printed.
+Run this one-time utility on macOS or Linux with POSIX private file permissions.
 """
 import argparse
 import base64
@@ -25,6 +26,12 @@ class SetupError(RuntimeError):
     """A fixed local diagnostic that never contains received profile data."""
 
 
+def require_private_host_support():
+    """Fail before side effects on hosts without POSIX private permissions."""
+    if os.name != "posix" or not callable(getattr(os, "fchmod", None)):
+        raise SetupError("one-time USB provisioning requires macOS/Linux POSIX private file permissions")
+
+
 def decode_profile(line, nonce):
     """Return a validated profile only for this exact USB setup session."""
     prefix = ("BMWIFI_PROFILE:" + nonce + ":").encode("ascii")
@@ -44,10 +51,11 @@ def decode_profile(line, nonce):
 
 def private_write(path, data, host_file=True):
     """Write and read back private setup material without printing contents."""
+    require_private_host_support()
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    if host_file:
-        os.fchmod(fd, 0o600)
     with os.fdopen(fd, "wb") as handle:
+        if host_file:
+            os.fchmod(handle.fileno(), 0o600)
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
@@ -139,6 +147,7 @@ class Controller:
 
 
 def provision(args):
+    require_private_host_support()
     import serial
     from serial.tools import list_ports
 
@@ -243,23 +252,32 @@ def provision(args):
         print("Both devices joined the selected access point; artwork setup is complete.", flush=True)
     finally:
         try:
-            if changed and not success and not commit_sent:
-                crow.write(("BMWIFI_ABORT:" + nonce + "\n").encode("ascii"))
-                if not controller.stopped:
-                    controller.stop()
-                if previous is None:
-                    target.unlink(missing_ok=True)
-                else:
-                    private_write(target, previous, host_file=False)
-                controller.start(verify_wifi=False)
-                print("Setup did not complete; restored the controller's previous private profile.", flush=True)
-            elif commit_sent and not success:
-                # COMMIT may have arrived even if its ACK did not. Rolling
-                # back only one device here would create a permanent mismatch.
-                private_write(output / "provisioning.json", b'{"success":false,"commit_outcome":"unknown","controller_profile_retained":true}\n')
-                print("Commit outcome is unconfirmed; the new controller profile was retained.", flush=True)
-            if controller.interrupt_sent:
-                controller.recover_if_interrupted()
+            try:
+                if changed and not success and not commit_sent:
+                    try:
+                        crow.write(("BMWIFI_ABORT:" + nonce + "\n").encode("ascii"))
+                    except Exception:
+                        # A panel transport failure must not prevent controller
+                        # rollback. Never expose the transport's raw exception.
+                        print("Panel abort could not be confirmed; restoring the controller profile.", flush=True)
+                    if not controller.stopped:
+                        controller.stop()
+                    if previous is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        private_write(target, previous, host_file=False)
+                    controller.start(verify_wifi=False)
+                    print("Setup did not complete; restored the controller's previous private profile.", flush=True)
+                elif commit_sent and not success:
+                    # COMMIT may have arrived even if its ACK did not. Rolling
+                    # back only one device here would create a permanent mismatch.
+                    private_write(output / "provisioning.json", b'{"success":false,"commit_outcome":"unknown","controller_profile_retained":true}\n')
+                    print("Commit outcome is unconfirmed; the new controller profile was retained.", flush=True)
+            finally:
+                # Filesystem or restart failures during rollback must still
+                # get the bounded attempt to resume an interrupted controller.
+                if controller.interrupt_sent:
+                    controller.recover_if_interrupted()
         finally:
             if unit.is_open:
                 unit.close()

@@ -381,3 +381,113 @@ def test_track_invalidation_then_late_identity_does_not_keep_previous_track_anch
     operations += [("P", 3250)]
     result = [entry for entry in probe(cpp_model, operations) if isinstance(entry, dict)]
     assert [entry["position"] for entry in result] == [1000, 1000]
+
+
+@pytest.mark.parametrize("play_status,clock_advancing", [(2, False), (2, True), (1, False), (3, False), (4, True)])
+def test_all_displayed_positions_expire_with_elapsed_local_sample_age(cpp_model, play_status, clock_advancing):
+    frames = encode_frames(state(play_status=play_status, clock_advancing=clock_advancing,
+                                 position_ms=50000, position_age_ms=4900), 1, 1)
+    result = probe(cpp_model, send(frames) + [("P", 1100), ("P", 1101)])
+    assert result[-2]["fresh"] == result[-1]["fresh"] == 1
+    assert result[-2]["position"] == 50000
+    assert result[-1]["position"] == UNKNOWN
+    assert result[-1]["status"] == play_status
+
+
+def test_slow_paused_fragment_assembly_cannot_seed_an_expired_pause_hold(cpp_model):
+    stale = encode_frames(state(play_status=2, clock_advancing=False, position_ms=50000,
+                                position_age_ms=0), 1, 1)
+    assert len(stale) == 2
+    result = probe(cpp_model, [("F", 1000, stale[0]), ("F", 6200, stale[1]), ("P", 6200)] +
+                   send(encode_frames(state(play_status=2, clock_advancing=False,
+                                            position_ms=90000, position_age_ms=0), 1, 2), 6500) +
+                   [("P", 6750)])
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert states[0]["fresh"] == 1 and states[0]["position"] == UNKNOWN
+    assert states[1]["position"] == 90000
+
+
+def test_expired_snapshot_accepts_fragment_zero_led_far_sequence_resync(cpp_model):
+    original = encode_frames(state(title="original"), 7, 10)
+    far = encode_frames(state(title="after long radio loss", position_ms=1000), 7, 40000)
+    assert len(far) == 2
+    operations = send(original) + send(far, 2000) + [("P", 2500)]
+    # A trailing fragment alone is never a resync leader, even after expiry.
+    operations += send(far[1:], 8000) + [("P", 8000)]
+    operations += send(far[:1], 8100) + [("P", 8100)]
+    operations += send(far[1:], 8200) + [("P", 8300)]
+    result = probe(cpp_model, operations)
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert states[0]["fresh"] == 1 and states[0]["title"] == "original"
+    assert states[1]["fresh"] == states[2]["fresh"] == 0
+    assert states[1]["title"] == states[2]["title"] == "original"
+    assert states[3]["fresh"] == 1 and states[3]["title"] == "after long radio loss"
+    assert states[3]["position"] == 1300  # First fragment remains the time anchor.
+    assert sum(entry == ("A", 1) for entry in result) == 2
+
+
+def test_far_resync_can_replace_an_incomplete_assembly_only_when_expired(cpp_model):
+    original = encode_frames(state(title="original"), 7, 10)
+    pending = encode_frames(state(title="incomplete newer snapshot"), 7, 11)
+    far = encode_frames(state(title="far sequence"), 7, 40000)
+    operations = send(original) + send(pending[:1], 6500)
+    operations += send(far, 6800) + [("P", 6900)]
+    # Still fresh: neither the committed nor the pending sequence is displaced.
+    operations += send(far[:1], 7100) + [("P", 7100)]
+    operations += send(far[1:], 7200) + [("P", 7250)]
+    result = probe(cpp_model, operations)
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert states[0]["fresh"] == 1 and states[0]["title"] == "original"
+    assert states[1]["fresh"] == 0 and states[1]["title"] == "original"
+    assert states[2]["fresh"] == 1 and states[2]["title"] == "far sequence"
+    assert sum(entry == ("A", 1) for entry in result) == 2
+
+
+def test_far_resync_crc_or_payload_failure_cannot_revive_expired_snapshot(cpp_model):
+    original = encode_frames(state(title="original"), 7, 10)
+    far = encode_frames(state(title="far sequence"), 7, 40000)
+    corrupt = bytearray(far[-1])
+    corrupt[-1] ^= 1
+    malformed_payload = bytearray(payload_of(far))
+    malformed_payload[1] = 5  # Invalid status, even under a correct CRC.
+    malformed = raw_frames(malformed_payload, session=7, seq=40001)
+    operations = send(original) + send(far[:1], 8000) + [("P", 8100)]
+    operations += send((bytes(corrupt),), 8200) + [("P", 8250)]
+    operations += send(malformed, 8300) + [("P", 8350)]
+    operations += send(far, 8400) + [("P", 8500)]
+    result = probe(cpp_model, operations)
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert all(entry["fresh"] == 0 and entry["position"] == UNKNOWN and entry["title"] == "original"
+               for entry in states[:3])
+    assert states[-1]["fresh"] == 1 and states[-1]["title"] == "far sequence"
+    assert sum(entry == ("A", 1) for entry in result) == 2
+
+
+def test_expired_resync_still_rejects_exact_duplicates_and_retired_boot_sessions(cpp_model):
+    old_boot = encode_frames(state(title="retired"), 6, 1)
+    current = encode_frames(state(title="current"), 7, 10)
+    retired_far = encode_frames(state(title="retired replay"), 6, 40000)
+    far = encode_frames(state(title="recovered"), 7, 40000)
+    operations = send(old_boot) + send(current, 1500)
+    operations += send(current, 8000) + send(retired_far, 8100) + [("P", 8150)]
+    operations += send(far, 8200) + [("P", 8250)]
+    operations += send(far, 15000) + [("P", 15100)]
+    result = probe(cpp_model, operations)
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert states[0]["fresh"] == 0 and states[0]["title"] == "current"
+    assert states[1]["fresh"] == 1 and states[1]["title"] == "recovered"
+    assert states[2]["fresh"] == 0 and states[2]["title"] == "recovered"
+    assert sum(entry == ("A", 1) for entry in result) == 3
+
+
+def test_recent_old_sequence_remains_rejected_after_far_resync_commit(cpp_model):
+    original = encode_frames(state(title="original"), 7, 10)
+    far = encode_frames(state(title="recovered"), 7, 40000)
+    previous = encode_frames(state(title="older"), 7, 39999)
+    next_snapshot = encode_frames(state(title="next"), 7, 40001)
+    result = probe(cpp_model, send(original) + send(far, 8000) + send(previous, 8200) +
+                   [("P", 8250)] + send(next_snapshot, 8300) + [("P", 8350)])
+    states = [entry for entry in result if isinstance(entry, dict)]
+    assert states[0]["title"] == "recovered" and states[0]["fresh"] == 1
+    assert states[1]["title"] == "next" and states[1]["fresh"] == 1
+    assert sum(entry == ("A", 1) for entry in result) == 3
