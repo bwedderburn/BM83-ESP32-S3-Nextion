@@ -75,3 +75,18 @@ def ticks_recent(now, then, window_ms):
         return False
     d = ticks_diff(now, then)
     return 0 <= d < window_ms
+
+
+def ticks_due(now, deadline, horizon_ms):
+    """Return True when ``deadline`` has been reached (or is not set).
+
+    ``deadline is None`` means "due immediately". A deadline more than
+    ``horizon_ms`` ahead of ``now`` cannot have been scheduled by a caller
+    whose longest delay is under the horizon, so it must be a stale
+    timestamp that aliased across the wrap; it is treated as due rather
+    than stalling the scheduler for up to ~3 days.
+    """
+    if deadline is None:
+        return True
+    d = ticks_diff(deadline, now)
+    return d <= 0 or d > horizon_ms

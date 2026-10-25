@@ -376,8 +376,8 @@ def test_late_framed_snapshot_after_fallback_cannot_restart_preparation(bench):
 def test_preparation_blocks_unowned_commands_but_keeps_event_acks(bench):
     reach(bench, "pause_settle")
     bm = bench.bm
-    bm._pending_notif_regs = [(0.0, 0x02, 0)]
-    bm._next_attrs_at = 1.0
+    bm._pending_notif_regs = [(0, 0x02, 0)]
+    bm._next_attrs_at = 1000
     bm._avrcp_suspend_at = 1.0
     bm._boot_init_at = 1.0
     before = list(bench.uart.writes)
@@ -393,8 +393,8 @@ def test_preparation_blocks_unowned_commands_but_keeps_event_acks(bench):
                        (0x0D, b"\x00"), (0x18, b"\x04")]:
         bm.send(op, params)
     assert bench.uart.writes == before
-    assert bm._pending_notif_regs == [(0.0, 0x02, 0)]
-    assert bm._next_attrs_at == 1.0
+    assert bm._pending_notif_regs == [(0, 0x02, 0)]
+    assert bm._next_attrs_at == 1000
     bm.ack_event(0x01)
     assert bench.uart.writes[-1] == (0x14, b"\x01")
 
