@@ -1,0 +1,28 @@
+{
+  "source": "exact retained Mozilla118-rootstore",
+  "source_pem_sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe",
+  "anchor_subject": "CN=Go Daddy Root Certificate Authority - G2,O=GoDaddy.com\\, Inc.,L=Scottsdale,ST=Arizona,C=US",
+  "anchor_der_sha256": "45140b3247eb9cc8c5b4f0d7b53091f73292089e6e5a63e2749dd3aca9198eda",
+  "anchor_pem_sha256": "500329abac100a953a7396b54b36be57d333022f17401bc948248ea179cf1784",
+  "anchor_pem_bytes": 1367,
+  "valid_from": "2009-09-01T00:00:00+00:00",
+  "valid_to": "2037-12-31T23:59:59+00:00",
+  "primary_publisher": "https://certs.godaddy.com/repository/",
+  "primary_publisher_pem": "https://certs.godaddy.com/repository/gdroot-g2.crt.pem",
+  "primary_publisher_sha256_matches": true,
+  "legacy_class2_not_added": true,
+  "proposed_use": "setCACert only for exact archive.org; normal hostname/chain/date verification retained; CDN subdomains use the full maintained bundle",
+  "generated_header_symbol": "artwork_trust::kArchiveRootG2Pem",
+  "header_generator": "prepare_header.py",
+  "header_generator_sha256": "64091fc5759c99905b3499ac90e500e35b01821f92fdab6c351107b9e21f1bbf",
+  "archive_host_policy": "exact archive.org only after existing HTTPS URL allowlist; fresh-client PEM branch; dot-subdomain CDN hosts retain full bundle",
+  "normal_tls_verification_preserved": [
+    "issuer/signature chain",
+    "DNS hostname",
+    "all peer certificate validity dates",
+    "port443",
+    "provider URL allowlist"
+  ],
+  "host_check": "verify_archive_host.py (TLS1.2 expected archive success; unrelated issuer and wrong hostname failure; no HTTP bytes)",
+  "host_check_sha256": "dd33c48a25d15e3cf4d1e94b7945326cd8d0d17e253353eee86a573d023477de"
+}

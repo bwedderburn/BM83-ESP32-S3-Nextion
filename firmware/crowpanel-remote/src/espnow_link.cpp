@@ -4,9 +4,10 @@
 // in the WiFi task, not an ISR. Sends are synchronous: the caller waits
 // (bounded) for the send callback, so retries and counters live in task
 // context and the callback only signals completion. A FreeRTOS spinlock
-// guards the one-slot RX mailbox.
+// guards a bounded RX queue for fragmented state snapshots.
 
 #include "espnow_link.h"
+#include "network_setup.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -58,20 +59,38 @@ volatile bool g_waiting   = false;
 volatile bool g_wait_ack  = false;
 
 portMUX_TYPE  g_rx_mux       = portMUX_INITIALIZER_UNLOCKED;
-char          g_rx_frame[ESPNOW_FRAME_MAX + 1] = {0};
-volatile bool g_rx_pending   = false;
+const uint8_t RX_QUEUE_SIZE = 16;
+uint8_t g_rx_frames[RX_QUEUE_SIZE][ESPNOW_FRAME_MAX] = {};
+uint8_t g_rx_lengths[RX_QUEUE_SIZE] = {};
+uint8_t g_rx_head = 0;
+uint8_t g_rx_count = 0;
+
+void clear_rx() {
+    portENTER_CRITICAL(&g_rx_mux);
+    g_rx_head = 0;
+    g_rx_count = 0;
+    portEXIT_CRITICAL(&g_rx_mux);
+}
 
 void on_sent(const uint8_t * /*mac*/, esp_now_send_status_t status) {
     g_wait_ack = (status == ESP_NOW_SEND_SUCCESS);
     g_waiting  = false;
 }
 
-void on_recv(const uint8_t * /*mac*/, const uint8_t *data, int len) {
-    if (len <= 0 || len > ESPNOW_FRAME_MAX) return;  // reject, never truncate
+void on_recv(const uint8_t *mac, const uint8_t *data, int len) {
+    if (mac == nullptr || memcmp(mac, PEER_MAC, sizeof(PEER_MAC)) != 0 ||
+        data == nullptr || len <= 0 || len > ESPNOW_FRAME_MAX) return;
     portENTER_CRITICAL(&g_rx_mux);
-    memcpy(g_rx_frame, data, len);
-    g_rx_frame[len] = '\0';
-    g_rx_pending  = true;  // one-slot mailbox: newest frame wins
+    if (g_rx_count == RX_QUEUE_SIZE) {
+        // Prefer current snapshots after a busy UI interval. The decoder
+        // commits complete snapshots only, and periodic snapshots heal loss.
+        g_rx_head = (g_rx_head + 1) % RX_QUEUE_SIZE;
+        g_rx_count--;
+    }
+    const uint8_t tail = (g_rx_head + g_rx_count) % RX_QUEUE_SIZE;
+    memcpy(g_rx_frames[tail], data, len);
+    g_rx_lengths[tail] = (uint8_t)len;
+    g_rx_count++;
     portEXIT_CRITICAL(&g_rx_mux);
 }
 
@@ -103,6 +122,18 @@ uint8_t score_channel(uint8_t ch) {
 // undelivered tokens in case the unit's channel moved.
 void discover_channel() {
     g_last_scan_ms = millis();
+    if (WiFi.status() == WL_CONNECTED) {
+        // Associated peers follow their common AP; channel hopping breaks it.
+        g_channel = (uint8_t)WiFi.channel();
+        g_fail_streak = 0;
+        if (g_log) g_log("[espnow] following artwork AP channel%u", (unsigned)g_channel);
+        return;
+    }
+    if (network_setup_radio_busy()) {
+        // ESP-IDF rejects channel changes while a station scans/connects.
+        // Let the coordinated join finish, then follow its AP channel.
+        return;
+    }
     uint8_t score[14] = {0};
     uint8_t best = 0;
     for (uint8_t ch = 1; ch <= 13; ch++) {
@@ -155,6 +186,7 @@ bool espnow_link_init(espnow_log_fn logf) {
     g_log = logf;
 
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);  // Also updates Arduino's cached STA-start policy.
     WiFi.disconnect();  // unassociated STA: radio on, no AP
     // Modem power-save makes an idle unassociated STA miss ESP-NOW frames;
     // the remote must hear state frames, and it runs on USB. Not fatal if
@@ -198,6 +230,21 @@ bool espnow_link_init(espnow_log_fn logf) {
     }
     discover_channel();
     return true;
+}
+
+bool espnow_link_suspend() {
+    g_ready = false;
+    g_waiting = g_wait_ack = false;
+    g_fail_streak = 0;
+    esp_now_unregister_send_cb();
+    esp_now_unregister_recv_cb();
+    const esp_err_t result = esp_now_deinit();
+    if (result != ESP_OK && result != ESP_ERR_ESPNOW_NOT_INIT && g_log) {
+        g_log("[espnow] sleep deinit error: %d", (int)result);
+    }
+    clear_rx();
+    WiFi.setAutoReconnect(false);
+    return WiFi.mode(WIFI_OFF);
 }
 
 void espnow_send_token(const char *token) {
@@ -244,20 +291,30 @@ void espnow_link_heartbeat(uint32_t *sent, uint32_t *acked) {
     if (acked) *acked = g_acked;
 }
 
-uint8_t espnow_link_channel() { return g_channel; }
+uint8_t espnow_link_channel() {
+    return WiFi.status() == WL_CONNECTED ? (uint8_t)WiFi.channel() : g_channel;
+}
 
 void espnow_link_rescan() {
     if (g_ready) discover_channel();
+    // A waking display must await a new snapshot instead of treating frames
+    // buffered before light sleep as current source data.
+    clear_rx();
 }
 
 uint32_t espnow_link_retries() { return g_retries; }
 
-bool espnow_link_poll(char *out, size_t out_len) {
-    if (!g_rx_pending || out == nullptr || out_len == 0) return false;
+size_t espnow_link_poll(uint8_t *out, size_t capacity) {
+    if (out == nullptr || capacity == 0) return 0;
     portENTER_CRITICAL(&g_rx_mux);
-    strncpy(out, g_rx_frame, out_len - 1);
-    out[out_len - 1] = '\0';
-    g_rx_pending = false;
+    size_t length = 0;
+    if (g_rx_count > 0) {
+        length = g_rx_lengths[g_rx_head];
+        if (length <= capacity) memcpy(out, g_rx_frames[g_rx_head], length);
+        else length = 0;
+        g_rx_head = (g_rx_head + 1) % RX_QUEUE_SIZE;
+        g_rx_count--;
+    }
     portEXIT_CRITICAL(&g_rx_mux);
-    return true;
+    return length;
 }

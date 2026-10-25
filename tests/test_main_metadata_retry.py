@@ -90,6 +90,9 @@ class _Ble:
 
 
 class _Remote:
+    # This script exercises AVRCP retries; its radio double has no state TX.
+    state_tx_enabled = False
+
     def __init__(self, **_kwargs):
         pass
 
@@ -100,9 +103,9 @@ class _Remote:
         return ()
 
 
-def _avc_reply(pdu, payload):
+def _avc_reply(pdu, payload, response=0x0C):
     # DB + AV/C response header + PDU, single-packet type, payload length.
-    params = (b"\x00\x0C\x48\x00\x00\x19\x58" + bytes((pdu, 0))
+    params = (bytes((0, response, 0x48, 0, 0, 0x19, 0x58)) + bytes((pdu, 0))
               + len(payload).to_bytes(2, "big") + payload)
     return frame_to_bytes(Bm83.EVT_AVC_VENDOR_RSP, params)
 
@@ -199,7 +202,8 @@ def test_main_retries_empty_metadata_stops_when_complete_and_rearms_on_track_cha
         (third_due + throttle + 0.5, (_play_status(6000),)),
         (third_due + 2 * throttle + 0.5, (_play_status(7500),)),
         (third_due + 3 * throttle + 0.5, (_play_status(9000),)),
-        (track_changed_at, (_avc_reply(0x31, b"\x02" + (1).to_bytes(8, "big")),)),
+        # RegisterNotification CHANGED is0x0D; STABLE0x0C is not a track event.
+        (track_changed_at, (_avc_reply(0x31, b"\x02" + (1).to_bytes(8, "big"), response=0x0D),)),
         (track_due - 0.001, ()),
         (track_due, ()),
     ]
