@@ -115,9 +115,9 @@ class Bm83:
     # Ceiling on a reassembled GetElementAttributes (0x5D) response. The wire
     # total_len is 16-bit, so without this a malformed header could make the
     # fragment buffer grow toward 64 KiB across otherwise-valid frames. We ask
-    # for 7 attributes (8-byte header each) and the panel keeps ~48 chars per
-    # field, so 2 KiB leaves ~280 bytes of value per attribute — far above any
-    # real title/artist/album — while staying under the 4 KiB RX cap.
+    # for 7 attributes (8-byte header each), so 2 KiB allows roughly 280
+    # value bytes per attribute while staying below the 4 KiB RX cap. Supported
+    # source responses must be checked against this aggregate byte ceiling.
     GEA_MAX_LEN = const(2048)
 
     MMI_POWER_ON_PRESS = const(0x51)
