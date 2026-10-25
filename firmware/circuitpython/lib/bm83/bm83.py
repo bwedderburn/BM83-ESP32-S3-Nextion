@@ -1212,11 +1212,21 @@ class Bm83:
             self._next_attrs_at = self._attrs_not_before
         return self._attrs_not_before
 
-    def schedule_attrs(self, delay_s=0.35, force=False):
+    def schedule_attrs(self, delay_s=0.35, force=False, queue_if_throttled=False):
+        """Schedule metadata, optionally retaining a required track refresh.
+
+        Ordinary retries inside the throttle window are discarded. A track
+        invalidation can instead keep one deferred request, without bypassing
+        either the throttle or the stream-start quiet window.
+        """
         now = time.monotonic()
-        if (not force) and (now - self._last_attrs_req_at) < self._attrs_throttle_s:
+        throttle_at = self._last_attrs_req_at + self._attrs_throttle_s
+        throttled = (not force) and now < throttle_at
+        if throttled and not queue_if_throttled:
             return False
         t = now + delay_s
+        if throttled and t < throttle_at:
+            t = throttle_at
         if t < self._attrs_not_before:
             t = self._attrs_not_before
         if self._next_attrs_at == 0.0 or t < self._next_attrs_at:

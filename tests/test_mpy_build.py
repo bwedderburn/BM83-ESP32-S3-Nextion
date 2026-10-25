@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -55,3 +56,52 @@ def test_build_mpy_outputs():
         rel = py_file.relative_to(SRC_LIB_DIR)
         out = DIST_LIB_DIR / rel.with_suffix(".mpy")
         assert out.exists(), f"Missing compiled file: {out}"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX build-script asset-copy branches")
+@pytest.mark.parametrize("with_rsync", [False, True])
+def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
+    """Exercise both real asset-copy paths without using device credentials."""
+    bash = shutil.which("bash")
+    rsync = shutil.which("rsync")
+    if not bash or (with_rsync and not rsync):
+        pytest.skip("required POSIX copy tool is unavailable")
+    script = tmp_path / "build_mpy.sh"
+    shutil.copyfile(REPO_ROOT / "build_mpy.sh", script)
+    pin_file = REPO_ROOT / "tools/mpy_cross_pin.env"
+    (tmp_path / "tools").mkdir()
+    shutil.copyfile(pin_file, tmp_path / "tools/mpy_cross_pin.env")
+    version = next(line.partition("=")[2] for line in pin_file.read_text().splitlines()
+                   if line.startswith("MPY_CROSS_VERSION="))
+    source = tmp_path / "firmware/circuitpython"
+    (source / "lib").mkdir(parents=True)
+    (source / "assets").mkdir()
+    (source / "main.py").write_text("pass\n")
+    (source / "lib/example.py").write_text("VALUE = 1\n")
+    (source / "assets/public.txt").write_text("keep this asset\n")
+    for parent in (source, source / "assets"):
+        (parent / ".artwork_wifi.json").write_text('{"password":"synthetic-fixture"}\n')
+    compiler = tmp_path / "fake-mpy"
+    compiler.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\n"
+                        "if sys.argv[1:] == ['--version']:\n"
+                        "    print('CircuitPython %s on fixture; mpy-cross emitting mpy v6.3')\n"
+                        "    raise SystemExit(0)\n"
+                        "Path(sys.argv[sys.argv.index('-o') + 1]).write_bytes(b'test-mpy')\n" % version)
+    compiler.chmod(0o755)
+    executables = tmp_path / "bin"
+    executables.mkdir()
+    for name in ("dirname", "rm", "mkdir", "cp", "find", "sed", "head"):
+        executable = shutil.which(name)
+        assert executable, name
+        (executables / name).symlink_to(executable)
+    if with_rsync:
+        (executables / "rsync").symlink_to(rsync)
+    env = dict(os.environ, PATH=str(executables), MPY_CROSS=str(compiler))
+    env.pop("MPY_CROSS_ALLOW_UNPINNED", None)
+    result = subprocess.run(  # nosec B603 - fixed repository script and isolated test argv
+        [bash, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    package = tmp_path / "dist/circuitpython"
+    assert not list(package.rglob(".artwork_wifi.json"))
+    assert (package / "assets/public.txt").read_text() == "keep this asset\n"
+    assert (package / "lib/example.mpy").read_bytes() == b"test-mpy"

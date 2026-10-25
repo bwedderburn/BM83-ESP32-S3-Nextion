@@ -1,0 +1,23 @@
+{
+  "source_provenance": "ca/provenance.json (original generation record, retained unchanged)",
+  "integrated_header": "../../include/artwork_ca_bundle.h",
+  "integrated_header_sha256": "f12012f121d16f06904bd016ce6ac1e391c30d4ad5007d6e10e8021fbc7ef321",
+  "bundle_binary_sha256": "8ca330673e7ecd07610eecfaffd23aba8b9ceca10a381d3878f268348edf5aec",
+  "changes_from_generated_header": "MPL2.0 notices and an ordinary GoDaddy RootG2 PEM constant derived from the same maintained Mozilla store; compressed DER subject/key array unchanged",
+  "source_license": "MPL-2.0; https://curl.se/docs/caextract.html#license",
+  "generator_license": "Apache-2.0; original Espressif copyright and license notice retained",
+  "maintainer_script_change": "prepare_header.py emits notices, validates/extracts the existing G2 root by official fingerprint, emits both static trust constants and godaddy-root-g2.pem",
+  "sources": {
+    "mozilla_pem": "https://curl.se/ca/cacert.pem",
+    "published_pem_sha256": "https://curl.se/ca/cacert.pem.sha256",
+    "mozilla_original": "https://raw.githubusercontent.com/mozilla-firefox/firefox/refs/heads/release/security/nss/lib/ckfw/builtins/certdata.txt",
+    "generator": "https://raw.githubusercontent.com/espressif/esp-idf/v4.4.7/components/mbedtls/esp_crt_bundle/gen_crt_bundle.py"
+  },
+  "archive_compatibility": {
+    "provenance": "ca/archive-root-provenance.json",
+    "pem": "ca/godaddy-root-g2.pem",
+    "pem_sha256": "500329abac100a953a7396b54b36be57d333022f17401bc948248ea179cf1784",
+    "legacy_class2_added": false,
+    "upstream_fingerprint": "https://certs.godaddy.com/repository/"
+  }
+}

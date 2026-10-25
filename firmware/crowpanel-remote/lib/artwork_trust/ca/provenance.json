@@ -1,0 +1,69 @@
+{
+  "prepared_utc": "2026-10-24T22:20:40.031904+00:00",
+  "scope": "public CA artifacts only; no device access, association, credentials or private data",
+  "source": {
+    "url": "https://curl.se/ca/cacert.pem",
+    "published_sha256_url": "https://curl.se/ca/cacert.pem.sha256",
+    "mozilla_snapshot_utc": "2026-10-20T13:32:40Z",
+    "pem_sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe",
+    "pem_size": 200116,
+    "published_hash_matches": true,
+    "download_transport": "system curl certificate-verified HTTPS; no insecure options"
+  },
+  "generator": {
+    "url": "https://raw.githubusercontent.com/espressif/esp-idf/v4.4.7/components/mbedtls/esp_crt_bundle/gen_crt_bundle.py",
+    "version": "official unmodified ESP-IDF v4.4.7",
+    "sha256": "1e8f0dc9ff99e20d888fd5a9cab621e302acf55111c52dbe19ca92bf2bcd3020",
+    "license": "Apache-2.0"
+  },
+  "runtime": {
+    "python": "3.13.5 (v3.13.5:6cb20a219a8, Jun 11 2025, 12:23:45) [Clang 16.0.0 (clang-1600.0.26.6)]",
+    "cryptography": "46.0.7",
+    "platform": "macOS-26.7.1-x86_64-i386-64bit-Mach-O"
+  },
+  "bundle": {
+    "path": "x509_crt_bundle",
+    "format": "2-byte BE count; each 2-byte BE subject length + 2-byte BE key length, DER subject and DER SPKI; subject-sorted",
+    "cert_count": 118,
+    "unique_subject_count": 118,
+    "size": 54752,
+    "sha256": "8ca330673e7ecd07610eecfaffd23aba8b9ceca10a381d3878f268348edf5aec",
+    "validated_all_records_against_pem": true,
+    "validated_spki_der": true,
+    "sorted_subjects": true,
+    "exact_end_of_file": true
+  },
+  "header": {
+    "path": "artwork_ca_bundle.h",
+    "pointer": "artwork_trust::kMozillaCaBundle",
+    "size_symbol": "artwork_trust::kMozillaCaBundleSize",
+    "sha256": "317126b675360da684879b2a6b73e91290a35fb1439514bd504f025765f3c796",
+    "usage": "setCACertBundle(artwork_trust::kMozillaCaBundle); never pass nullptr as a default-selection mechanism",
+    "validation_script": "prepare_header.py",
+    "validation_script_sha256": "574030aa28ac72c10d7c4be292e3b497f6f7547b09d1d8d6b5bc9c31c271867a",
+    "syntax_check": "/usr/bin/clang++ -std=c++11 -x c++ -fsyntax-only artwork_ca_bundle.h (pass; pragma-once-in-main-file warning only)"
+  },
+  "sdk_findings": {
+    "arduino": "2.0.17",
+    "esp_idf": "4.4.7",
+    "bundle_api": "WiFiClientSecure::setCACertBundle(const uint8_t*)",
+    "sdk_full_bundle_exists": true,
+    "sdk_builtin_bundle_size": 63739,
+    "nullptr_disables_bundle": true,
+    "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_MAX_CERTS": 200,
+    "CONFIG_MBEDTLS_HAVE_TIME_DATE": false,
+    "manual_peer_chain_date_validation_required": true
+  },
+  "commands": [
+    "cd build/artwork-prototype/ca",
+    "/private/tmp/bm83-crowpanel-tools/bin/python gen_crt_bundle-v4.4.7.py --input cacert.pem",
+    "/private/tmp/bm83-crowpanel-tools/bin/python prepare_header.py"
+  ],
+  "limitations": [
+    "Trust-anchor date metadata is removed by IDF compressed format by design.",
+    "SDK lacks built-in certificate validity-date enforcement; application TLS client must check peer certificate validity before HTTP transmission.",
+    "Current public roots require future firmware/bundle maintenance.",
+    "Host artifact generation is not hardware TLS verification."
+  ],
+  "generation_warning": "cryptography reports a public CA certificate serial number is zero/negative; generation succeeds with cryptography46.0.7. Future cryptography may reject this legacy root. No PEM or certificate was altered."
+}

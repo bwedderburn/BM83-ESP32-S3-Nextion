@@ -18,10 +18,12 @@ void enter_light_sleep_until_boot() {
     rtc_gpio_pulldown_dis(GPIO_NUM_0);
     esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
 
-    // 3. Light sleep until the button is pressed.
-    //    Wi-Fi modem sleeps in the background; association is preserved
-    //    so on return there's no reconnect.
-    esp_light_sleep_start();
+    // 3. Manual light sleep requires the caller to stop Wi-Fi and quiesce
+    //    SD/network tasks first. Association is rebuilt by the caller on wake.
+    const esp_err_t result = esp_light_sleep_start();
+    if (result != ESP_OK) {
+        Serial0.printf("[power] light sleep refused: %d\n", (int)result);
+    }
 
     // 4. Wake — release the RTC GPIO so subsequent reads (if anything ever
     //    needed GPIO 0 in regular GPIO mode) work normally.
