@@ -137,8 +137,12 @@ The CrowPanel searches MusicBrainz using artist and album; when the source
 omits the album, it can use artist and track title instead. A sufficiently
 high search score alone is not accepted: normalized names must match and
 the candidates must identify one release group. Album/track comparison permits
-an omitted in-word apostrophe, such as `Dreams` versus `Dream's`; artist identity
-remains strict. Only a complete successful empty album search permits one
+an omitted in-word apostrophe, such as `Dreams` versus `Dream's`. Artist identity
+remains strict: an exact normalized match may use MusicBrainz's credited name,
+canonical name or reported aliases for the same single credited artist. Fuzzy
+name similarity and aliases belonging to another artist are not accepted.
+Aliases affect lookup only; the source's displayed metadata stays unchanged.
+Only a complete successful empty album search permits one
 bounded fallback query, followed by the same identity and uniqueness checks.
 Apple Music's trailing album labels ` - EP` and ` - Single` can match an
 unlabelled catalog title only when its release type also matches. Literal full
@@ -183,10 +187,13 @@ entries evicted as needed. Misses are cached for 24 hours when network
 time is available. Positive cached covers can be displayed offline,
 including before time synchronization. A missing or unwritable card
 disables persistent caching; an online cover can still be displayed.
-The matching-policy update retries older cached misses while preserving
-existing positive covers and their filenames.
-The second-provider update likewise retries earlier misses. Successfully decoded
-Deezer covers use the same bounded SD cache and verified MusicBrainz album ID;
+Cache policy v5 retries negative records from versions 1–4, so an older miss
+cannot hide artwork newly supported by artist-alias matching. Current v5 misses
+keep the same expiry behavior; without synchronized time they are retried.
+Positive covers from versions 1–5 remain usable offline, keeping their existing
+SHA256 filenames and verified MusicBrainz release-group IDs. The metadata layout
+and cache keys are unchanged; migration does not rename covers or touch unrelated
+files. Successfully decoded Deezer covers use this same bounded SD cache;
 returning to an album needs no computer, provider account or runtime helper.
 Deezer API content is used for this private, noncommercial unit under its
 [developer terms](https://developers.deezer.com/termsofuse) and
