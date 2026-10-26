@@ -3,6 +3,7 @@
 import hashlib
 from pathlib import Path
 import re
+import runpy
 import shutil
 import subprocess  # nosec B404 - fixed local compiler and host test binary
 
@@ -55,8 +56,12 @@ def _font(size):
 def test_latin_glyphs_have_real_bitmaps_and_fit_metadata_lines(size):
     glyphs, bitmaps, codes, height, baseline = _font(size)
     assert set(range(0xA0, 0x180)) <= codes.keys()
-    assert set(map(ord, "éíâÉÁÇŁœŸÆßñø—‘’“”…€™")) <= codes.keys()
-    assert len(codes) == 244
+    assert set(map(ord, "éíâÉÁÇŁœŸÆßñø—‘’“”…€™Ӧӧ")) <= codes.keys()
+    assert len(codes) == 246
+    assert 0x180 not in codes and 0x4E8 not in codes
+    # Dense cmaps have an end-boundary ambiguity in pinned LVGL 8.3.11.
+    source = (REMOTE / "src/fonts" / ("bm83_latin_%d.c" % size)).read_text()
+    assert "LV_FONT_FMT_TXT_CMAP_FORMAT0_" not in source
     assert len(glyphs) == len(codes) + 1  # glyph zero is the missing-glyph sentinel
     for code, glyph_id in codes.items():
         glyph = glyphs[glyph_id]
@@ -74,6 +79,27 @@ def test_latin_glyphs_have_real_bitmaps_and_fit_metadata_lines(size):
         assert height * 2 <= 76
     if size == 18:
         assert height * 2 <= 48
+
+
+def test_generator_hardens_multiple_dense_ranges(tmp_path):
+    # The converter currently merges Cyrillic and punctuation into a sparse
+    # map. Also cover a separately emitted two-glyph dense range, so a future
+    # layout cannot reintroduce the U+04E8 end-boundary substitution.
+    path = tmp_path / "font.c"
+    path.write_text("/*Collect the unicode lists and glyph_id offsets*/\n" +
+                    "\n".join(
+                        ".range_start = %d, .range_length = %d, .glyph_id_start = %d,\n"
+                        "        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, "
+                        ".type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY" % values
+                        for values in ((160, 224, 1), (1254, 2, 225))))
+    generator = runpy.run_path(str(REMOTE / "fonts/generate.py"))
+    generator["harden_dense_cmaps"](path)
+    source = path.read_text()
+    assert "LV_FONT_FMT_TXT_CMAP_FORMAT0_" not in source
+    assert source.count("LV_FONT_FMT_TXT_CMAP_SPARSE_TINY") == 2
+    names = re.findall(r"\.unicode_list = (\w+)", source)
+    assert [_numbers(_array(source, name)) for name in names] == [list(range(224)), [0, 1]]
+    assert ".range_start = 1254, .range_length = 2, .glyph_id_start = 225" in source
 
 
 def test_font_source_and_tooling_are_pinned():
