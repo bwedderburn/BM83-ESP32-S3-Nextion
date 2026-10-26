@@ -44,20 +44,21 @@ def fields(data):
 
 
 def test_preferred_name_is_complete_in_primary_packet(advertisements):
-    name = "B's Groovy Music CTRL"
+    name = "B's Groovy BT CTRL"
     service = object()
     advertisement = module._named_advertisement(service, name)
     payload = bytes(advertisement)
     assert advertisement.service is service
-    assert len(name.encode("utf-8")) == 21
-    assert len(payload) == 30
+    assert len(name.encode("utf-8")) == 18
+    assert len(payload) == 27
     assert fields(payload) == {0x02: b"\x12\x18", 0x01: b"\x06", 0x09: name.encode("utf-8")}
 
 
 @pytest.mark.parametrize("name,primary_name", [
     ("x" * 22, True), ("x" * 23, False),
     ("é" * 11, True), ("é" * 12, False),
-    ("B's Groovy Music CTRL_1", False),
+    ("B's Groovy BT CTRL_1", True),
+    ("B's Groovy BT CTRL_1234", False),
 ])
 def test_budget_counts_utf8_and_preserves_services(advertisements, name, primary_name):
     payload = bytes(module._named_advertisement(object(), name))
@@ -71,20 +72,28 @@ def test_budget_counts_utf8_and_preserves_services(advertisements, name, primary
 
 def test_budget_uses_encoded_base_packet_not_assumed_size(advertisements, monkeypatch):
     monkeypatch.setattr(advertisements, "base", advertisements.base + b"\x04\xff\x01\x02\x03")
-    payload = bytes(module._named_advertisement(object(), "B's Groovy Music CTRL"))
+    payload = bytes(module._named_advertisement(object(), "B's Groovy BT CTRL"))
     assert len(payload) == 12
     assert 0x09 not in fields(payload)
 
 
-def test_explicit_erase_rename_rebuilds_name_and_keeps_full_gap_fallback(advertisements):
-    hid = module.BleHid(True, "B's Groovy Music CTRL")
+@pytest.mark.parametrize("counter,primary_name", [(1, True), (1234, False)])
+def test_explicit_erase_rename_rebuilds_name_and_keeps_full_gap_fallback(
+        advertisements, counter, primary_name):
+    hid = module.BleHid(True, "B's Groovy BT CTRL")
     hid._hid = object()
     hid._ble = SimpleNamespace(name=hid.name)
     hid._adv = module._named_advertisement(hid._hid, hid.name)
     assert 0x09 in fields(bytes(hid._adv))
-    hid._update_ble_name(1)
-    assert hid.name == hid._ble.name == "B's Groovy Music CTRL_1"
-    assert len(bytes(hid._adv)) == 7
-    assert 0x09 not in fields(bytes(hid._adv))  # no stale old primary name
+    hid._update_ble_name(counter)
+    expected = "B's Groovy BT CTRL_%d" % counter
+    assert hid.name == hid._ble.name == expected
+    decoded = fields(bytes(hid._adv))
+    if primary_name:
+        assert len(bytes(hid._adv)) == 29
+        assert decoded[0x09].decode("utf-8") == expected
+    else:
+        assert len(bytes(hid._adv)) == 7
+        assert 0x09 not in decoded  # no stale old primary name
     # BLERadio.start_advertising's unchanged default uses this GAP name in
     # its scan response when no custom scan_response is supplied.

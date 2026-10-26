@@ -1,7 +1,7 @@
 # Inactive example: merge into CIRCUITPY/settings.toml; keep existing private keys.
 # Match the installed app's established BLE_NAME (and any existing erase suffix).
 # This value matches the repository's default main.py; do not rename for handoff.
-CIRCUITPY_BLE_NAME = "B's Groovy Music CTRL"
+CIRCUITPY_BLE_NAME = "B's Groovy BT CTRL"
 
 # Disable CircuitPython's maintenance advertiser, not application BLE HID.
 # Deploy boot.py too; it owns the early runtime fallback for existing installs.

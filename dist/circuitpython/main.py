@@ -42,7 +42,7 @@ VOL_HOLD_MAX_S = 6.65
 # Line-In gain commands (0x82/0x83) since the phone isn't in the AUX
 # signal path.
 BLE_ENABLED = True
-BLE_NAME = "B's Groovy Music CTRL"
+BLE_NAME = "B's Groovy BT CTRL"
 
 # Wireless remote: the CrowPanel 7" running firmware/crowpanel-remote sends
 # ESP-NOW frames carrying the exact Nextion token vocabulary. They join the
