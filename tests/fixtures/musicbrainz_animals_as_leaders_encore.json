@@ -1,0 +1,31 @@
+{
+  "source_urls": {
+    "strict": "https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=8&query=releasegroup%3A%22Animals+As+Leaders+%28Encore+Edition%29%22+AND+artist%3A%22Animals+As+Leaders%22",
+    "fallback": "https://musicbrainz.org/ws/2/release-group/?fmt=json&limit=8&query=releasegroup%3A%22animals+as+leaders%22+AND+artist%3A%22Animals+As+Leaders%22"
+  },
+  "captured_at_utc": "2026-10-26T00:57:16.145450+00:00",
+  "strict_response": {
+    "count": 0,
+    "release-groups": []
+  },
+  "fallback_response": {
+    "count": 1,
+    "release-groups": [
+      {
+        "id": "99e01013-b7c7-32cd-ba11-ffe845543632",
+        "title": "Animals as Leaders",
+        "score": 100,
+        "primary-type": "Album",
+        "artist-credit": [
+          {
+            "name": "Animals as Leaders",
+            "artist": {
+              "id": "5c2d2520-950b-4c78-84fc-78a9328172a3",
+              "name": "Animals as Leaders"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

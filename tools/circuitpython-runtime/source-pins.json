@@ -1,0 +1,31 @@
+{
+  "board": "espressif_esp32s3_devkitc_1_n8r8",
+  "sources": {
+    "circuitpython": {
+      "repository": "https://github.com/adafruit/circuitpython.git",
+      "tag": "10.3.1",
+      "commit": "c9dee12beed76e4ffa11d2d6d99ff104fc976c3a"
+    },
+    "esp_idf": {
+      "repository": "https://github.com/adafruit/esp-idf.git",
+      "commit": "2b900d1222cfce5dfa340ed99375af69ec1ee192",
+      "reported_version": "v6.0.1-7-g2b900d1222"
+    },
+    "esp_nimble": {
+      "repository": "https://github.com/espressif/esp-nimble.git",
+      "commit": "7075927f97c648af650a288e94a8c80dd7f00c27"
+    }
+  },
+  "configuration": {
+    "CONFIG_BT_NIMBLE_MAX_BONDS": 8,
+    "CONFIG_BT_NIMBLE_MAX_CCCDS": 24
+  },
+  "reference_tools": {
+    "python": "3.11.13",
+    "cmake": "3.30.9",
+    "ninja_python_package": "1.13.2",
+    "gcc": "esp-15.2.0_20251204",
+    "idf_tools_json_sha256": "8e3d9468434bb5b08a97ed4820c809f420011effe364e2bfc54f21b4382f6d2c",
+    "constraints_sha256": "6b7626572c759b3f1431fe781688af68eba8a3da81bbf5a9744ad24b0fbfaa45"
+  }
+}

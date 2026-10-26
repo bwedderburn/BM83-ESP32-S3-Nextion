@@ -4,10 +4,11 @@
 // with README.md):
 //   token frame  (remote -> audio unit):  "BMR1:<seq>:<token>"
 //   state frame (audio unit -> remote): binary BMS2; see now_playing.h.
+//   BLE status (audio unit -> remote): binary BLS2; see ble_status.h.
 // Control frames are ASCII, <=64 bytes, with no NUL. <seq> is a decimal uint32 the
 // receiver uses to drop duplicates (ESP-NOW MAC-layer retries can deliver
-// a frame twice). <token> is EXACTLY the Nextion vocabulary (BT_PLAY,
-// BT_VOLUP_P, ...) so the audio unit's main.py feeds one dispatch path.
+// a frame twice). Playback tokens share the Nextion vocabulary. NET_RETRY,
+// BLE_PAUSE and BLE_ENABLE are remote-only management commands.
 //
 // Both ends run unassociated STA mode and must share a WiFi channel. The
 // unit's channel is not fixed (an unassociated CircuitPython radio is not
@@ -47,7 +48,10 @@ bool espnow_link_suspend();
 // case) for the unit's radio to ACK it. Retries reuse the same <seq>, so
 // the receiver drops any repeat that did land. Safe before init or after a
 // failed init (drops silently, status stays "off").
-void espnow_send_token(const char *token);
+// Returns true if a valid frame was attempted, including a no-ACK attempt.
+// Optional sequence receives its BMR1 id, for matching observed BLS2 status.
+// Neither this return value nor a MAC ACK confirms the requested BLE state.
+bool espnow_send_token(const char *token, uint32_t *sequence = nullptr);
 
 // Delivery status of the last token: "ok" (an attempt was ACKed),
 // "no-ack" (every attempt failed), "off" (not initialised / failed).

@@ -154,6 +154,26 @@ static void queries_escape_and_bound() {
     assert(query.empty());
 }
 
+static void encore_album_type_and_identity() {
+    const Query query = {"Animals As Leaders", "Animals As Leaders (Encore Edition)", ""};
+    Candidate candidate = match("Animals As Leaders", "Animals As Leaders", 1, "album");
+    assert(album_fallback::select(query, &candidate, 1).outcome == Outcome::Matched);
+    const char *wrong_types[] = {nullptr, "", "ep", "single", "Album"};
+    for (const char *type : wrong_types) {
+        candidate.record_type = type;
+        assert(album_fallback::select(query, &candidate, 1).outcome == Outcome::NoMatch);
+    }
+    candidate.record_type = "album";
+    candidate.artist = "Another Artist";
+    assert(album_fallback::select(query, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.artist = "Animals As Leaders";
+    candidate.album = "Animals As Leaders (Live)";
+    assert(album_fallback::select(query, &candidate, 1).outcome == Outcome::NoMatch);
+    std::string output;
+    assert(album_fallback::search_query(query, output));
+    assert(output == "artist:\"Animals As Leaders\" album:\"animals as leaders\"");
+}
+
 int main() {
     exact_identity();
     identifiers_and_ambiguity();
@@ -161,5 +181,6 @@ int main() {
     urls_are_exact();
     api_image_urls_are_canonical_ids();
     queries_escape_and_bound();
+    encore_album_type_and_identity();
     std::cout << "album fallback checks passed\n";
 }

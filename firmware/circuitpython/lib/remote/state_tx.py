@@ -193,8 +193,8 @@ class StatePublisher:
         duration = value["duration_ms"]
         return min(position, duration) if duration is not None else position
 
-    def tick(self):
-        """Pace complete periodic snapshots; failures leave controls running."""
+    def tick(self, auxiliary=None):
+        """Pace BMS2 and optional status frames through one shared send slot."""
         if not self._remote.state_tx_enabled:
             return
         now = self._clock()
@@ -206,6 +206,11 @@ class StatePublisher:
         if self._next_frame is not None and ticks_diff(now, self._next_frame) < 0:
             return
         if not self._frames:
+            # Finish a fragmented BMS2 before allowing auxiliary BLE status.
+            # This is an idle boundary, so one BLS2 cannot split a snapshot.
+            if auxiliary is not None and auxiliary.tick():
+                self._next_frame = (now + FRAME_GAP_MS) % (1 << 29)
+                return True
             if self._next_snapshot is not None and ticks_diff(now, self._next_snapshot) < 0:
                 return
             try:
@@ -218,7 +223,8 @@ class StatePublisher:
             self._index = 0
             self._started = now
         frame = self._frames[self._index]
-        if self._remote.send_state_frame(frame):
+        queued = self._remote.send_state_frame(frame)
+        if queued:
             self._index += 1
             if self._index == len(self._frames):
                 self._frames = ()
@@ -227,3 +233,4 @@ class StatePublisher:
             self._frames = ()
             self._next_snapshot = (now + SNAPSHOT_PERIOD_MS) % (1 << 29)
         self._next_frame = (now + FRAME_GAP_MS) % (1 << 29)
+        return queued

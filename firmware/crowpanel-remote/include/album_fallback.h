@@ -66,7 +66,9 @@ namespace detail {
 inline const char *strip_source_label(std::string &album) {
     const char *type = artwork_matching::detail::strip_source_album_label(album);
     if (!type) return nullptr;
-    return strcmp(type, "EP") == 0 ? "ep" : "single";
+    if (strcmp(type, "EP") == 0) return "ep";
+    if (strcmp(type, "Single") == 0) return "single";
+    return strcmp(type, "Album") == 0 ? "album" : nullptr;
 }
 
 inline bool safe_query_text(const char *input, std::string &value) {
