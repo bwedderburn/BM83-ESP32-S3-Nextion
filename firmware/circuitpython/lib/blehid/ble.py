@@ -72,6 +72,19 @@ _PAUSE_TIMEOUT_MS = 5000
 _MAX_PAUSE_CONNECTIONS = 8
 
 
+def _named_advertisement(hid, name):
+    """Include the full name in the primary packet only within legacy BLE limits."""
+    from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
+
+    advertisement = ProvideServicesAdvertisement(hid)
+    # Each AD structure adds length/type bytes. Measure the library's encoded
+    # flags and service UUIDs; count UTF-8 bytes rather than name characters.
+    if len(bytes(advertisement)) + len(name.encode("utf-8")) + 2 <= 31:
+        advertisement.complete_name = name
+    # BLERadio's default scan response still carries the complete GAP name.
+    return advertisement
+
+
 def _disable_workflow():
     """Stop the supervisor from independently restarting BLE advertisements.
 
@@ -340,7 +353,6 @@ class BleHid:
             if not _disable_workflow():
                 print("[BLE] Background workflow control unavailable")
             from adafruit_ble import BLERadio
-            from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
             from adafruit_ble.services.standard.hid import HIDService
             from adafruit_hid.consumer_control import ConsumerControl
             from adafruit_hid.consumer_control_code import ConsumerControlCode as CCC
@@ -380,7 +392,7 @@ class BleHid:
                 protocol_mode = None
 
             self._hid = ConsumerOnlyHIDService(hid_descriptor=_CONSUMER_ONLY_HID_DESCRIPTOR)
-            self._adv = ProvideServicesAdvertisement(self._hid)
+            self._adv = _named_advertisement(self._hid, self.name)
             self._cc = ConsumerControl(self._hid.devices)
             self._CCC = CCC
             self._ready = True
@@ -962,7 +974,9 @@ class BleHid:
         """
         self.name = "%s_%d" % (self.base_name, counter)
         try:
+            advertisement = _named_advertisement(self._hid, self.name)
             self._ble.name = self.name
+            self._adv = advertisement
             print("[BLE] Name updated to:", self.name)
         except Exception as e:
             dprint("[BLE] name update err:", e)

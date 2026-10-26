@@ -364,6 +364,7 @@ def erase_env(monkeypatch):
         store["writes"] += 1
         return True
     monkeypatch.setattr(ble_mod, "_write_ble_counter", write_counter)
+    monkeypatch.setattr(ble_mod, "_named_advertisement", lambda hid, name: object())
 
     hid = BleHid(True, "test")
     _make_ready(hid)

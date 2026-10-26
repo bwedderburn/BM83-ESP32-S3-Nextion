@@ -146,6 +146,9 @@ class Advertisement:
     def __init__(self, service):
         self.service = service
 
+    def __bytes__(self):
+        return b"\x03\x02\x12\x18\x02\x01\x06"
+
 
 class ConsumerControl:
     def __init__(self, devices):
