@@ -171,13 +171,15 @@ inline bool identity_normalized(const char *text, bool strip, std::string &out) 
     return true;
 }
 
-// Store labels are not removed by the cache-key normalizer. This helper is
-// used only on a separate album comparison/retrieval string. A candidate that
-// needs this compatibility path must supply the corresponding primary type.
+// Source labels are not removed by the cache-key or song normalizer. This
+// helper changes only a separate album comparison/retrieval string. Exact
+// Encore Edition labels require an Album candidate; live/remix/deluxe and
+// all other annotations remain part of identity.
 inline const char *strip_source_album_label(std::string &album) {
-    const char *suffixes[] = {" - ep", " - single"};
-    const char *types[] = {"EP", "Single"};
-    for (size_t i = 0; i < 2; ++i) {
+    const char *suffixes[] = {" - ep", " - single", " (encore edition)",
+                              " [encore edition]", " - encore edition"};
+    const char *types[] = {"EP", "Single", "Album", "Album", "Album"};
+    for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); ++i) {
         const size_t size = strlen(suffixes[i]);
         if (album.size() > size && album.compare(album.size() - size, size, suffixes[i]) == 0) {
             album.resize(album.size() - size);
@@ -249,15 +251,17 @@ inline bool album_fallback_query(const Query &query, std::string &output) {
             return false;
     }
 
-    const bool typed_album = detail::strip_source_album_label(album) != nullptr;
+    const char *source_type = detail::strip_source_album_label(album);
+    const bool typed_album = source_type != nullptr;
+    const bool edition_album = source_type && strcmp(source_type, "Album") == 0;
     bool unicode_album = false;
     for (size_t i = 0; i < album.size(); ++i)
         if (static_cast<uint8_t>(album[i]) >= 0x80) unicode_album = true;
 
-    // Non-ASCII bases cannot use the deliberately ASCII-only fuzzy tokenizer.
-    // A recognized store label permits one strictly quoted base-title search;
-    // returned candidates still need exact album identity and primary type.
-    if (typed_album && unicode_album) {
+    // Known edition labels use only a strictly quoted base-title search.
+    // Non-ASCII store-label bases also avoid the ASCII-only fuzzy tokenizer.
+    // Returned candidates still need exact album identity and primary type.
+    if (edition_album || (typed_album && unicode_album)) {
         std::string result = "releasegroup:";
         detail::append_quoted(result, album);
         result += " AND artist:";
@@ -343,7 +347,7 @@ inline Selection select(const Query &query, const Candidate *candidates, size_t 
             std::string candidate_album;
             if (!identity_normalized(candidate.album, true, candidate_album)) continue;
             // Full title identity always retains its previous acceptance. Only
-            // removal of a source's trailing store label requires a type check.
+            // removal of a source's trailing label requires a type check.
             if (candidate_album != album &&
                 (!album_type || candidate_album != base_album || !candidate.primary_type ||
                  strcmp(candidate.primary_type, album_type) != 0)) continue;

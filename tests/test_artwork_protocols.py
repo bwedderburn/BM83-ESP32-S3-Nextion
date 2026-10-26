@@ -40,6 +40,18 @@ def test_artwork_host_helpers(name, tmp_path):
     result = subprocess.run(command, capture_output=True, text=True)  # nosec B603 - fixed local test sources/argv, no shell
     assert result.returncode == 0, result.stdout + result.stderr
     arguments = [str(binary)]
+    if name == "matching":
+        payload = json.loads((ROOT / "tests/fixtures/musicbrainz_animals_as_leaders_encore.json").read_text())
+        strict = payload["strict_response"]
+        assert strict["count"] == len(strict["release-groups"]) == 0
+        fallback = payload["fallback_response"]
+        assert fallback["count"] == len(fallback["release-groups"]) == 1
+        group = fallback["release-groups"][0]
+        credits = group["artist-credit"]
+        assert len(credits) == 1 and group["primary-type"] == "Album"
+        assert not group.get("secondary-types")
+        arguments += [credits[0]["name"], group["title"], group["id"],
+                      str(group["score"]), str(len(credits)), group["primary-type"]]
     if name in ("artist_aliases", "artist_credit"):
         # Exact MusicBrainz HTTP200 response from the production strict query;
         # its canonical Ż credit includes the plain-Z provider alias.
