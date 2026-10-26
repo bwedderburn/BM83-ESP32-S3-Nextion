@@ -5,7 +5,7 @@ This project implements a CircuitPython-based remote control system for audio de
 - **ESP32-S3 DevKitC-1**
 - **BM83 Bluetooth module** (A2DP, AVRCP, HID)
 - **Nextion NX3224F028** UART touchscreen
-- **BLE HID** consumer-control-only volume/mute support (for iOS/macOS)
+- **BLE HID** consumer-control-only volume/mute support (Mac, Windows, Linux and iPhone)
 
 ## 📦 Features
 
@@ -14,11 +14,13 @@ This project implements a CircuitPython-based remote control system for audio de
 - BLE HID consumer control (volume, mute)
 - Nextion UI for metadata, EQ, AUX indication
 - Robust BLE bond recovery and advertising
+- CrowPanel Pause/Enable for BLE volume-remote handoff while keeping saved bonds
 
 ## 📁 Project Structure
 
 ```
 firmware/circuitpython/
+├── boot.py                  # Disable maintenance BLE advertising before startup
 ├── main.py                  # Main control loop (entry point)
 └── lib/
     ├── blehid/
@@ -33,6 +35,7 @@ firmware/circuitpython/
         └── ticks.py         # Wrap-safe ms ticks for sub-second timers
 
 dist/circuitpython/
+├── boot.py                  # Early runtime configuration (.py)
 ├── main.py                  # Optimized deployment entry point (.py)
 └── lib/                     # Compiled project modules (.mpy)
 ```
@@ -47,8 +50,8 @@ Deployment is intentionally split into two explicit modes:
 
 Use this mode while bringing up new hardware, debugging regressions, or reproducing bugs.
 
-1. Flash **CircuitPython 10.x** to your ESP32-S3 DevKitC-1.
-2. Copy `firmware/circuitpython/main.py` to `CIRCUITPY/` and copy `firmware/circuitpython/lib/*` to `CIRCUITPY/lib/`.
+1. Install CircuitPython matching `tools/mpy_cross_pin.env`. For four or more saved BLE hosts and bond-preserving runtime updates, see [BLE runtime updates](docs/ble-runtime-update.md).
+2. Copy `firmware/circuitpython/boot.py` and `main.py` to `CIRCUITPY/`, and copy `firmware/circuitpython/lib/*` to `CIRCUITPY/lib/`.
 3. Install required libraries:
    - `adafruit_ble`
    - `adafruit_hid`
@@ -63,7 +66,7 @@ Use this mode while bringing up new hardware, debugging regressions, or reproduc
 Switch to this mode only after baseline `.py` deployment is validated on-device.
 
 1. Build optimized output with `./build_mpy.sh`.
-2. Copy all contents of `dist/circuitpython/` to the root of `CIRCUITPY` (includes `main.py`, compiled `.mpy` modules in `lib/`, `settings.toml` if present, and any other non-`.py` assets).
+2. Copy all contents of `dist/circuitpython/` to the root of `CIRCUITPY` (includes `boot.py`, `main.py`, compiled `.mpy` modules in `lib/`, and configuration/assets if present).
 3. Ensure required Adafruit libraries are still present in `CIRCUITPY/lib/`:
    - `adafruit_ble/`
    - `adafruit_hid/`
@@ -123,6 +126,7 @@ Both commands produce the same output layout:
 
 ```text
 # Output will be in dist/circuitpython/
+# ├── boot.py           (early runtime configuration, kept as .py)
 # ├── main.py           (kept as .py - entry point must not be compiled)
 # ├── settings.toml     (config file, if present)
 # └── lib/              (compiled modules)
@@ -161,15 +165,15 @@ MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
 #### Deployment After Build
 
 1. Copy the entire contents of `dist/circuitpython/` to your `CIRCUITPY` drive.
-2. Alternatively, if you only want to update the libraries (and are not copying the whole `dist/circuitpython/` tree), copy `dist/circuitpython/lib/` contents into `CIRCUITPY/lib/`.
+2. A library-only update does not install changed startup behavior. When updating BLE handoff support, include both `boot.py` and `main.py` as well as the compiled libraries.
 3. Make sure the required Adafruit libraries are present in `CIRCUITPY/lib/`:
    - `adafruit_ble/`
    - `adafruit_hid/`
 4. Reset the board.
 
-**Recommended flow**: Always validate first with plain `.py` files from `firmware/circuitpython/main.py` + `firmware/circuitpython/lib/`, then switch to compiled `.mpy` artifacts from `dist/circuitpython/` for production.
+**Recommended flow**: Validate first with plain `.py` files from `firmware/circuitpython/` (`boot.py`, `main.py` and project libraries), then switch to compiled library artifacts from `dist/circuitpython/` for production.
 
-**Note**: The build script preserves `main.py` as `.py` (CircuitPython entry points cannot be bytecode-compiled). All modules under `firmware/circuitpython/lib/` are compiled to `.mpy` and placed in `dist/circuitpython/lib/`.
+**Note**: The build script preserves `boot.py` and `main.py` as source. Project library modules are compiled to `.mpy` and placed in `dist/circuitpython/lib/`.
 
 **Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. The pin in `tools/mpy_cross_pin.env` records which version that is; when the device's CircuitPython is upgraded, bump the pin in the same change. If you encounter `ValueError: incompatible .mpy file` errors, check the device version against the pin.
 
@@ -211,6 +215,8 @@ Hardware behavior is only partially covered by host tests; see [docs/hardware-te
 - **[NEXTION_SETUP.md](NEXTION_SETUP.md)** - Complete guide for configuring Nextion HMI button press/release events
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Firmware deployment and update instructions
 - **[CODE_REFERENCE.md](CODE_REFERENCE.md)** - Detailed code reference and API documentation
+- **[BLE volume-remote handoff](docs/ble-volume-handoff.md)** - Pause/Enable, stable naming and switching saved hosts without erasing bonds
+- **[BLE runtime updates](docs/ble-runtime-update.md)** - Eight-host capacity and verified app-only updates that preserve the bond store
 
 ## 🆘 Troubleshooting
 
@@ -221,7 +227,8 @@ Hardware behavior is only partially covered by host tests; see [docs/hardware-te
   mouse and boot-keyboard interfaces omitted. It should not make an iPhone
   treat the unit as a typing keyboard. After updating from the old composite
   HID profile, the phone may need to forget and re-pair the BLE control device
-  to discard its cached profile. Verify volume up/down, mute and the onscreen
+  to discard its cached profile. This is a one-time profile migration, not a
+  normal host-switching step. Verify volume up/down, mute and the onscreen
   keyboard together; normal audio/metadata still use BM83 Bluetooth.
 - CrowPanel's Now Playing `Mute` button sends `BT_MUTE` through the same
   paired remote path as its other controls. It sends the source's native
@@ -229,7 +236,9 @@ Hardware behavior is only partially covered by host tests; see [docs/hardware-te
   source has not reported. It is ignored during AUX playback. A later
   Nextion HMI button can send `print "BT_MUTE"` using the existing terminator
   convention; this firmware update does not modify the Nextion HMI project.
-- If BLE doesn't work on iOS, try **Forget Device** and trigger `BT_EBIND`.
+- To switch a saved BLE host, use CrowPanel **Pause volume remote / Enable
+  volume remote**; follow the [handoff guide](docs/ble-volume-handoff.md).
+  Forget/Remove and `BT_EBIND` erase pairing information and are not handoff steps.
 - If metadata stops updating, ensure AVRCP is supported by the source device.
 - If CircuitPython auto-reloads on file save, it's disabled in code.
 

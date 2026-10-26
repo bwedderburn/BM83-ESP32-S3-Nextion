@@ -153,9 +153,9 @@ def _run_main(monkeypatch, script, publisher_snapshots=None):
     firmware.EspNowRemote = _Remote
     if publisher_snapshots is not None:
         class CapturingPublisher(firmware.StatePublisher):
-            def tick(self):
+            def tick(self, auxiliary=None):
                 publisher_snapshots.append((clock.monotonic(), self.snapshot()))
-                return super().tick()
+                return super().tick(auxiliary)
 
         firmware.StatePublisher = CapturingPublisher
 

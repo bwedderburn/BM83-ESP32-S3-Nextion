@@ -15,6 +15,7 @@ from utils.common import (
 from nextion.display import Nextion, NX_RUNTIME, EQ_MAP, EQ_OBJ_PAGE0, EQ_OBJ_PAGE1, AUX_OBJ_PAGE0, AUX_OBJ_PAGE1
 from remote import EspNowRemote
 from remote.state_tx import StatePublisher
+from remote.ble_status import BleStatusPublisher
 from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
 from remote.metadata_bridge import MetadataBridge
 from bm83.bm83 import Bm83
@@ -86,6 +87,7 @@ def main():
     remote.setup()
     remote_poll = remote.poll
     remote_state = StatePublisher(remote)
+    ble_status = BleStatusPublisher(remote, ble)
     metadata_bridge = MetadataBridge()
     metadata_bridge.setup()
     startup_link_probe = StartupLinkProbe(bm, enabled=metadata_bridge.enabled)
@@ -334,8 +336,6 @@ def main():
             # A flush was requested while the page was unknown — settle it now
             # so the panel can never sit on stale AUX/EQ/metadata text.
             flush_page(nx.current_page)
-
-        ble_tick()
 
         # UART RX heartbeat — self-throttled (~10s), surfaces BM83 freezes
         # and USB CDC drops in the log. Pass `now` so every ticker shares
@@ -601,6 +601,14 @@ def main():
             dprint("[NX] Token:", tok)
             if tok == b"NET_RETRY":
                 retry_artwork_wifi()
+            elif tok in (b"BLE_PAUSE", b"BLE_ENABLE"):
+                request_seq = remote.take_ble_request(tok)
+                if request_seq is not None:
+                    if ble_status.request(tok, request_seq):
+                        # A lost release from the old host must not become
+                        # a repeated volume command after Enable reconnects.
+                        vol_hold_active = None
+                        vol_repeat_count = 0
             elif tok == b"BT_POWER":
                 print("[NX] BT_POWER token")
                 bm.power_toggle()
@@ -770,11 +778,14 @@ def main():
             push_meta_updates(invalidate_track_meta(clear_primary=True))
             print("[META WIFI] Mac metadata cleared")
 
+        # BLE handoff work runs only after UART events and controls are serviced.
+        ble_tick()
+
         # Publish cached observations only: no extra AVRCP polling, and at
         # most one small ESP-NOW frame is queued after UART/input servicing.
         remote_state.set_transport(bm.power_on, bm.connected, aux_mode, bm.avrcp_suspended)
         remote_state.set_eq(bm.EQ_SEQ[bm.eq_index])
-        remote_state.tick()
+        remote_state.tick(ble_status)
         sleep(0.005)
 
 

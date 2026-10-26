@@ -4,6 +4,7 @@ set -euo pipefail
 # Build CircuitPython .mpy files into a drag-and-drop-ready dist folder:
 # dist/circuitpython/
 #   main.py
+#   boot.py (if present; remains source for early runtime configuration)
 #   settings.toml (if present)
 #   <other non-.py assets...>
 #   lib/<packages...>/*.mpy
@@ -98,6 +99,9 @@ mkdir -p "${DIST_DIR}" "${DIST_LIB_DIR}"
 # -------------------------
 # IMPORTANT: Keep entrypoint as .py (do NOT compile main.py)
 cp -p "${SRC_DIR}/main.py" "${DIST_DIR}/main.py"
+if [[ -f "${SRC_DIR}/boot.py" ]]; then
+  cp -p "${SRC_DIR}/boot.py" "${DIST_DIR}/boot.py"
+fi
 
 # Copy settings.toml if present (common CircuitPython config file)
 if [[ -f "${SRC_DIR}/settings.toml" ]]; then
@@ -110,7 +114,7 @@ fi
 # Copies things like images, json, txt, etc., preserving folder structure,
 # while skipping __pycache__ and device-local private Wi-Fi enrollment.
 #
-# Note: We don't copy any *.py files (except main.py which we handled above).
+# Note: We don't copy other *.py files; main.py and boot.py were handled above.
 if command -v rsync >/dev/null 2>&1; then
   rsync -a \
     --exclude="__pycache__" \

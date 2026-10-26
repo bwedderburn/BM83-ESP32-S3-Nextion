@@ -3,11 +3,13 @@
 Protocol v1 (shared with firmware/crowpanel-remote/include/espnow_link.h):
 
     token frame  (remote -> audio unit):  b"BMR1:<seq>:<token>"
-    state frame  (audio unit -> remote):  b"BMS1:<seq>:<key>=<val>"  (reserved)
+    audio state  (audio unit -> remote):  binary BMS2 (now_playing.py)
+    BLE status   (audio unit -> remote):  binary BLS1 (ble_status.py)
 
-ASCII, at most 64 bytes. <token> is exactly the Nextion token vocabulary
-(``nextion.display.TOKENS``), so main.py merges remote tokens into the
-panel's token list and the existing dispatch applies unchanged: aux_mode
+Control frames are ASCII, at most 64 bytes. Playback tokens share the Nextion
+vocabulary (``nextion.display.TOKENS``). NET_RETRY, BLE_PAUSE and BLE_ENABLE
+are remote-only management commands. main.py merges the validated tokens
+into the panel's list and the existing playback dispatch applies: aux_mode
 gating of transport controls, the EBIND debounce and volume
 hold-and-repeat included. <seq> is a decimal uint32 that exists only so
 duplicate deliveries can be dropped.
@@ -35,7 +37,8 @@ except ImportError:  # host Python, or a CircuitPython build without espnow
 from nextion.display import TOKENS as NEXTION_TOKENS
 
 # Retry only an already-provisioned profile. Credentials never use ESP-NOW.
-REMOTE_TOKENS = NEXTION_TOKENS | {b"NET_RETRY"}
+BLE_TOKENS = (b"BLE_PAUSE", b"BLE_ENABLE")
+REMOTE_TOKENS = NEXTION_TOKENS | {b"NET_RETRY", b"BLE_PAUSE", b"BLE_ENABLE"}
 
 FRAME_PREFIX = b"BMR1:"
 # Channel-discovery probe from the remote. Its only job is to be ACKed by
@@ -136,7 +139,7 @@ def runtime_version():
 
 
 class EspNowRemote:
-    """Non-blocking ESP-NOW receiver that yields Nextion-vocabulary tokens.
+    """Non-blocking ESP-NOW receiver that yields validated control tokens.
 
     main.py usage::
 
@@ -186,6 +189,7 @@ class EspNowRemote:
         self._tx_counts = None
         self._tx_backoff_until = 0.0
         self.tx_frames = 0
+        self._ble_requests = []
 
     def setup(self):
         """Bring the receiver up. Never raises; returns True when live."""
@@ -262,6 +266,16 @@ class EspNowRemote:
         """
         if not frame or len(frame) > MAX_FRAME_LEN or not frame.startswith(b"BMS2"):
             return False
+        return self._send_frame(frame)
+
+    def send_ble_status_frame(self, frame):
+        """Use the same single-outstanding-frame guard for a bounded BLS1."""
+        if not frame or len(frame) != 19 or not frame.startswith(b"BLS1"):
+            return False
+        return self._send_frame(frame)
+
+    def _send_frame(self, frame):
+        """Shared completion/backoff guard; no second radio send queue."""
         if not self.state_tx_ready():
             return False
         try:
@@ -413,11 +427,23 @@ class EspNowRemote:
         if len(self._recent_seqs) > MAX_RECENT_SEQS:
             self._recent_seqs.pop(0)
         self.rx_ok += 1
+        if token in BLE_TOKENS:
+            self._ble_requests.append((token, seq))
+            if len(self._ble_requests) > MAX_RECENT_SEQS:
+                self._ble_requests.pop(0)
         if rssi is None:
             self._log("[REMOTE] %s seq=%d" % (token.decode(), seq))
         else:
             self._log("[REMOTE] %s seq=%d rssi=%d" % (token.decode(), seq, rssi))
         return token
+
+    def take_ble_request(self, token):
+        """Consume the sequence belonging to one accepted BLE token in order."""
+        for index, (queued, sequence) in enumerate(self._ble_requests):
+            if queued == token:
+                self._ble_requests.pop(index)
+                return sequence
+        return None
 
     def _seen_recently(self, seq, now):
         # Expire entries older than the window first, so a remote reboot
