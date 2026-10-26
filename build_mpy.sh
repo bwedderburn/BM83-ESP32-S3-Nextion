@@ -115,6 +115,7 @@ if command -v rsync >/dev/null 2>&1; then
   rsync -a \
     --exclude="__pycache__" \
     --exclude=".artwork_wifi.json" \
+    --exclude=".metadata_bridge.json" \
     --exclude="*.py" \
     --exclude="lib/" \
     "${SRC_DIR}/" "${DIST_DIR}/"
@@ -132,7 +133,7 @@ else
       copy_failed=1
       break
     fi
-  done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -name ".artwork_wifi.json" ! -path "*/__pycache__/*" -print0)
+  done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -name ".artwork_wifi.json" ! -name ".metadata_bridge.json" ! -path "*/__pycache__/*" -print0)
 
   if (( copy_failed )); then
     exit 1

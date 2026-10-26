@@ -214,6 +214,9 @@ Hardware behavior is only partially covered by host tests; see [docs/hardware-te
 
 ## 🆘 Troubleshooting
 
+- On Macs whose Bluetooth stack omits track metadata, the optional
+  [Mac Wi-Fi metadata bridge](docs/mac-metadata-bridge.md) supplies title,
+  artist and album while audio continues over Bluetooth.
 - The volume remote exposes only Consumer Control HID reports, with keyboard,
   mouse and boot-keyboard interfaces omitted. It should not make an iPhone
   treat the unit as a typing keyboard. After updating from the old composite

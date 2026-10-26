@@ -16,6 +16,8 @@ Failure-mode rules this module follows:
 
 * It never raises into the main loop. Every radio call is guarded; a radio
   error pauses polling for a bounded back-off, then polling resumes.
+  A native "Invalid buffer" error rebuilds only ESP-NOW's damaged receive
+  queue, preserving the joined Wi-Fi network, BLE and controller state.
 * poll() is non-blocking and drains at most ``max_frames`` per call.
 * Frames from any MAC other than the paired remote are dropped. This fails
   closed on purpose: the vocabulary includes BT_EBIND, a bond wipe.
@@ -162,6 +164,7 @@ class EspNowRemote:
         self._clock = time.monotonic if clock is None else clock
         self._log = log
         self._radio = None
+        self._rx_consumed = 0
         self.enabled = False
         self.rx_ok = 0
         self.rx_dup = 0
@@ -169,6 +172,9 @@ class EspNowRemote:
         self.rx_bad = 0
         self.rx_err = 0
         self.rx_probe = 0
+        self.rx_recoveries = 0
+        self._rx_restart_pending = False
+        self._rx_restart_at = 0.0
         self._recent_seqs = []  # [(seq, accepted_at)], newest last
         self._paused_until = 0.0
         self._foreign_seen = []
@@ -202,6 +208,9 @@ class EspNowRemote:
             return False
         try:
             self._radio = self._mod.ESPNow()
+            # The native singleton is newly allocated/zeroed on each setup.
+            # Captures arriving during setup remain unread and start at zero.
+            self._rx_consumed = 0
         except Exception as e:  # WiFi/ESP-NOW bring-up must never kill main.py
             self._radio = None
             self._log("[REMOTE] ESP-NOW init failed: %r -> receiver off" % (e,))
@@ -291,32 +300,96 @@ class EspNowRemote:
         except Exception:
             return "?"
 
+    def _recover_rx(self, now):
+        """Replace a damaged native queue once, without restarting Wi-Fi/BLE.
+
+        CircuitPython 10.3.1's ESPNow.read consumes the ring-buffer header
+        before checking its packet body and raises Invalid buffer for lost
+        framing. Backoff alone retains that poisoned queue. Its supported
+        deinit unregisters ESP-NOW callbacks and releases only that queue;
+        constructing another instance keeps an already enabled Wi-Fi radio.
+        """
+        self._rx_restart_at = now + ERROR_BACKOFF_S
+        self._paused_until = self._rx_restart_at
+        self.enabled = False
+        self.state_tx_enabled = False
+        self._tx_peer = None
+        self._tx_pending = False
+        self._tx_counts = None
+        self._tx_backoff_until = 0.0
+        self._log("[REMOTE] rebuilding ESP-NOW receive buffer")
+        try:
+            if self._radio is not None:
+                self._radio.deinit()
+                self._radio = None
+            if self.setup():
+                self._rx_restart_pending = False
+                self._paused_until = 0.0
+                self.rx_recoveries += 1
+                self._log("[REMOTE] ESP-NOW receive buffer restored")
+                return True
+        except Exception:  # nosec B110
+            # Retain the old reference if deinit failed, so a later bounded
+            # attempt can release it instead of constructing an active singleton.
+            pass
+        self._log("[REMOTE] receive recovery deferred %.0fs" % ERROR_BACKOFF_S)
+        return False
+
+    def _read_error(self, error, now):
+        self.rx_err += 1
+        if isinstance(error, ValueError) and error.args == ("Invalid buffer",):
+            self._rx_restart_pending = True
+            self._log("[REMOTE] invalid ESP-NOW receive buffer #%d" % self.rx_err)
+            if now >= self._rx_restart_at:
+                self._recover_rx(now)
+            else:
+                self._paused_until = self._rx_restart_at
+        else:
+            self._paused_until = now + ERROR_BACKOFF_S
+            self._log("[REMOTE] ESP-NOW read error #%d: %r -> pausing %.0fs" % (
+                self.rx_err, error, ERROR_BACKOFF_S))
+
+    def _rx_ready(self, now):
+        if now < self._paused_until:
+            return False
+        if self._rx_restart_pending:
+            self._recover_rx(now)
+            return False
+        return True
+
+    def _packet_available(self):
+        # CP 10.3.1 increments read_success only after header, MAC and payload
+        # have all entered its native ring. bool(ESPNow) sees even a partial
+        # header, which read() would destructively consume before raising.
+        completed = getattr(self._radio, "read_success", None)
+        if type(completed) is int:
+            return ((completed - self._rx_consumed) & MAX_SEQ) != 0
+        return bool(self._radio)  # Older APIs and host doubles lack the counter.
+
     def poll(self, max_frames=4):
         """Drain up to ``max_frames`` packets; return accepted tokens, or ()."""
-        if not self.enabled:
+        if not self.enabled and not self._rx_restart_pending:
             return ()
         now = self._clock()
         self._tick_stats(now)
-        if now < self._paused_until:
+        if not self._rx_ready(now):
             return ()
         tokens = None
         try:
-            if not self._radio:  # ESPNow is falsy when nothing is buffered
-                return ()
             for _ in range(max_frames):
+                if not self._packet_available():
+                    break
                 pkt = self._radio.read()
                 if pkt is None:
                     break
+                self._rx_consumed = (self._rx_consumed + 1) & MAX_SEQ
                 tok = self.accept(pkt.mac, pkt.msg, now, getattr(pkt, "rssi", None))
                 if tok is not None:
                     if tokens is None:
                         tokens = []
                     tokens.append(tok)
         except Exception as e:  # never propagate into the main loop
-            self.rx_err += 1
-            self._paused_until = now + ERROR_BACKOFF_S
-            self._log("[REMOTE] ESP-NOW read error #%d: %r -> pausing %.0fs" % (
-                self.rx_err, e, ERROR_BACKOFF_S))
+            self._read_error(e, now)
         return tokens if tokens else ()
 
     def accept(self, mac, msg, now, rssi=None):
