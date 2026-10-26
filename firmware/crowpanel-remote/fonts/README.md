@@ -2,16 +2,20 @@
 
 The title, artist and album labels keep LVGL's built-in Montserrat fonts as
 their primary font. Matching Montserrat supplements provide precomposed
-European Latin characters, including `é`, `í`, `â`, `Ł` and `œ`, at 28, 20 and
-18 pixels. This changes rendering only: metadata and artwork lookup text retain
-their original UTF-8 bytes.
+European Latin characters, including `é`, `í`, `â`, `Ł` and `œ`, plus Cyrillic
+`Ӧ`/`ӧ`, at 28, 20 and 18 pixels. This changes rendering only: metadata and
+artwork lookup text retain their original UTF-8 bytes.
 
 The supplemental fonts contain U+00A0–U+017F (Latin-1 Supplement and Latin
-Extended-A), plus supported European punctuation from U+2010–U+2027,
-U+2030, U+2039–U+203A, U+20AC and U+2122. The generated cmaps contain 244
-characters per size. They do not provide full Unicode coverage or combining
-mark shaping; missing glyphs outside this set remain visible in the serial
-diagnostic. Nextion's separate ASCII rendering is unaffected.
+Extended-A), U+04E6–U+04E7, plus supported European punctuation from U+2010–U+2027,
+U+2030, U+2039–U+203A, U+20AC and U+2122. The generated cmaps contain 246
+characters per size. The display helper composes only Latin `O`/`o` plus U+0308
+to `Ö`/`ö`, and Cyrillic `О`/`о` plus U+0308 to `Ӧ`/`ӧ`. These canonical pairs
+retain the original script; they do not transliterate Cyrillic to Latin.
+This is limited display composition, not a full Unicode NFC normalizer or
+combining-mark shaping engine. Other UTF-8 remains unchanged, and missing
+glyphs outside this set remain visible in the serial diagnostic. Nextion's
+separate ASCII rendering is unaffected.
 
 LVGL 8 draws fallback glyphs on the primary font's baseline. The wrappers in
 `src/metadata_fonts.cpp` copy the built-in descriptor and expand its ascent and
@@ -54,10 +58,10 @@ python3 firmware/crowpanel-remote/fonts/generate.py \
 
 The generator verifies the source hash and converter version, uses 4bpp
 uncompressed glyphs (matching the firmware configuration), and writes stable
-paths into the generated headers. It emits explicit sparse membership for the
-Latin cmap to avoid LVGL 8.3.11's dense-cmap end-boundary quirk: unsupported
-U+0180 must not resolve to the following cmap's first glyph. This adds 448 bytes
-per font. The three bitmap arrays total about 81 KB;
+paths into the generated headers. It converts every emitted dense cmap to
+explicit sparse membership to avoid LVGL 8.3.11's end-boundary quirk:
+unsupported U+0180 and U+04E8 must not resolve to another glyph. The Latin
+membership list adds 448 bytes per font. The three bitmap arrays total about 82 KB;
 font descriptors and kerning tables add to the final flash footprint. No font
 file needs to be placed on the SD card and there is no runtime computer helper.
 
@@ -79,13 +83,18 @@ check every glyph's bounds, the user examples, and the production wrappers:
 python3 -m pytest tests/test_crowpanel_metadata_fonts.py -q
 ```
 
-For an additional check with LVGL's real font decoder, point this script at the
-pinned dependency source installed by PlatformIO. It compiles only LVGL's font
-decoder, the base fonts, the shipped supplements and the production wrappers,
-then queries glyphs/bitmaps and checks baseline bounds and unchanged ASCII/icon
-bitmaps. It does not connect to hardware:
+For an additional check, point this script at the pinned LVGL 8.3.11 source
+installed by PlatformIO. It compiles the complete renderer into a temporary
+directory and checks the production helper, fonts and wrappers at all three
+sizes. Tests cover glyph/bitmap bounds and real offscreen label pixels: the
+decomposed Cyrillic and Latin pairs match their precomposed forms without
+placeholders or clipping, and baseline-aligned ASCII/icon pixels stay unchanged.
+This does not connect to hardware:
 
 ```sh
 python3 firmware/crowpanel-remote/fonts/check_lvgl.py \
   --lvgl firmware/crowpanel-remote/.pio/libdeps/crowpanel_esp32s3_7in/lvgl
 ```
+
+Add `--render-output /absolute/output/directory` to save six before/after PPM
+images of the user's Cyrillic title at the three font sizes.

@@ -32,12 +32,17 @@ static void check(const lv_font_t *font, const lv_font_t &base) {
         assert(glyph.box_w == original.box_w && glyph.box_h == original.box_h);
         assert(lv_font_get_glyph_bitmap(font, code) == lv_font_get_glyph_bitmap(&base, code));
     }
-    // User examples: Dorénavant, previous í, and Windows Flâneur.
-    for (uint32_t code : {0xE9u, 0xEDu, 0xE2u}) {
+    // User examples include Latin accents and Cyrillic O/o with diaeresis.
+    for (uint32_t code : {0xE9u, 0xEDu, 0xE2u, 0x4E6u, 0x4E7u}) {
         assert(lv_font_get_glyph_dsc(font, &glyph, code, 0));
         assert(!glyph.is_placeholder && glyph.resolved_font == font->fallback);
+        assert(glyph.box_w && glyph.box_h);
+        assert(lv_font_get_glyph_bitmap(glyph.resolved_font, code));
+        assert(glyph.box_h + glyph.ofs_y <= font->line_height - font->base_line);
+        assert(glyph.ofs_y >= -font->base_line);
     }
     assert(!lv_font_get_glyph_dsc(font, &glyph, 0x180, 0));  // just beyond supported Latin
+    assert(!lv_font_get_glyph_dsc(font, &glyph, 0x4E8, 0));  // just beyond Cyrillic pair
     assert(!lv_font_get_glyph_dsc(font, &glyph, 0x4E2D, 0));  // no full CJK promise
     std::printf("LVGL glyphs/bitmap/baseline passed: height=%d baseline=%d\n",
                 font->line_height, font->base_line);

@@ -31,6 +31,7 @@
 #include "espnow_link.h"
 #include "now_playing.h"
 #include "metadata_fonts.h"
+#include "metadata_text.h"
 #include "artwork.h"
 #include "artwork_ca_bundle.h"
 #include "network_setup.h"
@@ -512,18 +513,26 @@ static void ui_set_now_playing(uint32_t now) {
             default: playback = "Playback status unavailable"; break;
         }
     }
-    set_label(g_title_label, title);
-    set_label(g_artist_label, artist);
-    set_label(g_album_label, album);
+    // Compose only the label copies; artwork and the model keep original UTF-8.
+    // These substitutions shrink text already bounded by MAX_TEXT_BYTES.
+    char display_title[now_playing::MAX_TEXT_BYTES + 1];
+    char display_artist[now_playing::MAX_TEXT_BYTES + 1];
+    char display_album[now_playing::MAX_TEXT_BYTES + 1];
+    metadata_text::compose_diaeresis(title, display_title, sizeof(display_title));
+    metadata_text::compose_diaeresis(artist, display_artist, sizeof(display_artist));
+    metadata_text::compose_diaeresis(album, display_album, sizeof(display_album));
+    set_label(g_title_label, display_title);
+    set_label(g_artist_label, display_artist);
+    set_label(g_album_label, display_album);
     set_label(g_playback_label, playback);
     set_label(g_play_button_label, play_button);
     char eq_text[24];
     snprintf(eq_text, sizeof(eq_text), "EQ: %s", fresh && state.power_on ? eq_name(state.eq_index) : "--");
     set_label(g_eq_label, eq_text);
     if (bluetooth) {
-        log_missing_glyphs(0, "title", state.title, metadata_fonts::title());
-        log_missing_glyphs(1, "artist", state.artist, metadata_fonts::artist());
-        log_missing_glyphs(2, "album", state.album, metadata_fonts::album());
+        log_missing_glyphs(0, "title", display_title, metadata_fonts::title());
+        log_missing_glyphs(1, "artist", display_artist, metadata_fonts::artist());
+        log_missing_glyphs(2, "album", display_album, metadata_fonts::album());
     }
 
     const uint32_t position = bluetooth ? g_now_playing.position(now) : now_playing::UNKNOWN;

@@ -4,36 +4,47 @@
 import argparse
 import hashlib
 from pathlib import Path
+import re
 import subprocess  # nosec B404 - invokes the explicitly supplied local build tool
 
 ROOT = Path(__file__).resolve().parent
 FONT_SHA256 = "421f26b23e2be6b98373d32acd3cb2897b154d4bf0a77d26534ce476e4cbed53"
 CONVERTER_VERSION = "1.5.3"
-RANGES = "0xA0-0x17F,0x2010-0x2027,0x2030,0x2039-0x203A,0x20AC,0x2122"
+RANGES = "0xA0-0x17F,0x4E6-0x4E7,0x2010-0x2027,0x2030,0x2039-0x203A,0x20AC,0x2122"
 
 
-def harden_latin_cmap(path):
+def harden_dense_cmaps(path):
     # LVGL 8.3.11's dense cmap decoder accepts range_start + range_length,
     # one past the converter's final glyph. An explicit sparse membership list
-    # avoids displaying the next cmap's first glyph for unsupported U+0180.
+    # avoids displaying the next cmap's first glyph for unsupported U+0180,
+    # U+04E8, or any future dense range's first excluded codepoint.
     text = path.read_text(encoding="utf-8")
-    original = (
-        ".range_start = 160, .range_length = 224, .glyph_id_start = 1,\n"
-        "        .unicode_list = NULL, .glyph_id_ofs_list = NULL, .list_length = 0, "
-        ".type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY")
-    replacement = (
-        ".range_start = 160, .range_length = 224, .glyph_id_start = 1,\n"
-        "        .unicode_list = latin_unicode_list, .glyph_id_ofs_list = NULL, "
-        ".list_length = 224, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY")
+    dense = re.compile(
+        r"\.range_start = (\d+), \.range_length = (\d+), \.glyph_id_start = (\d+),\s+"
+        r"\.unicode_list = NULL, \.glyph_id_ofs_list = NULL, \.list_length = 0, "
+        r"\.type = LV_FONT_FMT_TXT_CMAP_FORMAT0_TINY")
+    lists = []
+
+    def sparse(match):
+        start, length, glyph_start = (int(value) for value in match.groups())
+        name = "cmap_unicode_list_%d" % len(lists)
+        rows = ["    " + ", ".join("0x%x" % value for value in range(row, min(row + 8, length)))
+                for row in range(0, length, 8)]
+        lists.append("static const uint16_t %s[] = {\n%s\n};\n\n" % (name, ",\n".join(rows)))
+        return (
+            ".range_start = %d, .range_length = %d, .glyph_id_start = %d,\n"
+            "        .unicode_list = %s, .glyph_id_ofs_list = NULL, "
+            ".list_length = %d, .type = LV_FONT_FMT_TXT_CMAP_SPARSE_TINY"
+        ) % (start, length, glyph_start, name, length)
+
+    text = dense.sub(sparse, text)
     marker = "/*Collect the unicode lists and glyph_id offsets*/"
-    if text.count(original) != 1 or text.count(marker) != 1:
+    if not lists or text.count(marker) != 1 or "LV_FONT_FMT_TXT_CMAP_FORMAT0_" in text:
         raise SystemExit("Unexpected converter cmap layout in %s" % path)
-    rows = ["    " + ", ".join("0x%x" % value for value in range(start, start + 8))
-            for start in range(0, 224, 8)]
     explicit_list = (
         "/*Explicit membership avoids the LVGL 8.3.11 dense-cmap end-boundary quirk.*/\n"
-        "static const uint16_t latin_unicode_list[] = {\n" + ",\n".join(rows) + "\n};\n\n")
-    text = text.replace(original, replacement).replace(marker, explicit_list + marker)
+        + "".join(lists))
+    text = text.replace(marker, explicit_list + marker)
     path.write_text(text.rstrip() + "\n", encoding="utf-8")
 
 
@@ -58,7 +69,7 @@ def main():
             "--lv-include", "lvgl.h", "--force-fast-kern-format",
             "-o", "../src/fonts/bm83_latin_%d.c" % size,
         ], cwd=ROOT, check=True)
-        harden_latin_cmap(ROOT / ".." / "src" / "fonts" / ("bm83_latin_%d.c" % size))
+        harden_dense_cmaps(ROOT / ".." / "src" / "fonts" / ("bm83_latin_%d.c" % size))
 
 
 if __name__ == "__main__":
