@@ -114,7 +114,7 @@ static bool load(ArtworkResult &result) {
 }
 
 static void negative_migration() {
-    for (unsigned version : {1U, 2U, 3U, 4U}) {
+    for (unsigned version : {1U, 2U, 3U, 4U, 5U}) {
         seed(version, true);
         const auto before = files;
         Meta meta;
@@ -123,7 +123,7 @@ static void negative_migration() {
         assert(!load(result));          // An old miss must try the alias-aware matcher.
         assert(files == before && decoded == 0);
     }
-    seed(5, true);
+    seed(6, true);
     ArtworkResult result;
     const auto before = files;
     now = 499;
@@ -138,7 +138,7 @@ static void negative_migration() {
 static void positive_migration() {
     const String meta_path = String("/bm83-artwork/aw-") + HASH + ".meta";
     const String image_path = String("/bm83-artwork/aw-") + HASH + ".jpg";
-    for (unsigned version : {1U, 2U, 3U, 4U, 5U}) {
+    for (unsigned version : {1U, 2U, 3U, 4U, 5U, 6U}) {
         seed(version, false);
         const auto before = files;
         now = 0;  // Positive covers must remain usable without network time.
@@ -181,7 +181,7 @@ static void damaged_metadata() {
 
     for (unsigned damage = 0; damage < 5; ++damage) {
         Meta meta = seed(5, false);
-        if (damage == 0) meta.magic[7] = '6';
+        if (damage == 0) meta.magic[7] = '7';
         if (damage == 1) meta.negative = 2;
         if (damage == 2) meta.group[0] = 'z';
         if (damage == 3) meta.group[36] = 'x';
@@ -224,7 +224,7 @@ static void damaged_images_and_io() {
 
 int main() {
     static_assert(sizeof(Meta) == 64, "Existing on-card metadata layout changed");
-    assert(std::memcmp(META_MAGIC, "BMART005", sizeof(META_MAGIC)) == 0);
+    assert(std::memcmp(META_MAGIC, "BMART006", sizeof(META_MAGIC)) == 0);
     negative_migration();
     positive_migration();
     damaged_metadata();

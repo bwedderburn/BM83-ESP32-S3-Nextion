@@ -44,8 +44,9 @@ const char META_MAGIC_V1[8] = {'B','M','A','R','T','0','0','1'};
 const char META_MAGIC_V2[8] = {'B','M','A','R','T','0','0','2'};
 const char META_MAGIC_V3[8] = {'B','M','A','R','T','0','0','3'};
 const char META_MAGIC_V4[8] = {'B','M','A','R','T','0','0','4'};
+const char META_MAGIC_V5[8] = {'B','M','A','R','T','0','0','5'};
 // Same layout/MB identity and keys; old misses must retry declared aliases.
-const char META_MAGIC[8] = {'B','M','A','R','T','0','0','5'};
+const char META_MAGIC[8] = {'B','M','A','R','T','0','0','6'};
 
 struct Job {
     uint32_t id;
@@ -200,7 +201,8 @@ bool read_meta(const String &hash, Meta &meta) {
             memcmp(meta.magic, META_MAGIC_V1, sizeof(META_MAGIC_V1)) == 0 ||
             memcmp(meta.magic, META_MAGIC_V2, sizeof(META_MAGIC_V2)) == 0 ||
             memcmp(meta.magic, META_MAGIC_V3, sizeof(META_MAGIC_V3)) == 0 ||
-            memcmp(meta.magic, META_MAGIC_V4, sizeof(META_MAGIC_V4)) == 0) && meta.negative <= 1 &&
+            memcmp(meta.magic, META_MAGIC_V4, sizeof(META_MAGIC_V4)) == 0 ||
+            memcmp(meta.magic, META_MAGIC_V5, sizeof(META_MAGIC_V5)) == 0) && meta.negative <= 1 &&
            meta.group[36] == '\0' &&
            (meta.negative || artwork_matching::valid_mbid(meta.group));
 }

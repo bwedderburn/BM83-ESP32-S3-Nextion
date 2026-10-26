@@ -1,6 +1,7 @@
 #include "matching.h"
 
 #include <assert.h>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -306,7 +307,92 @@ static void typed_label_candidate_query_is_bounded_and_escaped() {
     assert(output.empty());
 }
 
-int main() {
+static void encore_source_album_annotations() {
+    Candidate candidate = match("Artist", "Album", "Song");
+    candidate.primary_type = "Album";
+    for (const char *album : {"Album (Encore Edition)", "Album [Encore Edition]",
+                              "Album - Encore Edition", " ALBUM (ENCORE EDITION) ",
+                              "Album \xE2\x80\x93 Encore Edition"}) {
+        assert(artwork_matching::select_album({"Artist", album, ""}, &candidate, 1).outcome == Outcome::Matched);
+        assert(artwork_matching::select_recording({"Artist", album, "Song"}, &candidate, 1).outcome == Outcome::Matched);
+    }
+    // Edition compatibility is album-only; stable cache and song keys do not change.
+    assert(artwork_matching::normalized_key("Album (Encore Edition)", true) == "album (encore edition)");
+    assert(artwork_matching::identity_key("Album (Encore Edition)", true) == "album (encore edition)");
+    assert(artwork_matching::select_recording({"Artist", "", "Song (Encore Edition)"},
+                                             &candidate, 1).outcome == Outcome::NoMatch);
+}
+
+static void encore_requires_exact_album_type_and_known_annotation() {
+    Candidate candidate = match("Artist", "Album", "Song");
+    const Query query = {"Artist", "Album (Encore Edition)", "Song"};
+    const char *wrong_types[] = {nullptr, "", "EP", "Single", "album", "Album "};
+    for (const char *type : wrong_types) {
+        candidate.primary_type = type;
+        assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::NoMatch);
+    }
+    candidate.primary_type = "Album";
+    for (const char *album : {"Album (Encore)", "Album Encore Edition", "Album(Encore Edition)",
+                              "Album (Encore Edition Live)", "Album (Encore Edition Remix)",
+                              "Album (Live) (Encore Edition)", "Album (Remix) [Encore Edition]",
+                              "Album (Live)", "Album (Remix)", "Album (Deluxe)", "Album (Acoustic)"})
+        assert(artwork_matching::select_album({"Artist", album, ""}, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.album = "Album (Encore Edition)";
+    candidate.primary_type = "EP";
+    assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::Matched);
+    assert(artwork_matching::select_album({"Artist", "Album", ""}, &candidate, 1).outcome == Outcome::NoMatch);
+}
+
+static void encore_preserves_artist_score_credit_and_unique_group_guards() {
+    const Query query = {"Artist", "Album (Encore Edition)", "Song"};
+    Candidate candidate = match("Artist", "Album", "Song");
+    candidate.primary_type = "Album";
+    candidate.artist = "Artist (Encore Edition)";
+    assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.artist = "Artist";
+    candidate.score = 94;
+    assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.score = 100;
+    candidate.artist_credit_count = 2;
+    assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.artist_credit_count = 1;
+    candidate.compilation = true;
+    assert(artwork_matching::select_album(query, &candidate, 1).outcome == Outcome::NoMatch);
+    candidate.compilation = false;
+    Candidate ambiguous[] = {candidate, candidate};
+    ambiguous[1].art_id = GROUP_B;
+    assert(artwork_matching::select_album(query, ambiguous, 2).outcome == Outcome::Ambiguous);
+    ambiguous[1].art_id = GROUP_A;
+    assert(artwork_matching::select_album(query, ambiguous, 2).outcome == Outcome::Matched);
+}
+
+static void encore_fallback_query_is_strict_escaped_and_bounded() {
+    std::string output;
+    assert(artwork_matching::album_fallback_query(
+        {"Animals As Leaders", "Animals As Leaders (Encore Edition)", ""}, output));
+    assert(output == "releasegroup:\"animals as leaders\" AND artist:\"Animals As Leaders\"");
+    assert(artwork_matching::album_fallback_query(
+        {"A \"Quoted\" \\ Artist", "AC/DC [Encore Edition]", ""}, output));
+    assert(output == "releasegroup:\"ac/dc\" AND artist:\"A \\\"Quoted\\\" \\\\ Artist\"");
+    assert(artwork_matching::album_fallback_query({"Artist", "\xE6\x9D\xB1\xE4\xBA\xAC - Encore Edition", ""}, output));
+    assert(output == "releasegroup:\"\xE6\x9D\xB1\xE4\xBA\xAC\" AND artist:\"Artist\"");
+    const std::string escaped(180, '\\');
+    assert(!artwork_matching::album_fallback_query(
+        {escaped.c_str(), "Album (Encore Edition)", ""}, output));
+    assert(output.empty());
+}
+
+static void encore_actual_catalog_candidate(int argc, char *argv[]) {
+    assert(argc == 7);
+    const Candidate candidate = {argv[1], argv[2], "", argv[3],
+        static_cast<unsigned>(std::strtoul(argv[4], nullptr, 10)),
+        static_cast<unsigned>(std::strtoul(argv[5], nullptr, 10)), false, argv[6]};
+    const auto result = artwork_matching::select_album(
+        {"Animals As Leaders", "Animals As Leaders (Encore Edition)", ""}, &candidate, 1);
+    assert(result.outcome == Outcome::Matched && result.index == 0);
+}
+
+int main(int argc, char *argv[]) {
     exact_album();
     normalized_identity();
     missing_album_recording_fallback();
@@ -325,5 +411,10 @@ int main() {
     typed_labels_require_exact_primary_type_only_when_needed();
     typed_labels_preserve_other_identity_and_ambiguity_rules();
     typed_label_candidate_query_is_bounded_and_escaped();
-    std::cout << "18 matching scenarios passed\n";
+    encore_source_album_annotations();
+    encore_requires_exact_album_type_and_known_annotation();
+    encore_preserves_artist_score_credit_and_unique_group_guards();
+    encore_fallback_query_is_strict_escaped_and_bounded();
+    encore_actual_catalog_candidate(argc, argv);
+    std::cout << "23 matching scenarios passed\n";
 }
