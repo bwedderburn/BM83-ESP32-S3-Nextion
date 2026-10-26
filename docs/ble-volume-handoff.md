@@ -27,6 +27,11 @@ The previous host can reconnect first if it is still trying. If that happens,
 Pause again, release the previous host and Enable when the desired host is ready.
 Pair a genuinely new host normally after enabling; existing hosts stay bonded.
 
+For first-time Windows pairing, choose **Add device → Bluetooth → Show all
+devices** if the remote is absent from the initial list. Windows can filter this
+volume-only remote from its default discovery results. This is initial setup;
+subsequent handoffs use the saved entry and do not require removal or re-pairing.
+
 The panel reports completion from fresh observations of the audio unit, not from
 a wireless delivery acknowledgement. **Request unconfirmed** means completion
 was not confirmed; **Volume remote unavailable** or a disabled button can mean
