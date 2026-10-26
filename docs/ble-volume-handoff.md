@@ -27,6 +27,24 @@ The previous host can reconnect first if it is still trying. If that happens,
 Pause again, release the previous host and Enable when the desired host is ready.
 Pair a genuinely new host normally after enabling; existing hosts stay bonded.
 
+For Windows standby, use **Settings → Bluetooth & devices → Bluetooth → Off**.
+On iPhone, use **Settings → Bluetooth → Off**. Turn Bluetooth back on when that
+host is wanted again. These switches retain pairings and disconnect the host's
+other Bluetooth accessories.
+
+On Raspberry Pi/Linux, after Pause is confirmed, temporarily block only the BLE
+volume remote to stop it reconnecting while keeping the radio available. Find
+its address with `bluetoothctl devices`, then use:
+
+```sh
+bluetoothctl block AA:BB:CC:DD:EE:FF
+# Before returning to the Pi, restore this saved remote:
+bluetoothctl unblock AA:BB:CC:DD:EE:FF
+```
+
+Blocking retains the bond. Unblock the remote before enabling it for the Pi and
+keep the pairing entry saved throughout.
+
 For first-time Windows pairing, choose **Add device → Bluetooth → Show all
 devices** if the remote is absent from the initial list. Windows can filter this
 volume-only remote from its default discovery results. This is initial setup;
