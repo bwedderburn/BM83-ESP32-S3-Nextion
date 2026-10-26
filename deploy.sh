@@ -43,7 +43,7 @@ done
 if [ "$MODE" = "mpy" ]; then
   SRC_DIR="$REPO_DIR/dist/circuitpython"
   SRC_LABEL="dist/circuitpython (.mpy build)"
-  if [ ! -f "$SRC_DIR/main.py" ] || [ ! -d "$SRC_DIR/lib" ]; then
+  if [ ! -f "$SRC_DIR/boot.py" ] || [ ! -f "$SRC_DIR/main.py" ] || [ ! -d "$SRC_DIR/lib" ]; then
     echo "dist/circuitpython is missing or incomplete." >&2
     echo "Run ./build_mpy.sh first, then retry with --mpy." >&2
     exit 1
@@ -59,6 +59,11 @@ else
   SRC_LABEL="firmware/circuitpython (.py source)"
 fi
 
+if [ ! -f "$SRC_DIR/boot.py" ]; then
+  echo "Required startup file is missing: $SRC_DIR/boot.py" >&2
+  exit 1
+fi
+
 if [ ! -d "$CIRCUITPY_PATH" ]; then
   echo "CIRCUITPY drive not found at $CIRCUITPY_PATH" >&2
   echo "If the board is connected, set CIRCUITPY_PATH to its mount point:" >&2
@@ -72,11 +77,12 @@ echo "Deploying $SRC_LABEL -> $CIRCUITPY_PATH..."
 # without rsync (notably Git Bash / MSYS on Windows). The cp path is a
 # full overwrite each time — slower but correct.
 if command -v rsync >/dev/null 2>&1; then
-  rsync -av --exclude="__pycache__" "$SRC_DIR/main.py" "$CIRCUITPY_PATH/"
+  rsync -av --exclude="__pycache__" "$SRC_DIR/boot.py" "$SRC_DIR/main.py" "$CIRCUITPY_PATH/"
   mkdir -p "$CIRCUITPY_PATH/lib"
   rsync -av --exclude="__pycache__" "$SRC_DIR/lib/" "$CIRCUITPY_PATH/lib/"
 else
   echo "rsync not found; falling back to cp. Install rsync for faster deploys."
+  cp "$SRC_DIR/boot.py" "$CIRCUITPY_PATH/boot.py"
   cp "$SRC_DIR/main.py" "$CIRCUITPY_PATH/main.py"
   mkdir -p "$CIRCUITPY_PATH/lib"
   # cp -r the lib tree, excluding __pycache__ dirs after the fact since
