@@ -37,9 +37,9 @@ public:
         if (result != WAITING) return;
         if (status.fresh(now)) {
             const ble_status::Status &s = status.state;
-            const uint16_t distance = static_cast<uint16_t>(s.sequence - baseline_);
+            const uint32_t distance = s.sequence - baseline_;
             if (s.session != session_) { result = RESTARTED; return; }
-            if (distance && distance < 0x8000 && s.request_seq == request_) {
+            if (distance && distance < 0x80000000U && s.request_seq == request_) {
                 if (s.mode == ble_status::MODE_ERROR) { result = FAILED; return; }
                 if ((pause_ && status.confirmed_paused(now)) ||
                     (!pause_ && s.mode == ble_status::MODE_ENABLED &&
@@ -55,8 +55,7 @@ public:
 
 private:
     bool pause_;
-    uint32_t request_, session_, sent_at_;
-    uint16_t baseline_;
+    uint32_t request_, session_, sent_at_, baseline_;
 };
 
 }  // namespace ble_control

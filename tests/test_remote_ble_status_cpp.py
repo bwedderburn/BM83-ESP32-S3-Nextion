@@ -1,4 +1,4 @@
-"""Compile the real BLS1 C++ decoder and exercise hardware-free scenarios."""
+"""Compile the real BLS2 C++ decoder and exercise hardware-free scenarios."""
 import os
 import shutil
 import subprocess  # nosec B404 - local compiler and built host test only
@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-SCENARIOS = ("golden", "malformed", "validation", "ordering", "sessions", "expiry")
+SCENARIOS = ("golden", "malformed", "validation", "ordering", "sessions", "expiry", "long-outage")
 
 
 @pytest.fixture(scope="module")

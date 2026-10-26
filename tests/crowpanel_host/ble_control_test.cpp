@@ -6,20 +6,19 @@ static void put32(uint8_t *out, uint32_t value) {
     for (int i = 3; i >= 0; --i) { out[i] = static_cast<uint8_t>(value); value >>= 8; }
 }
 
-static bool report(ble_control::Control &control, uint32_t session, uint16_t sequence,
+static bool report(ble_control::Control &control, uint32_t session, uint32_t sequence,
                    uint8_t mode, uint8_t flags, uint32_t request, uint32_t now,
                    uint8_t error = 0) {
-    uint8_t frame[19] = {'B', 'L', 'S', '1'};
+    uint8_t frame[21] = {'B', 'L', 'S', '2'};
     put32(frame + 4, session);
-    frame[8] = static_cast<uint8_t>(sequence >> 8);
-    frame[9] = static_cast<uint8_t>(sequence);
-    frame[10] = mode;
-    frame[11] = flags;
-    put32(frame + 12, request);
-    frame[16] = error;
-    const uint16_t crc = ble_status::crc16(frame, 17);
-    frame[17] = static_cast<uint8_t>(crc >> 8);
-    frame[18] = static_cast<uint8_t>(crc);
+    put32(frame + 8, sequence);
+    frame[12] = mode;
+    frame[13] = flags;
+    put32(frame + 14, request);
+    frame[18] = error;
+    const uint16_t crc = ble_status::crc16(frame, 19);
+    frame[19] = static_cast<uint8_t>(crc >> 8);
+    frame[20] = static_cast<uint8_t>(crc);
     const bool accepted = control.status.accept(frame, sizeof(frame), now);
     control.tick(now);
     return accepted;
@@ -46,7 +45,7 @@ static void pause_confirmation() {
 
 static void enable_confirmation() {
     ble_control::Control control;
-    assert(report(control, 1, 0xFFFF, 2, 2, 0, 0));
+    assert(report(control, 1, 0xFFFFFFFFU, 2, 2, 0, 0));
     assert(control.begin(false, 43, 0));
     assert(report(control, 1, 0, 0, 3, 43, 100));  // Intent alone is insufficient.
     assert(control.result == ble_control::WAITING);
@@ -76,11 +75,29 @@ static void stale_reboot_and_deadline() {
     assert(!report(control, 1, 2, 2, 2, 42, 200));
 }
 
+static void long_outage_confirmation() {
+    ble_control::Control control;
+    assert(report(control, 1, 1, 2, 2, 42, 0));
+    assert(report(control, 1, 2, 0, 7, 43, 1000));
+    assert(!control.can_request(4000));
+    assert(report(control, 1, 40002, 0, 7, 43, 40001000));
+    assert(control.can_request(40001000));
+    assert(control.begin(true, 44, 40001000));
+    // An old Paused echo must not complete a request after recovery.
+    assert(!report(control, 1, 1, 2, 2, 44, 40001100));
+    assert(control.result == ble_control::WAITING);
+    assert(report(control, 1, 40003, 2, 2, 43, 40001200));
+    assert(control.result == ble_control::WAITING);
+    assert(report(control, 1, 40004, 2, 2, 44, 40001300));
+    assert(control.result == ble_control::CONFIRMED);
+}
+
 int main(int argc, char **argv) {
     assert(argc == 2);
     if (strcmp(argv[1], "pause") == 0) pause_confirmation();
     else if (strcmp(argv[1], "enable") == 0) enable_confirmation();
     else if (strcmp(argv[1], "expiry") == 0) stale_reboot_and_deadline();
+    else if (strcmp(argv[1], "long-outage") == 0) long_outage_confirmation();
     else return 2;
     return 0;
 }

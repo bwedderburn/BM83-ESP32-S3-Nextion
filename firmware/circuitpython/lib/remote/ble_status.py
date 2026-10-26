@@ -1,15 +1,15 @@
 """Observed BLE volume-remote state, separate from BMS2 audio metadata.
 
-BLS1 is one 19-byte frame: magic, boot session u32, sequence u16, mode,
+BLS2 is one 21-byte frame: magic, boot session u32, sequence u32, mode,
 flags, last validated BLE control sequence u32, error, then CRC16 over the
-first 17 bytes. A request echo confirms receipt, never successful completion.
+first 19 bytes. A request echo confirms receipt, never successful completion.
 """
 import os
 
 from utils.ticks import ticks_add, ticks_diff, ticks_ms
 from .now_playing import crc16
 
-FRAME_SIZE = 19
+FRAME_SIZE = 21
 PERIOD_MS = 1000
 BLE_TOKENS = (b"BLE_PAUSE", b"BLE_ENABLE")
 
@@ -34,8 +34,8 @@ def encode_status(status, session, sequence, request_sequence=0):
         raise ValueError("Inconsistent BLE status")
     if type(request_sequence) is not int or not 0 <= request_sequence <= 0xFFFFFFFF:
         raise ValueError("BLE request sequence")
-    frame = (b"BLS1" + (int(session) & 0xFFFFFFFF).to_bytes(4, "big")
-             + (int(sequence) & 0xFFFF).to_bytes(2, "big") + bytes((mode, flags))
+    frame = (b"BLS2" + (int(session) & 0xFFFFFFFF).to_bytes(4, "big")
+             + (int(sequence) & 0xFFFFFFFF).to_bytes(4, "big") + bytes((mode, flags))
              + request_sequence.to_bytes(4, "big") + bytes((error,)))
     return frame + crc16(frame).to_bytes(2, "big")
 
@@ -72,7 +72,7 @@ class BleStatusPublisher:
             return False
         if not self._remote.state_tx_ready():
             return False
-        sequence = (self._sequence + 1) & 0xFFFF
+        sequence = (self._sequence + 1) & 0xFFFFFFFF
         try:
             status = self._ble.snapshot_status()
             frame = encode_status(status, self._session, sequence, self._request_sequence)

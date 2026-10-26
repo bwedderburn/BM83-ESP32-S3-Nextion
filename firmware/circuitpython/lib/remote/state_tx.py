@@ -207,7 +207,7 @@ class StatePublisher:
             return
         if not self._frames:
             # Finish a fragmented BMS2 before allowing auxiliary BLE status.
-            # This is an idle boundary, so one BLS1 cannot split a snapshot.
+            # This is an idle boundary, so one BLS2 cannot split a snapshot.
             if auxiliary is not None and auxiliary.tick():
                 self._next_frame = (now + FRAME_GAP_MS) % (1 << 29)
                 return True

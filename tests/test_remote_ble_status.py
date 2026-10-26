@@ -55,11 +55,11 @@ class Sink:
     send_ble_status_frame = send_state_frame
 
 
-def test_golden_bls1_is_exactly_nineteen_bytes_with_independent_crc():
-    value = encode_status(status(), 0x12345678, 0x9ABC, 0x01020304)
-    assert value.hex() == "424c5331123456789abc000b0102030400211d"
-    assert len(value) == 19
-    assert binascii.crc_hqx(value[:17], 0xFFFF) == int.from_bytes(value[17:], "big")
+def test_golden_bls2_is_exactly_twenty_one_bytes_with_independent_crc():
+    value = encode_status(status(), 0x12345678, 0x9ABCDEF0, 0x01020304)
+    assert value.hex() == "424c5332123456789abcdef0000b010203040043cb"
+    assert len(value) == 21
+    assert binascii.crc_hqx(value[:19], 0xFFFF) == int.from_bytes(value[19:], "big")
 
 
 def test_status_mode_matrix_rejects_invented_pause_and_inconsistent_success():
@@ -72,7 +72,7 @@ def test_status_mode_matrix_rejects_invented_pause_and_inconsistent_success():
                          or (mode == 3 and error != 0))
                 if valid:
                     value = encode_status(status(mode, flags, error), 1, 1)
-                    assert value[10:12] == bytes((mode, flags))
+                    assert value[12:14] == bytes((mode, flags))
                 else:
                     with pytest.raises(ValueError):
                         encode_status(status(mode, flags, error), 1, 1)
@@ -97,7 +97,7 @@ def test_requests_queue_backend_intent_and_echo_receipt_even_when_backend_busy()
     backend.value = status(3, 7, 7)
     assert not publisher.request(b"BLE_ENABLE", 43)
     assert publisher.tick()
-    assert sink.frames[0][12:17] == b"\x00\x00\x00+\x07"
+    assert sink.frames[0][14:19] == b"\x00\x00\x00+\x07"
     assert not publisher.request(b"BT_POWER", 44)
     assert not publisher.request(b"BLE_ENABLE", True)
     assert backend.requests == ["pause", "enable"]
@@ -106,9 +106,9 @@ def test_requests_queue_backend_intent_and_echo_receipt_even_when_backend_busy()
 def test_status_heartbeat_request_bursts_and_sequence_wrap_stay_bounded():
     clock, sink = Clock(), Sink()
     publisher = BleStatusPublisher(sink, Backend(), clock=clock, session=1)
-    publisher._sequence = 0xFFFF
+    publisher._sequence = 0xFFFFFFFF
     assert publisher.tick()
-    assert sink.frames[0][8:10] == b"\0\0"
+    assert sink.frames[0][8:12] == bytes(4)
     for now in (1, 40, 500, 999):
         clock.value = now
         assert publisher.request(b"BLE_PAUSE", now)
@@ -116,7 +116,17 @@ def test_status_heartbeat_request_bursts_and_sequence_wrap_stay_bounded():
     clock.value = 1000
     assert publisher.tick()
     assert len(sink.frames) == 2
-    assert int.from_bytes(sink.frames[1][12:16], "big") == 999
+    assert int.from_bytes(sink.frames[1][14:18], "big") == 999
+
+
+def test_sender_sequence_continues_beyond_old_sixteen_bit_boundary():
+    clock, sink = Clock(), Sink()
+    publisher = BleStatusPublisher(sink, Backend(), clock=clock, session=1)
+    publisher._sequence = 65534
+    for expected in (65535, 65536, 65537):
+        assert publisher.tick()
+        assert int.from_bytes(sink.frames[-1][8:12], "big") == expected
+        clock.value += 1000
 
 
 def test_missing_observation_reports_error_not_paused_and_logs_once():
@@ -127,11 +137,11 @@ def test_missing_observation_reports_error_not_paused_and_logs_once():
     clock.value = 1000
     assert publisher.tick()
     assert len(logs) == 1
-    assert all(data[10:12] == b"\3\0" and data[16] == 6 for data in sink.frames)
+    assert all(data[12:14] == b"\3\0" and data[18] == 6 for data in sink.frames)
     backend.failed_observation = False
     clock.value = 2000
     assert publisher.tick()
-    assert sink.frames[-1][10:12] == b"\0\x0b"
+    assert sink.frames[-1][12:14] == b"\0\x0b"
 
 
 def test_remote_only_commands_are_paired_deduplicated_and_keep_poll_api():
@@ -181,7 +191,8 @@ def test_both_frame_types_share_completion_backoff_and_configured_peer():
     assert not remote.state_tx_ready()
     clock.value = 5
     assert remote.state_tx_ready()
-    assert not remote.send_ble_status_frame(b"BMS2" + bytes(15))
+    assert not remote.send_ble_status_frame(b"BMS2" + bytes(17))
+    assert not remote.send_ble_status_frame(bytes.fromhex("424c5331123456789abc000b0102030400211d"))
     assert not remote.send_ble_status_frame(bls + b"x")
     assert not remote.send_state_frame(bls)
 
@@ -193,7 +204,7 @@ def test_shared_scheduler_finishes_bms2_without_interleaving_and_one_frame_per_t
     audio.note_attributes({1: "T" * 96, 2: "A" * 96, 3: "B" * 96})
     auxiliary = BleStatusPublisher(sink, backend, clock=clock, session=2)
     assert audio.tick(auxiliary)
-    assert sink.frames[-1][:4] == b"BLS1"
+    assert sink.frames[-1][:4] == b"BLS2"
     for now in (0, 39):
         clock.value = now
         audio.tick(auxiliary)
@@ -209,7 +220,7 @@ def test_shared_scheduler_finishes_bms2_without_interleaving_and_one_frame_per_t
         assert len(sink.frames) == before + 1
     clock.value += 40
     assert audio.tick(auxiliary)
-    assert sink.frames[-1][:4] == b"BLS1"
+    assert sink.frames[-1][:4] == b"BLS2"
     assert len(sink.frames) == 9
 
 

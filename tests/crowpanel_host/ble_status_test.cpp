@@ -9,31 +9,30 @@
 typedef std::array<uint8_t, ble_status::FRAME_SIZE> Frame;
 
 // Fixed cross-language fixture; CRC independently obtained with crc_hqx(..., 0xffff).
-static const Frame GOLDEN = {{0x42, 0x4c, 0x53, 0x31, 0x12, 0x34, 0x56, 0x78,
-    0x9a, 0xbc, 0x00, 0x0b, 0x01, 0x02, 0x03, 0x04, 0x00, 0x21, 0x1d}};
+static const Frame GOLDEN = {{0x42, 0x4c, 0x53, 0x32, 0x12, 0x34, 0x56, 0x78,
+    0x9a, 0xbc, 0xde, 0xf0, 0x00, 0x0b, 0x01, 0x02, 0x03, 0x04, 0x00, 0x43, 0xcb}};
 
 // A nibble-table reference, independent of the decoder's bitwise CRC loop.
 static void seal(Frame &frame) {
     static const uint16_t table[] = {0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5,
         0x60c6, 0x70e7, 0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef};
     uint16_t crc = 0xffff;
-    for (size_t i = 0; i < 17; ++i) {
+    for (size_t i = 0; i < 19; ++i) {
         crc = static_cast<uint16_t>((crc << 4) ^ table[(crc >> 12) ^ (frame[i] >> 4)]);
         crc = static_cast<uint16_t>((crc << 4) ^ table[(crc >> 12) ^ (frame[i] & 15)]);
     }
-    frame[17] = static_cast<uint8_t>(crc >> 8);
-    frame[18] = static_cast<uint8_t>(crc);
+    frame[19] = static_cast<uint8_t>(crc >> 8);
+    frame[20] = static_cast<uint8_t>(crc);
 }
 
-static Frame packet(uint32_t session, uint16_t seq, uint8_t mode = 0,
+static Frame packet(uint32_t session, uint32_t seq, uint8_t mode = 0,
                     uint8_t flags = 0x0b, uint8_t error = 0) {
     Frame result = GOLDEN;
     for (unsigned i = 0; i < 4; ++i) result[4 + i] = static_cast<uint8_t>(session >> (24 - i * 8));
-    result[8] = static_cast<uint8_t>(seq >> 8);
-    result[9] = static_cast<uint8_t>(seq);
-    result[10] = mode;
-    result[11] = flags;
-    result[16] = error;
+    for (unsigned i = 0; i < 4; ++i) result[8 + i] = static_cast<uint8_t>(seq >> (24 - i * 8));
+    result[12] = mode;
+    result[13] = flags;
+    result[18] = error;
     seal(result);
     return result;
 }
@@ -51,7 +50,7 @@ static void golden() {
     assert(!decoder.have_status() && !decoder.fresh(0) && !decoder.confirmed_paused(0));
     assert(send(decoder, GOLDEN, 10));
     assert(decoder.have_status() && decoder.fresh(10));
-    assert(decoder.state.session == 0x12345678 && decoder.state.sequence == 0x9abc);
+    assert(decoder.state.session == 0x12345678 && decoder.state.sequence == 0x9abcdef0U);
     assert(decoder.state.mode == ble_status::MODE_ENABLED && decoder.state.flags == 0x0b);
     assert(decoder.state.request_seq == 0x01020304 && decoder.state.error == 0);
     assert(!decoder.confirmed_paused(10));
@@ -62,7 +61,7 @@ static void malformed() {
     assert(send(decoder, GOLDEN));
     assert(!decoder.accept(nullptr, GOLDEN.size(), 100));
     for (size_t len = 0; len < GOLDEN.size(); ++len) assert(!decoder.accept(GOLDEN.data(), len, 100));
-    uint8_t oversized[20] = {};
+    uint8_t oversized[22] = {};
     memcpy(oversized, GOLDEN.data(), GOLDEN.size());
     assert(!decoder.accept(oversized, sizeof(oversized), 100));
     for (size_t i = 0; i < GOLDEN.size(); ++i) {
@@ -71,10 +70,11 @@ static void malformed() {
         assert(!send(decoder, corrupted, 100));
     }
     Frame wrong_magic = GOLDEN;
-    wrong_magic[3] = '2';
+    wrong_magic[3] = '1';
     seal(wrong_magic);
     assert(!send(decoder, wrong_magic, 100));
-    assert(decoder.state.session == 0x12345678 && decoder.state.sequence == 0x9abc);
+    // Even a well-sealed padded legacy BLS1 is not accepted as BLS2.
+    assert(decoder.state.session == 0x12345678 && decoder.state.sequence == 0x9abcdef0U);
     assert(!decoder.fresh(3000));
 }
 
@@ -108,18 +108,40 @@ static void validation() {
 
 static void ordering() {
     ble_status::Decoder decoder;
-    assert(send(decoder, packet(1, 0xfffe), 0));
-    assert(send(decoder, packet(1, 0xffff), 1));
+    assert(send(decoder, packet(1, 0xfffffffeU), 0));
+    assert(send(decoder, packet(1, 0xffffffffU), 1));
     assert(send(decoder, packet(1, 0), 2));
     assert(!send(decoder, packet(1, 0), 2000));
-    assert(!send(decoder, packet(1, 0xffff), 2001));
-    assert(!send(decoder, packet(1, 0x8000), 2002));
+    assert(!send(decoder, packet(1, 0xffffffffU), 2001));
+    assert(!send(decoder, packet(1, 0x80000000U), 2002));
     assert(decoder.fresh(3001) && !decoder.fresh(3002));
-    assert(!send(decoder, packet(1, 0xffff), 4000));
+    assert(!send(decoder, packet(1, 0xffffffffU), 4000));
     assert(!decoder.fresh(4000));
-    assert(send(decoder, packet(1, 0x7fff), 4001));
+    assert(send(decoder, packet(1, 0x7fffffffU), 4001));
     assert(decoder.fresh(4001));
-    assert(!send(decoder, packet(1, 0x7ffe), 4002));
+    assert(!send(decoder, packet(1, 0x7ffffffeU), 4002));
+}
+
+static void long_outage() {
+    ble_status::Decoder decoder;
+    const Frame old_paused = packet(1, 1, ble_status::MODE_PAUSED, ble_status::FLAG_READY);
+    assert(send(decoder, old_paused, 0));
+    assert(send(decoder, packet(1, 2), 1000));
+    assert(!decoder.fresh(4000));
+    // The sender queued 40000 heartbeats while this receiver was unreachable.
+    // This crosses the old 16-bit half-window without a new boot/session.
+    const uint32_t returned_at = 40001000U;
+    assert(send(decoder, packet(1, 40002), returned_at));
+    assert(decoder.fresh(returned_at) && decoder.state.sequence == 40002);
+    assert(!decoder.confirmed_paused(returned_at));
+    assert(!send(decoder, old_paused, returned_at + 100));
+    assert(!send(decoder, packet(1, 2), returned_at + 200));
+    assert(!send(decoder, packet(1, 40002), returned_at + 2999));
+    assert(!decoder.fresh(returned_at + 3000));
+    assert(!send(decoder, old_paused, returned_at + 4000));
+    assert(!decoder.confirmed_paused(returned_at + 4000));
+    assert(send(decoder, packet(1, 40003), returned_at + 5000));
+    assert(decoder.fresh(returned_at + 5000));
 }
 
 static void sessions() {
@@ -172,6 +194,7 @@ int main(int argc, char **argv) {
     else if (scenario == "ordering") ordering();
     else if (scenario == "sessions") sessions();
     else if (scenario == "expiry") expiry();
+    else if (scenario == "long-outage") long_outage();
     else { std::cerr << "unknown scenario\n"; return 2; }
     return 0;
 }

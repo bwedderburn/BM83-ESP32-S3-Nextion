@@ -916,7 +916,7 @@ void loop() {
     bool snapshot_changed = false;
     bool ble_changed = false;
     while ((rx_len = espnow_link_poll(rx_frame, sizeof(rx_frame))) != 0) {
-        if (rx_len >= 4 && memcmp(rx_frame, "BLS1", 4) == 0) {
+        if (rx_len >= 4 && memcmp(rx_frame, "BLS2", 4) == 0) {
             if (g_ble_control.status.accept(rx_frame, rx_len, millis())) ble_changed = true;
         } else if (g_now_playing.accept(rx_frame, rx_len, millis())) snapshot_changed = true;
     }

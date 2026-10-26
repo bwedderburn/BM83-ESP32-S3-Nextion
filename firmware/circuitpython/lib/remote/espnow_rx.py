@@ -4,7 +4,7 @@ Protocol v1 (shared with firmware/crowpanel-remote/include/espnow_link.h):
 
     token frame  (remote -> audio unit):  b"BMR1:<seq>:<token>"
     audio state  (audio unit -> remote):  binary BMS2 (now_playing.py)
-    BLE status   (audio unit -> remote):  binary BLS1 (ble_status.py)
+    BLE status   (audio unit -> remote):  binary BLS2 (ble_status.py)
 
 Control frames are ASCII, at most 64 bytes. Playback tokens share the Nextion
 vocabulary (``nextion.display.TOKENS``). NET_RETRY, BLE_PAUSE and BLE_ENABLE
@@ -269,8 +269,8 @@ class EspNowRemote:
         return self._send_frame(frame)
 
     def send_ble_status_frame(self, frame):
-        """Use the same single-outstanding-frame guard for a bounded BLS1."""
-        if not frame or len(frame) != 19 or not frame.startswith(b"BLS1"):
+        """Use the same single-outstanding-frame guard for a bounded BLS2."""
+        if not frame or len(frame) != 21 or not frame.startswith(b"BLS2"):
             return False
         return self._send_frame(frame)
 

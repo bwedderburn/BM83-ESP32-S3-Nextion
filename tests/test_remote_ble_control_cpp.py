@@ -25,7 +25,7 @@ def control_binary(tmp_path_factory):
     return binary
 
 
-@pytest.mark.parametrize("scenario", ("pause", "enable", "expiry"))
+@pytest.mark.parametrize("scenario", ("pause", "enable", "expiry", "long-outage"))
 def test_observed_ble_confirmation(control_binary, scenario):
     result = subprocess.run(  # nosec B603 - owned local binary and fixed scenario argv
         [str(control_binary), scenario], capture_output=True, text=True)

@@ -55,7 +55,26 @@ buttons' hold-and-repeat, single tokens otherwise — see
 `../../NEXTION_SETUP.md`). Volume buttons release on both finger lift and
 press loss. The existing screen-wake gesture suppression remains in place.
 BLE Pause/Enable and network retry are remote-only controls. BLE status uses a
-separate `BLS1` frame; legacy `BMS2` Now Playing frames keep their existing format.
+separate `BLS2` frame; legacy `BMS2` Now Playing frames keep their existing format.
+
+BLE status is exactly 21 bytes, with all multi-byte fields big-endian:
+`BLS2` (4), boot session u32 (4), status sequence u32 (4), mode u8 (1),
+flags u8 (1), last validated BLE request sequence u32 (4), error u8 (1),
+then CRC16-CCITT-FALSE over the first 19 bytes (2). Status is sent at most
+once per second through the same completion/backoff guard as BMS2, after
+an in-flight BMS2 snapshot finishes. The 32-bit ordering window permits
+recovery after long reception gaps without resetting replay protection;
+its half-window is about 68 years at one report per second. Duplicate,
+older and retired-session reports never renew freshness. Status expires
+after three seconds, independently of the audio metadata channel.
+
+Pause/Enable completion requires a newer report from the same boot that
+echoes the exact request and confirms the resulting radio state. Intent or
+a radio ACK alone cannot confirm completion. Paused requires a ready
+adapter, no connected central and no advertising. Both ends must support
+BLS2; the development-only 19-byte BLS1 format is rejected rather than
+interpreted as current status. Update the controller libraries and CrowPanel
+firmware together; mixed versions leave this control unavailable.
 
 The volume buttons keep their existing press/release hold-and-repeat
 behavior. The source may still ignore a delivered BLE HID key; counting

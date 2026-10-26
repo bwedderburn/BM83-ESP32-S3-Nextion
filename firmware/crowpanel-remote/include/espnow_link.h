@@ -4,7 +4,7 @@
 // with README.md):
 //   token frame  (remote -> audio unit):  "BMR1:<seq>:<token>"
 //   state frame (audio unit -> remote): binary BMS2; see now_playing.h.
-//   BLE status (audio unit -> remote): binary BLS1; see ble_status.h.
+//   BLE status (audio unit -> remote): binary BLS2; see ble_status.h.
 // Control frames are ASCII, <=64 bytes, with no NUL. <seq> is a decimal uint32 the
 // receiver uses to drop duplicates (ESP-NOW MAC-layer retries can deliver
 // a frame twice). Playback tokens share the Nextion vocabulary. NET_RETRY,
@@ -49,7 +49,7 @@ bool espnow_link_suspend();
 // the receiver drops any repeat that did land. Safe before init or after a
 // failed init (drops silently, status stays "off").
 // Returns true if a valid frame was attempted, including a no-ACK attempt.
-// Optional sequence receives its BMR1 id, for matching observed BLS1 status.
+// Optional sequence receives its BMR1 id, for matching observed BLS2 status.
 // Neither this return value nor a MAC ACK confirms the requested BLE state.
 bool espnow_send_token(const char *token, uint32_t *sequence = nullptr);
 

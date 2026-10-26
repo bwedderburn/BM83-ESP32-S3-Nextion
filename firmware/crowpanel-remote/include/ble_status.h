@@ -1,4 +1,4 @@
-// Pure C++11 BLS1 status decoder; independent of playback snapshot freshness.
+// Pure C++11 BLS2 status decoder; independent of playback snapshot freshness.
 #pragma once
 
 #include <stddef.h>
@@ -7,7 +7,7 @@
 
 namespace ble_status {
 
-static const size_t FRAME_SIZE = 19;
+static const size_t FRAME_SIZE = 21;
 static const uint32_t FRESH_MS = 3000;
 
 enum Mode {
@@ -25,8 +25,7 @@ enum Flag {
 };
 
 struct Status {
-    uint32_t session, request_seq;
-    uint16_t sequence;
+    uint32_t session, request_seq, sequence;
     uint8_t mode, flags, error;
 };
 
@@ -77,15 +76,15 @@ public:
     }
 
     bool accept(const uint8_t *frame, size_t len, uint32_t now_ms) {
-        if (!frame || len != FRAME_SIZE || memcmp(frame, "BLS1", 4) != 0 ||
-            crc16(frame, 17) != read16(frame + 17)) return false;
+        if (!frame || len != FRAME_SIZE || memcmp(frame, "BLS2", 4) != 0 ||
+            crc16(frame, 19) != read16(frame + 19)) return false;
         Status incoming;
         incoming.session = read32(frame + 4);
-        incoming.sequence = read16(frame + 8);
-        incoming.mode = frame[10];
-        incoming.flags = frame[11];
-        incoming.request_seq = read32(frame + 12);
-        incoming.error = frame[16];
+        incoming.sequence = read32(frame + 8);
+        incoming.mode = frame[12];
+        incoming.flags = frame[13];
+        incoming.request_seq = read32(frame + 14);
+        incoming.error = frame[18];
         if (incoming.mode > MODE_ERROR || (incoming.flags & 0xF0) || incoming.error > 7) return false;
         const bool intent = (incoming.flags & FLAG_INTENT) != 0;
         if (incoming.mode == MODE_ENABLED && (!intent || incoming.error)) return false;
@@ -100,8 +99,10 @@ public:
             if (incoming.session == retired_[i]) return false;
         }
         if (have_ && incoming.session == state.session) {
-            const uint16_t distance = static_cast<uint16_t>(incoming.sequence - state.sequence);
-            if (distance == 0 || distance >= 0x8000) return false;
+            // At <=1Hz the strict uint32 half-window covers about 68 years.
+            // Freshness expiry never resets ordering or admits a stale replay.
+            const uint32_t distance = incoming.sequence - state.sequence;
+            if (distance == 0 || distance >= 0x80000000U) return false;
         }
         if (have_ && incoming.session != state.session) {
             // Bound replay history without allocation. Recent boot packets can
