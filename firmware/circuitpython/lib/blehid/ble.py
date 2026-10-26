@@ -34,6 +34,9 @@ The public surface used by main.py is:
     volume(up: bool)       -- send VOLUME_INCREMENT (True) or DECREMENT (False)
     mute()                 -- send the HID MUTE code
     is_connected()         -- bool: True when a central is connected
+    request_pause()        -- disconnect without erasing bonds; stay unavailable
+    request_enable()       -- allow connections again, retaining bonds and name
+    snapshot_status()      -- observed BLE state and queued-operation result
     request_erase_bonds()  -- queue a bond-store wipe (runs while disconnected)
 """
 import time
@@ -50,6 +53,54 @@ from utils.ticks import ticks_add, ticks_less, ticks_ms, ticks_recent
 # ~150 ms; they are now non-blocking stage deadlines (issue #149, R-02).
 # Each gap is still at least this long -- never shorter.
 _BLE_STABILIZE_MS = 50
+
+# Public wire/status enums. ENABLED means connections are allowed; it does
+# not promise which bonded host will connect to undirected advertising.
+MODE_ENABLED = 0
+MODE_PAUSING = 1
+MODE_PAUSED = 2
+MODE_ERROR = 3
+ERROR_NONE = 0
+ERROR_NOT_READY = 1
+ERROR_STOP_ADV = 2
+ERROR_DISCONNECT = 3
+ERROR_TIMEOUT = 4
+ERROR_WORKFLOW = 5
+ERROR_OBSERVATION = 6
+ERROR_BUSY = 7
+_PAUSE_TIMEOUT_MS = 5000
+_MAX_PAUSE_CONNECTIONS = 8
+
+
+def _named_advertisement(hid, name):
+    """Include the full name in the primary packet only within legacy BLE limits."""
+    from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
+
+    advertisement = ProvideServicesAdvertisement(hid)
+    # Each AD structure adds length/type bytes. Measure the library's encoded
+    # flags and service UUIDs; count UTF-8 bytes rather than name characters.
+    if len(bytes(advertisement)) + len(name.encode("utf-8")) + 2 <= 31:
+        advertisement.complete_name = name
+    # BLERadio's default scan response still carries the complete GAP name.
+    return advertisement
+
+
+def _disable_workflow():
+    """Stop the supervisor from independently restarting BLE advertisements.
+
+    boot.py does this before workflow startup. Repeat the capability check
+    here for existing installations and soft reloads. No adapter reset or
+    bond-store operation is involved. On host Python there is no workflow.
+    """
+    try:
+        import supervisor
+    except ImportError:
+        return True
+    try:
+        supervisor.runtime.ble_workflow = False
+        return not supervisor.runtime.ble_workflow
+    except Exception:
+        return False
 
 # Keep the existing two-byte Consumer Control report (ID 3), without the
 # default HIDService keyboard and mouse collections. Advertising a keyboard
@@ -154,6 +205,14 @@ class BleHid:
         "_peer_logged",
         "_manual_pair_hint_after_s",
         "_manual_pair_hint_logged",
+        "_intent_enabled",
+        "_handoff_mode",
+        "_handoff_error",
+        "_pause_deadline",
+        "_pause_due",
+        "_pause_attempted",
+        "_intentional_disconnect_at",
+        "_enable_pending",
     )
 
     def __init__(self, enabled, name):
@@ -182,6 +241,14 @@ class BleHid:
         self._CCC = None
         self._ready = False
         self._was_connected = False
+        self._intent_enabled = bool(enabled)
+        self._handoff_mode = MODE_ENABLED
+        self._handoff_error = ERROR_NONE
+        self._pause_deadline = None
+        self._pause_due = None
+        self._pause_attempted = []
+        self._intentional_disconnect_at = None
+        self._enable_pending = False
 
         # Advertising backoff — Nimble can fail with out-of-memory under
         # pressure; hold off for a bit when that happens and grow the
@@ -283,8 +350,9 @@ class BleHid:
         if not self.enabled:
             return
         try:
+            if not _disable_workflow():
+                print("[BLE] Background workflow control unavailable")
             from adafruit_ble import BLERadio
-            from adafruit_ble.advertising.standard import ProvideServicesAdvertisement
             from adafruit_ble.services.standard.hid import HIDService
             from adafruit_hid.consumer_control import ConsumerControl
             from adafruit_hid.consumer_control_code import ConsumerControlCode as CCC
@@ -301,6 +369,8 @@ class BleHid:
                 self.name = "%s_%d" % (self.base_name, counter)
             else:
                 self.name = self.base_name
+            # BLERadio uses this same name in its default scan response.
+            # boot.py prevents the maintenance advertiser preceding it.
             self._ble.name = self.name
             # NOTE: We deliberately do NOT set GAP Appearance. Setting
             # it to 0x03C1 (HID Keyboard) caused Windows to key its
@@ -322,7 +392,7 @@ class BleHid:
                 protocol_mode = None
 
             self._hid = ConsumerOnlyHIDService(hid_descriptor=_CONSUMER_ONLY_HID_DESCRIPTOR)
-            self._adv = ProvideServicesAdvertisement(self._hid)
+            self._adv = _named_advertisement(self._hid, self.name)
             self._cc = ConsumerControl(self._hid.devices)
             self._CCC = CCC
             self._ready = True
@@ -340,6 +410,137 @@ class BleHid:
         except Exception:
             return False
 
+    def request_pause(self):
+        """Queue a bond-preserving release; never call the stack from a UI callback."""
+        if self._erase_stage != _ERASE_IDLE:
+            self._handoff_mode = MODE_ERROR
+            self._handoff_error = ERROR_BUSY
+            return False
+        if not self._ready or not self._ble:
+            self._intent_enabled = False
+            self._handoff_fail(ERROR_NOT_READY)
+            return False
+        if not self._intent_enabled:
+            return self._handoff_mode != MODE_ERROR
+        self._intent_enabled = False
+        self._enable_pending = False
+        # A previous queued wipe must not be triggered by this disconnect.
+        self._erase_pending = False
+        self._pause_deadline = None
+        self._pause_due = None
+        self._pause_attempted = []
+        self._handoff_mode = MODE_PAUSING
+        self._handoff_error = ERROR_NONE
+        return True
+
+    def request_enable(self):
+        """Queue normal advertising; the previous host may reconnect first."""
+        if self._erase_stage != _ERASE_IDLE:
+            self._handoff_mode = MODE_ERROR
+            self._handoff_error = ERROR_BUSY
+            return False
+        if not self._ready or not self._ble or not self.enabled:
+            self._handoff_fail(ERROR_NOT_READY)
+            return False
+        if self._intent_enabled and self._handoff_mode == MODE_ENABLED:
+            return True
+        self._intent_enabled = bool(self.enabled)
+        self._enable_pending = True
+        self._pause_deadline = None
+        self._pause_due = None
+        self._pause_attempted = []
+        self._handoff_mode = MODE_ENABLED
+        self._handoff_error = ERROR_NONE
+        return True
+
+    def _observed_state(self):
+        try:
+            return bool(self._ble.connected), bool(self._ble.advertising)
+        except Exception:
+            return None
+
+    def snapshot_status(self):
+        """Return actual observations, never a radio-ACK-based success claim."""
+        state = self._observed_state() if self._ready and self._ble else None
+        mode, error = self._handoff_mode, self._handoff_error
+        if state is None:
+            mode = MODE_ERROR
+            error = ERROR_OBSERVATION if self._ready else ERROR_NOT_READY
+            state = False, False
+        elif mode == MODE_PAUSED and (state[0] or state[1]):
+            # A late native callback can arrive between tick and publication.
+            mode = MODE_PAUSING
+        return {"ready": self._ready, "intent_enabled": self._intent_enabled,
+                "connected": state[0], "advertising": state[1],
+                "mode": mode, "error": error}
+
+    def _handoff_fail(self, error):
+        changed = self._handoff_mode != MODE_ERROR or self._handoff_error != error
+        self._handoff_mode = MODE_ERROR
+        self._handoff_error = error
+        self._pause_deadline = None
+        self._pause_due = None
+        if changed:
+            print("[BLE] Pause/enable failed:", error)
+
+    def _tick_pause(self):
+        """One native termination per tick, then observe completion across ticks."""
+        if self._handoff_mode == MODE_ERROR:
+            return
+        state = self._observed_state()
+        if state is None:
+            self._handoff_fail(ERROR_OBSERVATION)
+            return
+        if self._handoff_mode == MODE_PAUSED and not any(state):
+            return
+        now = ticks_ms()
+        if self._pause_deadline is None:
+            self._handoff_mode = MODE_PAUSING
+            self._pause_deadline = ticks_add(now, _PAUSE_TIMEOUT_MS)
+            if not _disable_workflow():
+                self._handoff_fail(ERROR_WORKFLOW)
+                return
+            if not self._stop_adv():
+                self._handoff_fail(ERROR_STOP_ADV)
+                return
+            self._pause_due = ticks_add(now, _BLE_STABILIZE_MS)
+            return
+        if ticks_less(now, self._pause_due):
+            return
+        connected, advertising = state
+        if not connected and not advertising:
+            self._handoff_mode = MODE_PAUSED
+            self._handoff_error = ERROR_NONE
+            self._pause_deadline = None
+            self._pause_due = None
+            print("[BLE] Volume remote paused; bonds retained")
+            return
+        if not ticks_less(now, self._pause_deadline):
+            self._handoff_fail(ERROR_TIMEOUT)
+            return
+        if advertising:
+            # An advertiser outside our ownership must not be called paused.
+            self._handoff_fail(ERROR_STOP_ADV)
+            return
+        try:
+            connections = self._ble.connections
+            for connection in connections:
+                if any(connection is previous for previous in self._pause_attempted):
+                    continue
+                if len(self._pause_attempted) >= _MAX_PAUSE_CONNECTIONS:
+                    self._handoff_fail(ERROR_DISCONNECT)
+                    return
+                self._pause_attempted.append(connection)
+                # On ESP32 CP10.3.1 this queues ble_gap_terminate, without a
+                # busy wait. Never retry the same native connection object.
+                connection.disconnect()
+                # Keep this across Enable: termination completes asynchronously,
+                # possibly after advertising has been requested again.
+                self._intentional_disconnect_at = now
+                return
+        except Exception:
+            self._handoff_fail(ERROR_DISCONNECT)
+
     # ---- advertising ----------------------------------------------------
 
     def _is_advertising(self):
@@ -350,15 +551,17 @@ class BleHid:
 
     def _stop_adv(self):
         if not self._ready or not self._ble:
-            return
+            return False
         try:
             if getattr(self._ble, "advertising", False):
                 self._ble.stop_advertising()
+            return not bool(self._ble.advertising)
         except Exception as e:
             dprint("[BLE] stop adv err:", e)
+            return False
 
     def _start_adv(self, force=False):
-        if not self._ready or not self._ble or not self._adv:
+        if not self._intent_enabled or not self._ready or not self._ble or not self._adv:
             return
         now = time.monotonic()
         if now < self._adv_inhibit_until:
@@ -392,6 +595,9 @@ class BleHid:
 
     def _on_connect(self):
         print("[BLE] Connected")
+        # An intentional release of the previous link must not hide a genuine
+        # fast pairing failure on this new connection.
+        self._intentional_disconnect_at = None
         # Peer address is logged from _ensure_paired one tick later,
         # because NimBLE's connections list is frequently still empty
         # at the moment this callback fires.
@@ -434,7 +640,11 @@ class BleHid:
             uptime = 0.0
         print("[BLE] Disconnected (uptime %.2fs, paired=%s)"
               % (uptime, self._ever_paired_this_conn))
-        if (uptime < self._fast_disconnect_s) and (not self._ever_paired_this_conn):
+        intentional = ticks_recent(ticks_ms(), self._intentional_disconnect_at,
+                                   _PAUSE_TIMEOUT_MS)
+        self._intentional_disconnect_at = None
+        if (not intentional and uptime < self._fast_disconnect_s
+                and not self._ever_paired_this_conn):
             print("[BLE] Fast disconnect without pairing — likely stale bond on")
             print("      the central (phone / PC / Pi). Fix on the central:")
             print("      Forget Device. Then on this unit: press EBIND. Then")
@@ -564,13 +774,29 @@ class BleHid:
             self._tick_erase()
             return
         now = time.monotonic()
-        connected = bool(getattr(self._ble, "connected", False))
+        state = self._observed_state()
+        if state is None:
+            self._handoff_fail(ERROR_OBSERVATION)
+            return
+        connected = state[0]
         if connected != self._was_connected:
             self._was_connected = connected
             if connected:
                 self._on_connect()
             else:
                 self._on_disconnect()
+        if not self._intent_enabled:
+            self._tick_pause()
+            if self._handoff_mode == MODE_PAUSED and self._erase_pending:
+                self._begin_erase()
+            return
+        if self._enable_pending:
+            self._enable_pending = False
+            if not _disable_workflow():
+                self._handoff_fail(ERROR_WORKFLOW)
+                return
+            self._adv_inhibit_until = 0.0
+            self._last_adv_kick_at = now
         if not connected:
             # Start a pending bond wipe in the disconnected/quiet window
             # before re-kicking advertising. The staged sequence restarts
@@ -748,7 +974,9 @@ class BleHid:
         """
         self.name = "%s_%d" % (self.base_name, counter)
         try:
+            advertisement = _named_advertisement(self._hid, self.name)
             self._ble.name = self.name
+            self._adv = advertisement
             print("[BLE] Name updated to:", self.name)
         except Exception as e:
             dprint("[BLE] name update err:", e)
@@ -756,7 +984,7 @@ class BleHid:
     # ---- HID sends ------------------------------------------------------
 
     def _send_ccc(self, code):
-        if not self._ready or not self._ble or not self._cc:
+        if not self._intent_enabled or not self._ready or not self._ble or not self._cc:
             return
         if not getattr(self._ble, "connected", False):
             return

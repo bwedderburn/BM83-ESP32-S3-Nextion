@@ -247,8 +247,8 @@ bool espnow_link_suspend() {
     return WiFi.mode(WIFI_OFF);
 }
 
-void espnow_send_token(const char *token) {
-    if (!g_ready || token == nullptr) return;
+bool espnow_send_token(const char *token, uint32_t *sequence) {
+    if (!g_ready || token == nullptr) return false;
     // Undelivered tokens in a row: the unit may have rebooted onto another
     // channel (or been off at boot). Rescan before sending this one.
     if (g_fail_streak >= RESCAN_AFTER_FAILS &&
@@ -260,7 +260,8 @@ void espnow_send_token(const char *token) {
     char frame[ESPNOW_FRAME_MAX + 1];
     const int n = snprintf(frame, sizeof(frame), "BMR1:%lu:%s",
                            (unsigned long)++g_seq, token);
-    if (n <= 0 || n > ESPNOW_FRAME_MAX) return;  // over the protocol limit: drop
+    if (n <= 0 || n > ESPNOW_FRAME_MAX) return false;  // over the protocol limit: drop
+    if (sequence) *sequence = g_seq;
     g_sent++;
     for (uint8_t attempt = 0; attempt < TOKEN_TRIES; attempt++) {
         if (attempt > 0) {
@@ -271,11 +272,12 @@ void espnow_send_token(const char *token) {
             g_acked++;
             g_last_status = 0;
             g_fail_streak = 0;
-            return;
+            return true;
         }
     }
     g_last_status = 1;
     if (g_fail_streak < 255) g_fail_streak++;
+    return true;
 }
 
 const char *espnow_link_status_str() {

@@ -49,6 +49,8 @@ def test_build_mpy_outputs():
 
     assert DIST_DIR.exists(), "dist/circuitpython not created"
     assert (DIST_DIR / "main.py").exists(), "main.py should remain as .py in dist"
+    if (SRC_DIR / "boot.py").exists():
+        assert (DIST_DIR / "boot.py").read_bytes() == (SRC_DIR / "boot.py").read_bytes()
     assert DIST_LIB_DIR.exists(), "dist/circuitpython/lib not created"
 
     # Every library .py should have a .mpy in dist/lib
@@ -77,6 +79,8 @@ def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
     (source / "lib").mkdir(parents=True)
     (source / "assets").mkdir()
     (source / "main.py").write_text("pass\n")
+    (source / "boot.py").write_text("# early BLE setup\n")
+    (source / "not_an_entrypoint.py").write_text("raise RuntimeError('do not package')\n")
     (source / "lib/example.py").write_text("VALUE = 1\n")
     (source / "assets/public.txt").write_text("keep this asset\n")
     for parent in (source, source / "assets"):
@@ -106,4 +110,7 @@ def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
     assert not list(package.rglob(".artwork_wifi.json"))
     assert not list(package.rglob(".metadata_bridge.json"))
     assert (package / "assets/public.txt").read_text() == "keep this asset\n"
+    assert (package / "boot.py").read_bytes() == (source / "boot.py").read_bytes()
+    assert not (package / "boot.mpy").exists()
+    assert not (package / "not_an_entrypoint.py").exists()
     assert (package / "lib/example.mpy").read_bytes() == b"test-mpy"

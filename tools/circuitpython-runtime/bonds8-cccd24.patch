@@ -1,0 +1,7 @@
+diff --git a/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig b/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig
+--- a/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig
++++ b/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig
+@@ -14 +14,3 @@
+ # end of Espressif IoT Development Framework Configuration
++CONFIG_BT_NIMBLE_MAX_BONDS=8
++CONFIG_BT_NIMBLE_MAX_CCCDS=24
