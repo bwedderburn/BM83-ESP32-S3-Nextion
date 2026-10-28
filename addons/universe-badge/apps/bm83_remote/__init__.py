@@ -111,7 +111,7 @@ class BM83Remote:
     def _wifi(self, now):
         if self.config_error or wifi is None:
             return False
-        if now < self.next_wifi:
+        if self.next_wifi and 0 < ((self.next_wifi - now) & 0xffffffff) < 0x80000000:
             return self.wifi_ready
         try:
             self.wifi_ready = bool(wifi.connect())
@@ -123,11 +123,12 @@ class BM83Remote:
                     self.wifi_error = "Connecting to Wi-Fi..."
             else:
                 self.wifi_error = ""
-            self.next_wifi = now + (1000 if not self.wifi_ready else 5000)
+            # Zero is the initial-attempt sentinel, never an armed deadline.
+            self.next_wifi = ((now + (1000 if not self.wifi_ready else 5000)) & 0xffffffff) or 1
         except Exception as error:
             self.wifi_ready = False
             self.wifi_error = str(error)[:56]
-            self.next_wifi = now + 2000
+            self.next_wifi = ((now + 2000) & 0xffffffff) or 1
         return self.wifi_ready
 
     def _settings(self, now):

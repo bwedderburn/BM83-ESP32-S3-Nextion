@@ -77,6 +77,56 @@ class WifiPacingTests(unittest.TestCase):
         self.assertFalse(app._wifi(5100))
         self.assertEqual(wifi.connect.call_count, 2)
 
+    def test_false_result_retry_survives_tick_wrap_and_fires_at_deadline(self):
+        wifi = SimpleNamespace(connect=Mock(return_value=False),
+                               status=Mock(return_value=(-1, "Connecting")))
+        app = self.app(wifi)
+        self.assertFalse(app._wifi(0xffffff00))
+        self.assertEqual(app.next_wifi, 744)
+        for now in (0xffffff01, 0xffffffff, 0, 743):
+            self.assertFalse(app._wifi(now))
+        self.assertEqual(wifi.connect.call_count, 1)
+        self.assertFalse(app._wifi(744))
+        self.assertEqual(wifi.connect.call_count, 2)
+
+    def test_exception_retry_survives_tick_wrap_and_fires_at_deadline(self):
+        wifi = SimpleNamespace(connect=Mock(side_effect=OSError("Offline")))
+        app = self.app(wifi)
+        self.assertFalse(app._wifi(0xffffff00))
+        self.assertEqual(app.next_wifi, 1744)
+        for now in (0xffffff01, 0xffffffff, 0, 1743):
+            self.assertFalse(app._wifi(now))
+        self.assertEqual(wifi.connect.call_count, 1)
+        self.assertFalse(app._wifi(1744))
+        self.assertEqual(wifi.connect.call_count, 2)
+
+    def test_zero_deadline_is_reserved_for_startup_not_a_retry_loop(self):
+        for delay, result in ((1000, False), (2000, OSError("Offline"))):
+            with self.subTest(delay=delay):
+                connect = Mock(side_effect=result) if isinstance(result, Exception) else Mock(return_value=result)
+                wifi = SimpleNamespace(connect=connect, status=Mock(return_value=(-1, "Connecting")))
+                app = self.app(wifi)
+                self.assertFalse(app._wifi(0x100000000 - delay))
+                self.assertEqual(app.next_wifi, 1)
+                for now in (0xffffffff, 0):
+                    self.assertFalse(app._wifi(now))
+                self.assertEqual(connect.call_count, 1)
+                self.assertFalse(app._wifi(1))
+                self.assertEqual(connect.call_count, 2)
+
+    def test_startup_is_immediate_near_wrap_then_success_is_cached(self):
+        wifi = SimpleNamespace(connect=Mock(side_effect=(True, False)),
+                               status=Mock(return_value=(-1, "Connecting")))
+        app = self.app(wifi)
+        self.assertTrue(app._wifi(0xfffffffe))
+        self.assertEqual(wifi.connect.call_count, 1)
+        self.assertEqual(app.next_wifi, 4998)
+        self.assertTrue(app._wifi(0))
+        self.assertTrue(app._wifi(4997))
+        self.assertEqual(wifi.connect.call_count, 1)
+        self.assertFalse(app._wifi(4998))
+        self.assertEqual(wifi.connect.call_count, 2)
+
     def test_missing_configuration_or_wifi_never_connects(self):
         wifi = SimpleNamespace(connect=Mock())
         app = self.app(wifi)

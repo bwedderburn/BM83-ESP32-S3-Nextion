@@ -207,6 +207,10 @@ class Remote:
     def close(self, now, sleep):
         self.release_volume()
         self.queue = []
+        # HOME stops existing gestures; it must never begin a queued press.
+        self.volume_queue = [gesture for gesture in self.volume_queue if gesture["pressed"]]
+        for gesture in self.volume_queue:
+            gesture["released"] = True
         # HOME cleanup is the only bounded wait: finish the release transaction.
         for _ in range(30):
             self.step(now)

@@ -360,6 +360,72 @@ class TransportTests(unittest.TestCase):
             self.remote.queue_command("BT_VOLDN_R")
         self.assertEqual(len(self.remote.volume_queue), 9)
 
+    def close_with_delayed_replies(self, now):
+        clock = [now]
+
+        def sleep(milliseconds):
+            clock[0] += milliseconds
+            pending = self.remote.pending
+            if pending and pending["command"] and clock[0] - pending["sent"] >= 100:
+                self.reply(self.state_reply())
+
+        self.remote.close(now, sleep)
+
+    def test_close_drops_eight_unsent_taps_without_starting_a_press(self):
+        self.connect()
+        for _ in range(8):
+            self.remote.volume("BT_VOLUP")
+            self.remote.release_volume()
+        self.close_with_delayed_replies(2)
+        commands = [protocol.decode(KEY, wire).get("token") for wire, _ in self.socket.sent[1:]]
+        self.assertEqual(commands, [])
+        self.assertFalse(self.remote.volume_queue)
+        self.assertTrue(self.socket.closed)
+
+    def test_close_finishes_only_the_in_flight_gesture(self):
+        self.connect()
+        self.remote.volume("BT_VOLUP")
+        self.remote.step(2)
+        self.remote.release_volume()
+        for _ in range(7):
+            self.remote.volume("BT_VOLUP")
+            self.remote.release_volume()
+        self.close_with_delayed_replies(3)
+        commands = [protocol.decode(KEY, wire).get("token") for wire, _ in self.socket.sent[1:]]
+        self.assertEqual(commands, ["BT_VOLUP_P", "BT_VOLUP_R"])
+        self.assertIsNone(self.remote.pending)
+        self.assertFalse(self.remote.volume_queue)
+        self.assertTrue(self.socket.closed)
+
+    def test_close_preserves_a_standalone_stop_request(self):
+        self.connect()
+        self.remote.queue_command("BT_VOLDN_R")
+        self.close_with_delayed_replies(2)
+        commands = [protocol.decode(KEY, wire).get("token") for wire, _ in self.socket.sent[1:]]
+        self.assertEqual(commands, ["BT_VOLDN_R"])
+        self.assertIsNone(self.remote.pending)
+        self.assertTrue(self.socket.closed)
+
+    def test_close_keeps_stalled_release_wire_and_drops_unsent_taps(self):
+        self.connect()
+        self.remote.queue_command("BT_VOLUP_R")
+        self.remote.step(2)
+        wire = self.remote.pending["wire"]
+        for now in (152, 302, 452, 602):
+            self.remote.step(now)
+        self.assertTrue(self.remote.pending["stalled"])
+        for _ in range(8):
+            self.remote.volume("BT_VOLUP")
+            self.remote.release_volume()
+        with patch("builtins.print") as warning:
+            self.remote.close(602, lambda milliseconds: None)
+        self.assertTrue(self.remote.pending["stalled"])
+        self.assertEqual(self.remote.pending["wire"], wire)
+        self.assertTrue(all(sent == wire for sent, _ in self.socket.sent[1:]))
+        self.assertFalse(self.remote.volume_queue)
+        self.assertTrue(self.socket.closed)
+        warning.assert_called_once()
+
     def test_input_queue_is_bounded_and_rejects_unknown_commands(self):
         for _ in range(8):
             self.assertTrue(self.remote.queue_command("BT_PLAY"))

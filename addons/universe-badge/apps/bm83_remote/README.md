@@ -19,12 +19,14 @@ raise `KeyError`. Volume gestures also retain their own press/release ordering:
 rapidly releasing and pressing the same button sends press, release, press,
 including when the first press is still in flight. Completed quick taps each
 retain their release; a release awaiting retry still blocks newer commands.
-Wi-Fi failures honor their retry deadlines, releasing an inactive volume button
+Wi-Fi failures honor their retry deadlines across clock rollover, releasing an inactive volume button
 does not stop the direction still being held, and accented metadata maps to the
 correct display characters. Empty or invalid album metadata clears the previous
 artwork identity so Retry cannot restore a stale cover.
 An unfinished lookup interrupted by Wi-Fi loss resumes once when connectivity
 returns; explicit cancellation and completed or failed lookups do not loop.
+HOME cleanup discards unsent volume gestures and preserves the required releases
+for presses already sent, rather than starting queued presses while exiting.
 
 Artwork responses now use the public bounded `fetch.AsyncFetch` API, with a
 32 KiB JSON limit, 128 KiB JPEG limit, 10-second inactivity timeout, and a
