@@ -6,7 +6,7 @@ import os
 import socket
 
 from protocol import TOKENS, decode, encode, hex_text, uint
-from models import Playback, BleControl, valid_np
+from models import Playback, BleControl, valid_np, elapsed
 
 WOULD_BLOCK = (errno.EAGAIN, 11, 10035)
 
@@ -147,15 +147,15 @@ class Remote:
                     self.pending = None
                     self.rehello_count = 0
 
-    def step(self, now):
+    def step(self, now, closing=False):
         self._receive(now)
         self.ble.tick(now)
         if self.pending:
             if self.pending.get("stalled"):
-                if now - self.pending["sent"] >= 1000:
+                if elapsed(now, self.pending["sent"]) >= 1000:
                     self._send(now)
                 return
-            if now - self.pending["sent"] < 150:
+            if elapsed(now, self.pending["sent"]) < 150:
                 return
             if self.pending["attempts"] < 4:
                 self._send(now)
@@ -173,12 +173,18 @@ class Remote:
             if command is None:
                 self.last_poll = now
                 return
+        if closing and not self.volume_queue:
+            return
         if not self.unit:
-            if now - self.last_poll >= 1000:
+            if closing:
+                return
+            if elapsed(now, self.last_poll) >= 1000:
                 self.last_poll = now
                 self._hello(now)
             return
         if self.seq >= 0xffffffff:
+            if closing:
+                return
             self.unit = self.client = None
             self._hello(now)
             return
@@ -197,7 +203,7 @@ class Remote:
             pass
         elif self.queue:
             command = self.queue.pop(0)
-        elif now - self.last_poll >= 1000:
+        elif not closing and elapsed(now, self.last_poll) >= 1000:
             self.last_poll = now
             command = "STATUS"
         else:
@@ -213,11 +219,15 @@ class Remote:
             gesture["released"] = True
         # HOME cleanup is the only bounded wait: finish the release transaction.
         for _ in range(30):
-            self.step(now)
+            if not self.pending and not self.volume_queue:
+                break
+            if not self.pending and not self.unit:
+                break
+            self.step(now, closing=True)
             if not self.queue and not self.volume_queue and not self.pending:
                 break
             sleep(50)
-            now += 50
+            now = (now + 50) & 0xffffffff
         if self.volume_queue or (self.pending and self.pending["command"]
                                 and self.pending["command"].endswith("_R")):
             print("BM83: volume release unconfirmed; check audio unit")

@@ -259,6 +259,34 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(self.remote.seq, 1)
         self.assertIn("no reply", self.remote.feedback)
 
+    def test_release_retry_interval_is_wrap_safe(self):
+        self.connect()
+        sent = 0xfffffff0
+        self.remote.pending = {"wire": b"release", "command": "BT_VOLUP_R",
+                               "attempts": 1, "sent": sent}
+        self.remote.step(0x85)
+        self.assertEqual(len(self.socket.sent), 1)
+        self.remote.step(0x86)
+        self.assertEqual(len(self.socket.sent), 2)
+
+    def test_stalled_release_and_poll_intervals_are_wrap_safe(self):
+        self.connect()
+        sent = 0xfffffff0
+        self.remote.pending = {"wire": b"release", "command": "BT_VOLUP_R",
+                               "attempts": 4, "sent": sent, "stalled": True}
+        self.remote.step(0x3d7)
+        self.assertEqual(len(self.socket.sent), 1)
+        self.remote.step(0x3d8)
+        self.assertEqual(len(self.socket.sent), 2)
+
+        self.remote.pending = None
+        self.remote.last_poll = 0xffffff00
+        self.remote.step(0x2e7)
+        self.assertEqual(len(self.socket.sent), 2)
+        self.remote.step(0x2e8)
+        self.assertEqual(len(self.socket.sent), 3)
+        self.assertEqual(self.remote.pending["command"], "STATUS")
+
     def test_mismatched_response_does_not_clear_pending_command(self):
         self.connect()
         self.remote.queue_command("BT_PLAY")
