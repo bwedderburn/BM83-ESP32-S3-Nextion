@@ -297,6 +297,104 @@ class ArtworkBoundsTests(unittest.TestCase):
                 self.assertEqual(len(FakeCore.instances), 1)
                 self.assertEqual(previous.resets, 1)
 
+    def test_interrupted_lookup_resumes_same_identity_exactly_once(self):
+        app = artwork.Artwork(self.directory.name)
+        app.start("Artist", "Album", 0)
+        original_key = app.key
+        previous = FakeCore.instances[-1]
+        app.step(100, False)
+        self.assertTrue(app._resume_after_connect)
+        self.assertIsNone(app.request)
+        self.assertEqual(previous.resets, 1)
+        app.step(1000, False)
+        self.assertEqual(len(FakeCore.instances), 1)
+        app.step(2000, True)
+        self.assertFalse(app._resume_after_connect)
+        self.assertEqual((app.artist, app.album, app.key), ("Artist", "Album", original_key))
+        self.assertEqual(app.started, 2000)
+        self.assertIsNotNone(app.request)
+        self.assertEqual(len(FakeCore.instances), 2)
+        resumed = FakeCore.instances[-1]
+        app.step(2001, True)
+        app.step(2002, True)
+        self.assertEqual(len(FakeCore.instances), 2)
+        self.assertEqual(resumed.updates, 2)
+
+    def test_long_outage_resumes_with_a_fresh_lookup_budget(self):
+        app = artwork.Artwork(self.directory.name)
+        app.start("Artist", "Album", 0)
+        app.step(100, False)
+        app.step(100000, True)
+        resumed = FakeCore.instances[-1]
+        app.step(100001, True)
+        self.assertEqual(app.started, 100000)
+        self.assertEqual(app.stage, "mb")
+        self.assertEqual(resumed.updates, 1)
+        self.assertEqual(resumed.resets, 0)
+
+    def test_explicit_cancel_and_close_prevent_connectivity_resume(self):
+        for action in ("cancel", "close"):
+            with self.subTest(action=action):
+                FakeCore.instances = []
+                app = artwork.Artwork(self.directory.name)
+                app.start("Artist", "Album", 0)
+                app.step(100, False)
+                getattr(app, action)()
+                app.step(2000, True)
+                self.assertFalse(app._resume_after_connect)
+                self.assertIsNone(app.request)
+                self.assertEqual(len(FakeCore.instances), 1)
+
+    def test_invalid_metadata_clears_an_interrupted_lookup_resume(self):
+        app = artwork.Artwork(self.directory.name)
+        app.start("Artist", "Album", 0)
+        app.step(100, False)
+        app.start("", "", 200)
+        app.step(2000, True)
+        self.assertFalse(app._resume_after_connect)
+        self.assertEqual((app.artist, app.album), ("", ""))
+        self.assertIsNone(app.request)
+        self.assertEqual(len(FakeCore.instances), 1)
+
+    def test_completed_cached_cover_is_not_refetched_after_connectivity_change(self):
+        app = artwork.Artwork(self.directory.name)
+        key = app._cache_key("Artist", "Album")
+        Path(app._path(key, ".jpg")).write_bytes(b"cached image")
+        decoded = object()
+        with patch.object(app, "_decode", return_value=decoded):
+            app.start("Artist", "Album", 0)
+        app.step(100, False)
+        app.step(2000, True)
+        self.assertIs(app.image, decoded)
+        self.assertFalse(app._resume_after_connect)
+        self.assertEqual(FakeCore.instances, [])
+
+    def test_unsupported_fetch_is_stable_across_reconnects(self):
+        unbounded_url = Mock(side_effect=AssertionError("unbounded fetch must not start"))
+        with patch.object(artwork, "fetch", SimpleNamespace(url=unbounded_url)):
+            app = artwork.Artwork(self.directory.name)
+            app.start("Artist", "Album", 0)
+            original_message = app.message
+            for now, connected in ((100, False), (2000, True), (2100, True),
+                                   (3000, False), (4000, True)):
+                app.step(now, connected)
+        self.assertFalse(app._resume_after_connect)
+        self.assertIsNone(app.request)
+        self.assertEqual(app.message, original_message)
+        self.assertIn("bounded fetch", app.message)
+        unbounded_url.assert_not_called()
+
+    def test_non_connectivity_failure_does_not_arm_reconnect_resume(self):
+        app = artwork.Artwork(self.directory.name)
+        app.start("Artist", "Album", 0)
+        FakeCore.instances[-1].actions = [OSError("request failed")]
+        app.step(1, True)
+        for now, connected in ((2, True), (100, False), (2000, True)):
+            app.step(now, connected)
+        self.assertFalse(app._resume_after_connect)
+        self.assertIsNone(app.request)
+        self.assertEqual(len(FakeCore.instances), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

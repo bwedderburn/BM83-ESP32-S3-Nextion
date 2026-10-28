@@ -23,6 +23,8 @@ Wi-Fi failures honor their retry deadlines, releasing an inactive volume button
 does not stop the direction still being held, and accented metadata maps to the
 correct display characters. Empty or invalid album metadata clears the previous
 artwork identity so Retry cannot restore a stale cover.
+An unfinished lookup interrupted by Wi-Fi loss resumes once when connectivity
+returns; explicit cancellation and completed or failed lookups do not loop.
 
 Artwork responses now use the public bounded `fetch.AsyncFetch` API, with a
 32 KiB JSON limit, 128 KiB JPEG limit, 10-second inactivity timeout, and a

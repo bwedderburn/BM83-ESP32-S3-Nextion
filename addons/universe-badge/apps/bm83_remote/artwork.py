@@ -319,6 +319,7 @@ class Artwork:
         self.next_http = 0
         self.last_mb_at = None
         self.started = 0
+        self._resume_after_connect = False
         self.group = None
         self.fallback_used = False
         self.busy = 0
@@ -487,6 +488,7 @@ class Artwork:
         return True
 
     def cancel(self):
+        self._resume_after_connect = False
         self._dispose_request()
         self.stage = ""
         self.group = None
@@ -588,11 +590,18 @@ class Artwork:
             return
 
     def step(self, now, connected):
+        if self._resume_after_connect:
+            if connected:
+                self._resume_after_connect = False
+                self.start(self.artist, self.album, now)
+            return
         if not self.stage:
             return
         if not connected:
+            resume = bool(self.artist and self.album)
             self.message = "Artwork needs internet"
             self.cancel()
+            self._resume_after_connect = resume
             return
         if ((now - self.started) & 0xffffffff) > 45000:
             self.message = "Artwork lookup timed out"
