@@ -18,6 +18,10 @@ build/
 # macOS
 .DS_Store
 
+# Badge credentials and persistent runtime data
+secrets.py
+/addons/universe-badge/state/
+
 # KiCad 6/7/8/9 noise
 *.kicad_prl
 *-backups/

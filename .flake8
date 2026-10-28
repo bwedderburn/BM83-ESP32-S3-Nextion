@@ -30,3 +30,8 @@ extend-exclude =
 # against the same limits the workflow uses rather than flake8's 79-col default.
 max-line-length = 127
 max-complexity = 10
+
+# Badge entrypoints receive their graphics/buttons/run globals from badge firmware.
+# Keep strict linting on the portable protocol, models, transport and artwork helpers.
+per-file-ignores =
+    addons/universe-badge/apps/bm83_remote/__init__.py:F821
