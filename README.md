@@ -16,6 +16,16 @@ This project implements a CircuitPython-based remote control system for audio de
 - Robust BLE bond recovery and advertising
 - CrowPanel Pause/Enable for BLE volume-remote handoff while keeping saved bonds
 
+## Optional GitHub Universe badge add-on
+
+[BM83 Remote](addons/universe-badge/README.md) contains the user's Universe badge
+client, icon, setup notes, and host tests. It lives outside `firmware/` and is
+not included in `deploy.sh` or the CircuitPython distribution. A matching BMW1
+authenticated UDP receiver is required for live control; the current `main`
+snapshot (`d2e773d`) does not contain that receiver. The import does not establish
+hardware interoperability. The [Universe workshop repository](https://github.com/bwedderburn/github-universe-2026)
+also keeps a matching client snapshot beside World Capitals.
+
 ## 📁 Project Structure
 
 ```
