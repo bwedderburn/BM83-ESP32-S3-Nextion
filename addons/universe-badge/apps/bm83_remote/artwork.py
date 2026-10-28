@@ -22,9 +22,77 @@ REDIRECT_STATUSES = (301, 302, 303, 307, 308)
 # request rate is well within its limits; about 40% of searches hit it on site Wi-Fi.
 BUSY_STATUSES = (429, 502, 503, 504)
 MB_RETRIES = 3
+FETCH_TIMEOUT_SECONDS = 10
 HOSTS = ("musicbrainz.org", "coverartarchive.org", "api.deezer.com",
          "cdn-images.dzcdn.net", "archive.org")
 MBID_CHARS = "0123456789abcdef-"
+
+
+class BoundedRequest:
+    """Pump a size-limited response in memory, then write a complete cache file.
+
+    Upstream Badgeware AsyncFetch limits buffered responses with max_bytes;
+    its .to(file) path bypasses that bound. reset() stops cooperative I/O and
+    closes the socket, so an unfinished request cannot outlive cancellation.
+    https://github.com/pimoroni/tufty2350/blob/ee84772fb7f7d5424e9593029caba815c6f89c80/modules/common/fetch.py
+    """
+
+    def __init__(self, url, headers, destination, limit):
+        factory = getattr(fetch, "AsyncFetch", None)
+        if not callable(factory):
+            raise ValueError("bounded fetch support required")
+        host, _, path = url[8:].partition("/")
+        try:
+            core = factory(host, use_tls=True, max_bytes=limit,
+                           timeout=FETCH_TIMEOUT_SECONDS)
+        except TypeError:
+            raise ValueError("bounded fetch support required")
+        if not all(callable(getattr(core, name, None))
+                   for name in ("fetch", "update", "reset")):
+            raise ValueError("bounded fetch support required")
+        self._fetch = core
+        self.destination = destination
+        self.limit = limit
+        self.error = None
+        self._finished = False
+        self._cancelled = False
+        # fetch() only configures the cooperative operation; update() does I/O.
+        try:
+            core.fetch("/" + path, headers=headers)
+        except Exception:
+            core.reset()
+            raise
+
+    @property
+    def done(self):
+        return self._finished
+
+    def __bool__(self):
+        if self._cancelled:
+            return False
+        if not self._finished:
+            try:
+                self._fetch.update()
+                if not self._fetch.done:
+                    return False
+                body = self._fetch.body
+                if len(body) > self.limit:
+                    raise ValueError("Artwork response too large")
+                with open(self.destination, "wb") as target:
+                    target.write(body)
+            except Exception as error:
+                self.error = error
+            self._finished = True
+            try:
+                self._fetch.reset()
+            except Exception as error:
+                self.error = error
+        return self.error is None
+
+    def cancel(self):
+        self._cancelled = True
+        self._finished = True
+        self._fetch.reset()
 
 
 def _allowed_url(url):
@@ -241,8 +309,6 @@ class Artwork:
     def __init__(self, directory="/state/bm83_art"):
         self.directory = directory
         self.request = None
-        self.abandoned = None
-        self.deferred = None
         self.temp = None
         self.stage = ""
         self.key = None
@@ -282,49 +348,18 @@ class Artwork:
             if not error.args or error.args[0] != 2:
                 print("BM83 artwork temp cleanup:", str(error)[:64])
 
-    @staticmethod
-    def _request_done(request):
-        done = getattr(request, "done", False)
-        if callable(done):
-            done = done()
-        return bool(done) or bool(getattr(request, "error", None)) or bool(request)
-
-    def _dispose_request(self, force=False):
+    def _dispose_request(self):
         request, self.request = self.request, None
         path, self.temp = self.temp, None
-        if request is None:
-            self._remove_temp(path)
-            return
-        stop = getattr(request, "cancel", None)
-        if not callable(stop):
-            stop = getattr(request, "close", None)
-        if callable(stop):
+        if request is not None:
             try:
-                stop()
-                self._remove_temp(path)
-                return
+                request.cancel()
             except Exception as error:
                 print("BM83 artwork request cleanup:", str(error)[:64])
-        if force or self._request_done(request):
-            self._remove_temp(path)
-            return
-        # fetch exposes no cancellation method; serialize one abandoned transfer.
-        self.abandoned = (request, path)
+        self._remove_temp(path)
 
     def close(self):
         self.cancel()
-        if self.abandoned:
-            request, path = self.abandoned
-            stop = getattr(request, "cancel", None)
-            if not callable(stop):
-                stop = getattr(request, "close", None)
-            if callable(stop):
-                try:
-                    stop()
-                except Exception as error:
-                    print("BM83 artwork request cleanup:", str(error)[:64])
-            self.abandoned = None
-            self._remove_temp(path)
 
     def _cache_key(self, artist, album):
         value = (_normal(artist) + "\0" + _normal(album, True)).encode("utf-8")
@@ -336,10 +371,14 @@ class Artwork:
     def start(self, artist, album, now):
         if not isinstance(artist, str) or not isinstance(album, str) or not artist or not album:
             self.cancel()
+            self.key = None
+            self.artist = self.album = ""
             self.message = "No album artwork"
             return
         if len(artist) > 96 or len(album) > 96:
             self.cancel()
+            self.key = None
+            self.artist = self.album = ""
             self.message = "Artwork metadata too long"
             return
         key = self._cache_key(artist, album)
@@ -379,7 +418,7 @@ class Artwork:
                 self.message, self.stage = "No matching cover", ""
                 return
         if (self.last_mb_at is not None
-                and 0 <= now - self.last_mb_at < HTTP_GAP_MS):
+                and ((now - self.last_mb_at) & 0xffffffff) < HTTP_GAP_MS):
             self.stage = "mb-wait"
             self.wait_fallback = fallback
             return
@@ -394,22 +433,20 @@ class Artwork:
         if fetch is None:
             self.message, self.stage = "Artwork needs internet", ""
             return
-        if self.abandoned:
-            self.deferred = (url, stage, limit)
-            self.stage = "fetch-wait"
-            self.message = "Waiting for previous cover request"
+        if not callable(getattr(fetch, "AsyncFetch", None)):
+            self.message, self.stage = "Artwork needs bounded fetch support", ""
             return
-        # A finished fetch keeps its socket until it is collected, and the socket
-        # pool is tiny: after about five requests the next one fails with ENOMEM
-        # even though megabytes of heap are free.
+        # Release previous response buffers before allocating another response.
         gc.collect()
         self.temp = self._path(self.key, ".tmp")
         try:
             json_stage = stage in ("mb", "mb-fallback", "deezer-search")
             if stage.startswith("mb"):
                 self.last_mb_at = now
-            self.request = fetch.url(url, headers={"User-Agent": USER_AGENT,
-                                                   "Accept": "application/json" if json_stage else "image/jpeg"}).to(self.temp)
+            self.request = BoundedRequest(
+                url, {"User-Agent": USER_AGENT,
+                      "Accept": "application/json" if json_stage else "image/jpeg"},
+                self.temp, limit)
         except Exception as error:
             self.request = None
             self._remove_temp(self.temp)
@@ -431,7 +468,7 @@ class Artwork:
         if self.hops >= MAX_REDIRECTS or not _allowed_url(url):
             raise ValueError("Artwork redirect rejected")
         stage, limit, hops = self.stage, self.limit, self.hops + 1
-        self._dispose_request(True)
+        self._dispose_request()
         self._request_url(url, stage, limit, now, hops)
         return True
 
@@ -444,13 +481,12 @@ class Artwork:
             return False
         self.busy += 1
         print("BM83 artwork: MusicBrainz busy (%d), retry %d" % (status, self.busy))
-        self._dispose_request(True)
+        self._dispose_request()
         self.last_mb_at = now
         self._begin_mb(now, stage == "mb-fallback")
         return True
 
     def cancel(self):
-        self.deferred = None
         self._dispose_request()
         self.stage = ""
         self.group = None
@@ -552,50 +588,28 @@ class Artwork:
             return
 
     def step(self, now, connected):
-        if self.abandoned:
-            request, path = self.abandoned
-            if not self._request_done(request):
-                if not connected and self.deferred:
-                    self.deferred = None
-                    self.stage = ""
-                    self.message = "Artwork needs internet"
-                return
-            self.abandoned = None
-            self._remove_temp(path)
-            if self.deferred:
-                if not connected:
-                    self.deferred = None
-                    self.stage = ""
-                    self.message = "Artwork needs internet"
-                    return
-                url, stage, limit = self.deferred
-                self.deferred = None
-                self.stage = ""
-                self.started = now
-                self._request_url(url, stage, limit, now)
-                return
-        if self.stage == "mb-wait":
-            if self.last_mb_at is None or now - self.last_mb_at >= HTTP_GAP_MS:
-                self.stage = ""
-                self._begin_mb(now, self.wait_fallback)
-            return
         if not self.stage:
             return
         if not connected:
             self.message = "Artwork needs internet"
             self.cancel()
             return
-        if now - self.started > 45000:
+        if ((now - self.started) & 0xffffffff) > 45000:
             self.message = "Artwork lookup timed out"
             self.cancel()
+            return
+        if self.stage == "mb-wait":
+            if (self.last_mb_at is None
+                    or ((now - self.last_mb_at) & 0xffffffff) >= HTTP_GAP_MS):
+                self.stage = ""
+                self._begin_mb(now, self.wait_fallback)
             return
         if self.request is not None:
             if _jpeg_size(self.temp) > self.limit:
                 self.message = "Artwork response too large"
                 self.cancel()
                 return
-            # fetch reports success as a one-shot truthy value; a failed request
-            # never becomes truthy and only sets error.
+            # The adapter pumps one cooperative step and latches success/error.
             if self.request or getattr(self.request, "error", None):
                 try:
                     stage = self.stage
@@ -635,7 +649,7 @@ class Artwork:
                         self.message = "Artwork unavailable"
                         self.cancel()
                     return
-            # The async fetch object yields until its worker completes.
+            # The cooperative fetch advances again on the next frame.
             return
 
     def _use_deezer(self, data, now):

@@ -111,8 +111,8 @@ class BM83Remote:
     def _wifi(self, now):
         if self.config_error or wifi is None:
             return False
-        if now < self.next_wifi and self.wifi_ready:
-            return True
+        if now < self.next_wifi:
+            return self.wifi_ready
         try:
             self.wifi_ready = bool(wifi.connect())
             if not self.wifi_ready:
@@ -144,18 +144,19 @@ class BM83Remote:
                             "BLE_PAUSE" if pause else "BLE_ENABLE"))
         return choices
 
-    def _control(self, token, now):
+    def _control(self, command, now):
         if self.remote is None:
             self.feedback = "Configure Wi-Fi and BM83 secrets first"
             return
-        if token in ("BLE_PAUSE", "BLE_ENABLE") and not self.ble.available(now):
+        if command in ("BLE_PAUSE", "BLE_ENABLE") and not self.ble.available(now):
             self.feedback = "Fresh BLE status required"
             return
-        if not self.remote.queue_command(token):
+        if not self.remote.queue_command(command):
             self.feedback = self.remote.feedback
 
     def input(self, now):
-        if badge.released(BUTTON_UP) or badge.released(BUTTON_DOWN):
+        if ((self.hold_action == "up" and badge.released(BUTTON_UP))
+                or (self.hold_action == "down" and badge.released(BUTTON_DOWN))):
             if self.remote:
                 self.remote.release_volume()
             self.hold_action = None
@@ -202,19 +203,19 @@ class BM83Remote:
         if badge.pressed(BUTTON_DOWN):
             self.setting_index = (self.setting_index + 1) % len(choices)
         if badge.pressed(BUTTON_SELECT):
-            token = choices[self.setting_index][1]
-            if token == "BT_EBIND":
+            command = choices[self.setting_index][1]
+            if command == "BT_EBIND":
                 self.erase_confirm = True
                 self.confirm_choice = 0
-            elif token == "NET_RETRY":
-                self._control(token, now)
+            elif command == "NET_RETRY":
+                self._control(command, now)
                 if self.remote:
                     self.remote.queue_command("STATUS")
                 self.artwork.retry(now)
                 self.wifi_ready = False
                 self.next_wifi = now
             else:
-                self._control(token, now)
+                self._control(command, now)
 
     def inject_sample(self):
         sample = {

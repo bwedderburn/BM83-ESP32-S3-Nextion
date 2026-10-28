@@ -12,17 +12,38 @@ Receiver interoperability and physical badge/audio-unit operation have not been
 verified by this import. Use the sample-state preview or host tests until a
 matching receiver is available and separately validated.
 
-The only runtime change from the snapshot rejects playback snapshots that omit
+Playback validation now rejects snapshots that omit
 `duration_ms`, `position_ms`, or `position_age_ms`; these fields may explicitly
 be `None`. Previously those malformed snapshots passed validation and could
-raise `KeyError`. A targeted `F821` lint annotation also identifies the `image`
+raise `KeyError`. Volume gestures also retain their own press/release ordering:
+rapidly releasing and pressing the same button sends press, release, press,
+including when the first press is still in flight. Completed quick taps each
+retain their release; a release awaiting retry still blocks newer commands.
+Wi-Fi failures honor their retry deadlines, releasing an inactive volume button
+does not stop the direction still being held, and accented metadata maps to the
+correct display characters. Empty or invalid album metadata clears the previous
+artwork identity so Retry cannot restore a stale cover.
+
+Artwork responses now use the public bounded `fetch.AsyncFetch` API, with a
+32 KiB JSON limit, 128 KiB JPEG limit, 10-second inactivity timeout, and a
+45-second overall budget checked between cooperative steps. Cancellation resets
+the request and closes its socket. Only a completed, bounded response is written
+to a temporary file. Firmware lacking this API shows a bounded-fetch-required
+message; cached artwork and audio controls remain available. The upstream API
+can block during DNS, which the cooperative deadline cannot preempt.
+
+A targeted `F821` lint annotation also identifies the `image`
 global supplied by badge firmware in `artwork.py`; it changes no behavior.
-Text line endings are normalized to LF; remaining code and the icon are unchanged.
+Internal command identifiers and pending-state fields use `command` so static
+security scanners do not mistake public command strings for credentials. The
+BMW1 wire JSON field remains `token` for receiver compatibility; this rename
+changes no behavior. Text line endings are normalized to LF, and the original
+menu icon is preserved.
 
 ## Badge runtime
 
 This app needs the GitHub Universe badge firmware, its injected graphics/button
-APIs, `wifi`, `fetch`, and MicroPython socket/hash/time support. It has no pip
+APIs, `wifi`, bounded `fetch.AsyncFetch`, and MicroPython socket/hash/time support. It has no pip
 or npm dependencies and is not a standalone CPython application. The folder is
 installed as `/system/apps/bm83_remote` on the badge; its existing launcher
 discovers app folders. Do not replace the badge's launcher or `main.py`.
@@ -60,15 +81,21 @@ Datagrams use the `BMW1.` prefix, a 16-byte HMAC-SHA256 tag, and UTF-8 JSON. The
 
 Artwork uses exact artist/album identity, a MusicBrainz score threshold of 95, unique release-group matches, a minimum 1.1-second MusicBrainz request interval and bounded response/cache sizes. Requests are HTTPS-only and limited to MusicBrainz, Cover Art Archive, Archive.org and Deezer hosts. The badge's `fetch` does not follow redirects, so the app follows at most three itself within that same allow-list. A busy MusicBrainz (HTTP 429, 502, 503 or 504) is retried up to three times at the same request interval before the app reports that artwork is unavailable; Settings then offers a retry. Artwork data is untrusted; only matching artist/album data and baseline JPEGs with bounded dimensions are used.
 
+The [referenced upstream fetch implementation](https://github.com/pimoroni/tufty2350/blob/ee84772fb7f7d5424e9593029caba815c6f89c80/modules/common/fetch.py)
+uses `CERT_NONE`: its HTTPS connection does not authenticate server certificates.
+The app's URL allow-list does not replace certificate verification. Downloaded
+metadata and images are treated as untrusted data; verified TLS on a physical
+badge has not been established by this import.
+
 ## Host tests
 
 Run these dependency-free tests from the repository root:
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_badge_bm83_remote.py'
+python3 -m unittest discover -s tests -p 'test_badge_bm83*.py'
 ```
 
-The same test file locates `addons/universe-badge/apps/bm83_remote` in the BM83
+The test files locate `addons/universe-badge/apps/bm83_remote` in the BM83
 repository or `badge/apps/bm83_remote` in the Universe workshop repository.
 Tests exercise authentication, malformed input, playback freshness, correlated
 BLE confirmation, artwork validation, and a fake UDP socket. They do not execute

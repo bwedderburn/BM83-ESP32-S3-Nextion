@@ -173,6 +173,13 @@ class ModelTests(unittest.TestCase):
         playback.accept(snapshot(play_status=2, title="New song", position_ms=200), 2000)
         self.assertEqual(playback.position(2200), 200)
 
+    def test_display_text_maps_latin_accents_without_shifting_letters(self):
+        self.assertEqual(models.display_text("François, niño"), "Francois, nino")
+        self.assertEqual(models.display_text("àáâãäå ç èéêë ìíîï ñ òóôõöø ùúûü ýÿ"),
+                         "aaaaaa c eeee iiii n oooooo uuuu yy")
+        self.assertEqual(models.display_text("ÀÁÂÃÄÅ Ç ÈÉÊË ÌÍÎÏ Ñ ÒÓÔÕÖØ ÙÚÛÜ ÝŸ"),
+                         "AAAAAA C EEEE IIII N OOOOOO UUUU YY")
+
     def test_ble_confirmation_requires_new_matching_request(self):
         control = models.BleControl()
         control.accept(ble_state(), 0)
@@ -241,6 +248,10 @@ class TransportTests(unittest.TestCase):
         self.remote.queue_command("BT_PLAY")
         self.remote.step(2)
         original = self.socket.sent[-1]
+        message = protocol.decode(KEY, original[0])
+        self.assertEqual(message["token"], "BT_PLAY")
+        self.assertNotIn("command", message)
+        self.assertEqual(self.remote.pending["command"], "BT_PLAY")
         for now in (152, 302, 452, 602):
             self.remote.step(now)
         self.assertIsNone(self.remote.pending)
@@ -279,10 +290,10 @@ class TransportTests(unittest.TestCase):
         self.remote.release_volume()
         self.remote.queue_command("BT_PLAY")
         self.remote.step(2)
-        self.assertEqual(self.remote.pending["token"], "BT_VOLUP_P")
+        self.assertEqual(self.remote.pending["command"], "BT_VOLUP_P")
         self.reply(self.state_reply())
         self.remote.step(3)
-        self.assertEqual(self.remote.pending["token"], "BT_VOLUP_R")
+        self.assertEqual(self.remote.pending["command"], "BT_VOLUP_R")
         release = self.socket.sent[-1]
         for now in (153, 303, 453, 603, 1603):
             self.remote.step(now)
@@ -290,12 +301,72 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(self.socket.sent[-1], release)
         self.assertEqual(self.remote.queue, ["BT_PLAY"])
 
+    def test_release_of_in_flight_press_precedes_same_button_repress(self):
+        self.connect()
+        self.remote.volume("BT_VOLUP")
+        self.remote.step(2)
+        self.remote.release_volume()
+        self.remote.volume("BT_VOLUP")
+        self.reply(self.state_reply())
+        self.remote.step(3)
+        self.assertEqual(self.remote.pending["command"], "BT_VOLUP_R")
+        self.reply(self.state_reply())
+        self.remote.step(4)
+        self.assertEqual(self.remote.pending["command"], "BT_VOLUP_P")
+        commands = [protocol.decode(KEY, wire).get("token") for wire, _ in self.socket.sent[1:]]
+        self.assertEqual(commands, ["BT_VOLUP_P", "BT_VOLUP_R", "BT_VOLUP_P"])
+        self.assertEqual(self.remote.held_volume, "BT_VOLUP")
+
+    def test_complete_rapid_taps_each_keep_their_own_release(self):
+        self.connect()
+        for _ in range(2):
+            self.remote.volume("BT_VOLUP")
+            self.remote.release_volume()
+        self.remote.step(2)
+        for now in (3, 4, 5, 6):
+            self.reply(self.state_reply())
+            self.remote.step(now)
+        commands = [protocol.decode(KEY, wire).get("token") for wire, _ in self.socket.sent[1:]]
+        self.assertEqual(commands, ["BT_VOLUP_P", "BT_VOLUP_R", "BT_VOLUP_P", "BT_VOLUP_R"])
+        self.assertFalse(self.remote.volume_queue)
+        self.assertIsNone(self.remote.pending)
+
+    def test_release_requeued_after_restart_precedes_new_gesture(self):
+        self.connect()
+        self.remote.volume("BT_VOLUP")
+        self.remote.release_volume()
+        self.remote.volume("BT_VOLDN")
+        self.remote.step(2)
+        self.reply(self.state_reply())
+        self.remote.step(3)
+        self.assertEqual(self.remote.pending["command"], "BT_VOLUP_R")
+        self.reply({"v": 1, "type": "rehello", "client": 7, "seq": self.remote.seq})
+        self.remote.step(4)
+        self.reply({"v": 1, "type": "welcome", "nonce": self.remote.nonce,
+                    "unit": "01020304", "client": 8})
+        self.remote.step(5)
+        self.assertEqual(self.remote.pending["command"], "BT_VOLUP_R")
+        self.assertEqual(protocol.decode(KEY, self.socket.sent[-1][0])["token"], "BT_VOLUP_R")
+
+    def test_volume_gesture_queue_is_bounded_but_keeps_stop_requests(self):
+        for _ in range(8):
+            self.assertTrue(self.remote.queue_command("BT_VOLUP_P"))
+        self.assertFalse(self.remote.queue_command("BT_VOLUP_P"))
+        for _ in range(8):
+            self.assertTrue(self.remote.queue_command("BT_VOLUP_R"))
+        self.assertEqual(len(self.remote.volume_queue), 8)
+        self.assertTrue(all(gesture["released"] for gesture in self.remote.volume_queue))
+        for _ in range(100):
+            self.remote.queue_command("BT_VOLDN_R")
+        self.assertEqual(len(self.remote.volume_queue), 9)
+
     def test_input_queue_is_bounded_and_rejects_unknown_commands(self):
         for _ in range(8):
             self.assertTrue(self.remote.queue_command("BT_PLAY"))
         self.assertFalse(self.remote.queue_command("BT_PLAY"))
         self.assertTrue(self.remote.queue_command("BT_VOLUP_R"))
-        self.assertEqual(self.remote.release_due, ["BT_VOLUP_R"])
+        self.assertEqual(self.remote.volume_queue,
+                         [{"command": "BT_VOLUP", "pressed": True, "released": True}])
         with self.assertRaises(ValueError):
             self.remote.queue_command("not-a-command")
 

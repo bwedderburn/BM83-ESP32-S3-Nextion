@@ -9,7 +9,8 @@ This directory is the canonical home for the badge client. The
 [Universe workshop repository](https://github.com/bwedderburn/github-universe-2026)
 keeps a matching copy at `badge/apps/bm83_remote/` so the remote and World Capitals
 can be reviewed together. Apply client fixes here first, then mirror the seven
-app files and `tests/test_badge_bm83_remote.py` into that repository. Its
+app files and all three host test files (`test_badge_bm83_remote.py`,
+`test_badge_bm83_artwork.py`, and `test_badge_bm83_ui.py`) into that repository. Its
 `scripts/check-bm83-addon.py --bm83-repo /path/to/this/repository` checks equality.
 
 ## Compatibility
@@ -41,7 +42,7 @@ only app code and its menu icon; the original BADGER copy remains unchanged.
 ## Host checks
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_badge_bm83_remote.py'
+python3 -m unittest discover -s tests -p 'test_badge_bm83*.py'
 ```
 
 No additional packages or physical devices are required. The badge entrypoint

@@ -151,7 +151,7 @@ class BleControl:
 def display_text(text):
     substitutions = {0x2018: "'", 0x2019: "'", 0x201c: '"', 0x201d: '"',
                      0x2026: "...", 0x2212: "-"}
-    accents = "aaaaaaaceeeeiiiinoooooouuuuyy"
+    accents = "aaaaaaceeeeiiiinoooooouuuuyy"
     originals = "àáâãäåçèéêëìíîïñòóôõöøùúûüýÿ"
     out = ""
     for char in text.replace("o\u0308", "ö").replace("O\u0308", "Ö"):
