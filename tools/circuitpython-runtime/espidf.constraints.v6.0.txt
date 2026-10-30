@@ -14,7 +14,7 @@ pyserial>=3.3
 # Only binary for cryptography is here to make it work on ARMv7 architecture
 # We do have cryptography binary on https://dl.espressif.com/pypi for ARM
 # On https://pypi.org/ are no ARM binaries as standard now
-cryptography>=2.1.4,<46.1
+cryptography>=50.0.0,<50.1
 --only-binary cryptography
 
 # pyparsing: Min version was set based on https://github.com/pyparsing/pyparsing/issues/482
