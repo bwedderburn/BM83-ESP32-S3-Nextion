@@ -35,6 +35,8 @@ sym-lib-table-bak
 *.bak
 
 # Editor junk
-.vscode/
+.vscode/*
+!.vscode/tasks.json
+!.vscode/extensions.json
 .idea/
 tools/mpy-cross/

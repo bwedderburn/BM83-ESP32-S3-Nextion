@@ -40,7 +40,7 @@ CI:
 ### Install (local dev)
 ```bash
 python -m pip install --upgrade pip
-python -m pip install flake8 pytest
+python -m pip install -r requirements-reliability.txt
 ```
 
 ### Linting (CI-compatible)
@@ -103,7 +103,7 @@ pytest -v
 5. Don’t duplicate protocol constants/encoders across files—centralize in the relevant module.
 
 ## Dependency Verification & Enhancement Checks
-- When adding or updating dependencies from supported ecosystems (pip/npm/etc.), run the `gh-advisory-database` tool available in this environment with the exact name/version and address any findings before finalizing changes.
+- For Python dependency changes, run the pinned `pip-audit` against each affected requirements file and address findings before finalizing changes. Use an ecosystem-appropriate advisory check for other dependency types; report unavailable checks explicitly.
 - If the dependency version is unknown, determine it first (e.g., from `pyproject.toml`, `setup.py`, `requirements.txt`, or `lib/` usage notes) before running the advisory check.
 - While making code changes, look for small, safe enhancements (reuse existing helpers, add missing docstrings for public helpers, reduce duplicated protocol logic) without expanding scope or breaking CircuitPython constraints.
 
@@ -117,7 +117,7 @@ pytest -v
 - **Always** run linters (`flake8`) and tests (`pytest`) before committing
 - Keep commits focused and atomic
 - Write clear, descriptive commit messages
-- All changes must pass CI (Python 3.9, 3.10, 3.11)
+- All changes must pass CI (Python 3.11, 3.12, 3.13)
 - Do not force-push or rebase shared branches
 - Test on actual hardware when modifying protocol logic (BM83/Nextion/BLE)
 
@@ -219,15 +219,14 @@ any change that touches one.
 9. **Green CI is not a merge verdict for protocol changes** — the hardware serial capture is
    (see `CLAUDE.md`). Label firmware-behavior PRs `needs-hardware-test`.
 
-## Automation conventions (weekly agents)
+## Verified reliability workflow
 
-- Monday: `weekly-copilot-review.yml` opens a focused issue (label `agent:weekly`, 4-week
-  rotation deps → robustness → quality → tests) assigned to the Copilot coding agent.
-- Thursday: `weekly-claude-audit.yml` runs the Claude dependency/upgrade audit and writes
-  `docs/weekly-audit/<date>.md`.
-- Agent ground rules: ≤ ~300 changed lines per PR, host-verifiable changes only, no firmware
-  behavior changes (those become `code-health` issues with proposed diffs), workflows and
-  `Documents/` read-only.
-- The full review brief lives in `.github/prompts/extensive-review.prompt.md`.
-- Repo-health facts (inventory, TODO debt, churn, dependency report, test/lint status) are
-  available via the `repo-health` MCP server (`tools/mcp/repo_health/`).
+- Follow `docs/reliability/README.md` and the scoped reliability instructions.
+- Use local GitHub Copilot GPT read-only review profiles in `.github/agents/`.
+  Do not launch Claude or cloud coding jobs or assign reliability issues to bots.
+- Preserve frozen host candidates and private evidence. No hardware I/O during
+  repository validation; keep implementation PRs draft and Phase 2 blocked.
+- Use the pinned development requirements and explicit VS Code `BM83:` tasks.
+  CI uses Python 3.11/3.12/3.13; host CI is not physical acceptance.
+- The legacy weekly agent workflows are retired in this draft, not disabled on
+  the remote default branch until it is merged. Do not dispatch them.

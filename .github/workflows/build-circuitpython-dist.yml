@@ -25,9 +25,12 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Install tools
         run: |
@@ -57,7 +60,7 @@ jobs:
           zip -r circuitpython-dist-${{ github.sha }}.zip circuitpython BUILD_INFO.txt
 
       - name: Upload artifact (zip)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: circuitpython-dist-mpy${{ steps.mpy_cross.outputs.version }}-${{ github.sha }}
           path: dist/circuitpython-dist-${{ github.sha }}.zip
@@ -65,7 +68,7 @@ jobs:
 
       # Optional: also upload the raw folder (handy for browsing without unzipping)
       - name: Upload artifact (folder)
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: circuitpython-folder-mpy${{ steps.mpy_cross.outputs.version }}-${{ github.sha }}
           path: dist/circuitpython

@@ -1,0 +1,53 @@
+name: Reliability investigation
+description: Evidence-led, human-owned BM83 reliability work; no deployment authorization.
+title: "Reliability: "
+assignees: [bwedderburn]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep captures, credentials, network identifiers and machine reports private.
+        This form does not authorize hardware actions or a cloud coding assignment.
+        Phase 2 remains blocked on explicit Phase 1 physical acceptance.
+  - type: input
+    id: owner
+    attributes:
+      label: Owner
+      value: "@bwedderburn"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence versus hypotheses
+      description: Label source proof, host tests, fresh hardware observations and user reports separately.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and stop conditions
+      description: Sanitized versions/workload and expected versus actual behavior; no raw captures.
+    validations:
+      required: true
+  - type: textarea
+    id: experiment
+    attributes:
+      label: Next controlled experiment
+      description: Default host-only. Hardware plans need separate explicit authorization and rollback.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance gates
+      description: Protocol/baseline-derived budgets; hardware needs >=30-minute soak, power/reconnect, physical screens/buttons/HOME and a platform matrix.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and related work
+      description: Link predecessor issues, milestone and existing drafts; deduplicate before creating.
+    validations:
+      required: true

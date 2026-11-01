@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "BM83: host tests",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-m", "pytest", "-q"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "BM83: reliability policy",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": ["scripts/check_reliability_setup.py"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    },
+    {
+      "label": "BM83: security (host only)",
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-m", "bandit", "--ini", ".bandit", "-r", "firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "-ll"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    }
+  ]
+}

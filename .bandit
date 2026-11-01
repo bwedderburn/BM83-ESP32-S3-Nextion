@@ -1,8 +1,6 @@
 [bandit]
-# INI-style bandit config. `bandit -r <dir>` auto-discovers it, and Codacy's
-# bandit engine (.github/workflows/codacy.yml) runs `bandit --ini .bandit`
-# and then does NOT fall back to [tool.bandit] in pyproject.toml, so keep the
-# two in step.
+# INI-style bandit config. Host security CI passes `--ini .bandit` explicitly.
+# Keep the exclusions in step with [tool.bandit] in pyproject.toml.
 #
 # The INI key is `exclude`; `exclude_dirs` is only valid in pyproject.toml /
 # YAML configs and bandit silently ignores it here. Entries are globs matched
