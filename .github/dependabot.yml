@@ -4,6 +4,13 @@
 # https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
 version: 2
 updates:
+  # Version-update proposals only; changing this frozen build snapshot needs review.
+  - package-ecosystem: "pip"
+    directory: "/tools/circuitpython-runtime"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 2
+
   - package-ecosystem: "pip"
     directory: "/"
     schedule:

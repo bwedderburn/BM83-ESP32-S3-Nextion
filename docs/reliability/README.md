@@ -77,12 +77,32 @@ folder open. Run Universe's existing `scripts/check-bm83-addon.py --bm83-repo
 <canonical-checkout>` to compare seven app files and three tests. Use exact
 reviewed revisions in the evidence record, not changing branch tips.
 
-PR checks use GitHub-hosted runners, read-only contents permission, full-SHA
+Checked-in PR workflows use GitHub-hosted runners, read-only contents permission, full-SHA
 Actions and nonpersistent checkout credentials. Security/dependency checks do
 not need Codacy tokens, SARIF write permissions or a paid security feature.
 YAML is supported for issue forms; GitHub PR templates are Markdown, not YAML.
 The structural checker is a regression guard, not a complete GitHub/VS Code
 schema validator or security sandbox.
+
+### Separate frozen native-build dependency gate
+
+GitHub currently reports **four pre-existing alerts (three high, one moderate)**
+for `cryptography==46.0.7` in `tools/circuitpython-runtime/requirements-build.txt`.
+The explicit non-installing audit below also fails. These are host build-tool
+dependencies, not evidence about the controller's native PSA/SHA failure.
+
+```sh
+.venv/bin/python -m pip_audit --disable-pip --no-deps -r tools/circuitpython-runtime/requirements-build.txt
+```
+
+The corresponding VS Code task preserves a nonzero result; no advisory is
+ignored. Dependabot now covers this directory for reviewed update proposals.
+The frozen build snapshot, native source/compiler pins and candidate artifacts
+are unchanged. Compatible remediation and reproducible-build validation remain
+an open gate in #193. The PR host-security job audits development/MCP dependencies,
+not this frozen toolchain; its green result must not be called a clean bill of
+health for every manifest. See the repository's protected Dependabot alerts for
+details; do not publish private build reports.
 
 ## Derive budgets before claiming responsiveness
 
