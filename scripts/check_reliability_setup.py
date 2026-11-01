@@ -22,6 +22,8 @@ def step_errors(step):
 
 OUT_OF_SCOPE = "# reliability-scope: out-of-scope legacy automation"
 PR_EVENTS = ("pull_request", "pull_request_target", "workflow_run")
+# Labeled unrelated automation may only run on these non-PR triggers.
+OUT_OF_SCOPE_EVENTS = ("schedule", "workflow_dispatch", "push")
 
 
 def trigger_errors(data, text):
@@ -31,7 +33,7 @@ def trigger_errors(data, text):
         events = [events]
     # Explicitly labeled unrelated automation is preserved, but never as a PR job.
     if text.startswith(OUT_OF_SCOPE):
-        if any(event in events for event in PR_EVENTS):
+        if not events or any(event not in OUT_OF_SCOPE_EVENTS for event in events):
             return ["out-of-scope workflow must not run on pull requests"]
         return []
     if any(event in events for event in ("pull_request_target", "workflow_run")):
@@ -44,7 +46,7 @@ def workflow_errors(data, text):
     if text.startswith(OUT_OF_SCOPE):
         return errors
     for pattern, label in (
-            (r"\bsecrets\s*[.\[]", "secrets"),
+            (r"\bsecrets\b", "secrets"),
             (r"anthropics/|@anthropic-ai/claude-code|agent_assignment|copilot-swe-agent",
              "separate/cloud agent"),
             (r"(?:^|\brun:|[;&|])\s*(?:exec\s+)?claude\b", "separate Claude command")):

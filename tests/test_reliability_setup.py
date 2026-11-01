@@ -71,6 +71,7 @@ class ReliabilityPolicyTests(unittest.TestCase):
 
     def test_secrets_and_cloud_assignment(self):
         for text in ("${{ secrets.TOKEN }}", "${{ secrets['TOKEN'] }}",
+                     "${{ toJSON(secrets) }}", "secrets: inherit",
                      "agent_assignment", "anthropics/action", "run: CLAUDE --print",
                      "  claude --print", "npx @anthropic-ai/claude-code"):
             with self.subTest(text=text):
@@ -81,11 +82,15 @@ class ReliabilityPolicyTests(unittest.TestCase):
         data = self.workflow()
         data["on"] = {"schedule": [{"cron": "0 0 * * 1"}]}
         self.assertEqual(POLICY.workflow_errors(data, label), [])
-        for event in POLICY.PR_EVENTS:
+        for event in POLICY.PR_EVENTS + ("pull_request_review", "issue_comment",
+                                         "merge_group", "pull_request_review_comment"):
             with self.subTest(event=event):
                 data["on"] = {event: None}
                 self.assertEqual(POLICY.workflow_errors(data, label), [
                     "out-of-scope workflow must not run on pull requests"])
+        parsed = yaml.safe_load("on: [schedule, issue_comment]\njobs: {}\n")
+        self.assertEqual(POLICY.workflow_errors(parsed, label), [
+            "out-of-scope workflow must not run on pull requests"])
         data["on"] = {"schedule": None}
         unlabeled = "# out-of-scope\nrun: claude --print\n"
         self.assertIn("forbidden credential/agent reference: separate Claude command",
