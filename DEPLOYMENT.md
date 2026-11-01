@@ -384,12 +384,27 @@ requests; no reload token is dispatched. This protects older badge clients
 too. The badge settings retry is badge-local Wi-Fi/artwork recovery only.
 The shared non-BMW1 artwork retry now requests `microcontroller.reset()`, not
 `supervisor.reload()`. It retains existing-profile validation and never joins
-Wi-Fi in the hot UART loop. If the hard-reset API is unavailable it logs an
+Wi-Fi in the hot UART loop. It refuses the request whenever USB is enumerated,
+even if its serial console is closed, and when the USB-state API is unavailable
+or unreadable. Safely eject and disconnect USB before a separately authorized
+remote retry; ejection alone is not inferred from serial state. The guard also
+covers injected reset callbacks. If the hard-reset API is unavailable it logs an
 explicit refusal, with no soft-reload fallback. The injectable `reload_fn`
 argument is retained for existing host callers. This candidate mitigation still
 requires a live retry regression; a successful safe-mode recovery is not that
 test. Bond erasure remains refused unless separately opted in; allowing bond
 erasure does not enable BMW1 receiver retry.
+
+The receiver now reuses an active HELLO nonce without resetting command sequence
+watermarks. A fixed 512-byte per-activation ledger prevents retired HELLO packets
+from repeatedly evicting current clients. It admits at most 64 unique nonces per
+activation; after that it fails closed for new handshakes while established
+clients, active retries and required volume releases continue. A separately
+requested local restart is needed before further new sessions. This bounded
+resource tradeoff changes no wire format or key and has only host validation.
+BLE observations are withheld while same-pass BLE commands await dispatch, and
+the 20 ms packet limiter uses wrap-safe integer ticks rather than float uptime.
+None of these changes establishes radio stability or physical acceptance.
 
 The one-time `tools/provision_artwork_wifi.py` utility still uses Ctrl-D after
 stopping the controller. Do not run it unmodified on this faulting runtime.

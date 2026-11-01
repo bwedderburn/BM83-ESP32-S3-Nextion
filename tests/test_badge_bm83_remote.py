@@ -424,6 +424,111 @@ class TransportTests(unittest.TestCase):
         self.assertNotIn("BT_VOLUP_P", self.sent_tokens())
         self.assertEqual(self.remote.pending["command"], "STATUS")
 
+    def test_late_welcome_cannot_rescue_expired_presses_even_without_retries(self):
+        for start in (0, 0xffffff00):
+            with self.subTest(start=start):
+                self.socket.sent.clear()
+                self.socket.incoming.clear()
+                self.remote = transport.Remote(PEER[0], PEER[1], KEY)
+                self.remote.last_poll = (start - 1000) & 0xffffffff
+                self.remote.step(start)
+                self.remote.queue_command("BT_POWER")
+                self.remote.volume("BT_VOLUP")
+                self.reply({"v": 1, "type": "welcome", "nonce": self.remote.nonce,
+                            "unit": "01020304", "client": 7})
+                # A delayed frame crosses the whole hello budget in one step.
+                self.remote.step((start + 600) & 0xffffffff)
+                self.assertIsNone(self.remote.client)
+                self.assertIsNone(self.remote.pending)
+                self.assertFalse(self.remote.queue)
+                self.assertFalse(self.remote.volume_queue)
+                self.assertIsNone(self.remote.held_volume)
+                self.assertEqual(self.remote.feedback, "Audio unit: no reply - 2 not sent")
+                self.remote.release_volume()
+                self.remote.step((start + 1600) & 0xffffffff)
+                self.reply({"v": 1, "type": "welcome", "nonce": self.remote.nonce,
+                            "unit": "01020304", "client": 8})
+                self.remote.step((start + 1601) & 0xffffffff)
+                self.assertEqual(self.remote.client, 8)
+                self.assertFalse(any(self.sent_tokens()))
+
+    def test_welcome_before_elapsed_deadline_can_deliver_a_fresh_press(self):
+        self.remote.step(0)
+        self.remote.queue_command("BT_PLAY")
+        self.reply({"v": 1, "type": "welcome", "nonce": self.remote.nonce,
+                    "unit": "01020304", "client": 7})
+        self.remote.step(599)
+        self.assertEqual(self.remote.pending["command"], "BT_PLAY")
+
+    def test_handshake_timeout_clears_unsent_held_volume_without_a_stop(self):
+        self.remote.step(0)
+        self.remote.volume("BT_VOLUP")
+        for now in (150, 300, 450, 600):
+            self.remote.step(now)
+        self.assertIsNone(self.remote.held_volume)
+        self.remote.release_volume()
+        self.assertFalse(self.remote.volume_queue)
+
+    def test_offline_steps_drop_unsent_input_without_any_network_io(self):
+        self.connect()
+        self.remote.queue_command("BT_PLAY")
+        self.remote.volume("BT_VOLUP")
+        with patch.object(self.socket, "recvfrom", side_effect=AssertionError("offline receive")):
+            self.remote.step(2, connected=False)
+        self.assertEqual(self.sent_tokens(), [None])
+        self.assertFalse(self.remote.queue)
+        self.assertFalse(self.remote.volume_queue)
+        self.assertIsNone(self.remote.held_volume)
+        self.remote.release_volume()
+        self.remote.step(1002)
+        self.assertEqual(self.sent_tokens(), [None, "STATUS"])
+
+    def test_offline_steps_service_in_flight_command_timeout(self):
+        self.connect()
+        self.remote.queue_command("BT_PLAY")
+        self.remote.step(2)
+        for now in (152, 302, 452, 602):
+            self.remote.step(now, connected=False)
+        self.assertIsNone(self.remote.pending)
+        self.assertEqual(self.sent_tokens(), [None, "BT_PLAY"])
+        self.remote.step(603)
+        self.assertEqual(self.sent_tokens(), [None, "BT_PLAY"])
+
+    def test_wifi_loss_keeps_sent_press_release_but_drops_same_button_repress(self):
+        self.connect()
+        self.remote.volume("BT_VOLUP")
+        self.remote.step(2)
+        self.remote.release_volume()
+        self.remote.volume("BT_VOLUP")
+        self.remote.step(3, connected=False)
+        self.assertIsNone(self.remote.held_volume)
+        self.assertEqual(self.remote.volume_queue,
+                         [{"command": "BT_VOLUP", "pressed": True, "released": True}])
+        self.remote.release_volume()
+        self.reply(self.state_reply())
+        self.remote.step(4)
+        self.assertEqual(self.remote.pending["command"], "BT_VOLUP_R")
+        self.reply(self.state_reply())
+        self.remote.step(5)
+        self.assertEqual(self.sent_tokens(), [None, "BT_VOLUP_P", "BT_VOLUP_R"])
+
+    def test_wifi_loss_keeps_release_wire_and_sends_it_only_after_reconnect(self):
+        self.connect()
+        self.remote.volume("BT_VOLDN")
+        self.remote.step(2)
+        self.remote.release_volume()
+        self.reply(self.state_reply())
+        self.remote.step(3)
+        release = self.socket.sent[-1]
+        for now in (153, 303, 453, 603, 1603):
+            self.remote.step(now, connected=False)
+        self.assertEqual(self.socket.sent[-1], release)
+        self.assertEqual(len(self.socket.sent), 3)
+        self.assertTrue(self.remote.pending["stalled"])
+        self.remote.step(1604)
+        self.assertEqual(self.socket.sent[-1], release)
+        self.assertEqual(len(self.socket.sent), 4)
+
     def load_ble_status(self):
         self.remote.queue_command("STATUS")
         self.remote.step(2)

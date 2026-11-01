@@ -13,6 +13,7 @@ import pytest
 
 from remote import badge_remote as module
 from remote.badge_remote import BadgeRemote, ble_fields, np_from_snapshot
+from utils.ticks import TICKS_MAX
 from tests.test_badge_bm83_remote import FakeSocket, models, protocol, transport
 
 KEY = bytes(range(32))
@@ -103,12 +104,22 @@ class Unit:
         return self.np, self.ble
 
 
-def make_server(socket=None, logs=None, urandom=None, **changes):
+def make_server(socket=None, logs=None, urandom=None, ticks=None, **changes):
+    tick_clock = [0]
     server = BadgeRemote(profile=profile(**changes), socket=socket or ServerSocket(),
                          log=(logs.append if logs is not None else (lambda _m: None)),
+                         clock=lambda: 0.0,
+                         ticks=ticks if ticks is not None else lambda: tick_clock[0],
                          urandom=urandom or (lambda size: bytes(range(1, size + 1))))
+    server.test_tick_clock = tick_clock
     assert server.setup()
     return server
+
+
+def poll_at(server, state_fn, seconds):
+    """Drive injected integer ticks independently of the legacy seconds API."""
+    server.test_tick_clock[0] = round(seconds * 1000) & TICKS_MAX
+    return server.poll(state_fn, seconds)
 
 
 class Link:
@@ -127,7 +138,7 @@ class Link:
     def run(self, steps=1, ms=25):
         for _ in range(steps):
             self.client.step(self.ms)
-            self.dispatched += list(self.server.poll(self.unit, self.ms / 1000.0))
+            self.dispatched += list(poll_at(self.server, self.unit, self.ms / 1000.0))
             self.client.step(self.ms)
             self.ms += ms
 
@@ -201,6 +212,7 @@ def test_setup_without_profile_is_inert_and_opens_nothing(tmp_path):
     server = BadgeRemote(profile_path=str(tmp_path / "none.json"), log=lambda _m: None)
     assert not server.setup()
     assert not server.enabled
+    assert server._seen_hellos is None
     assert server.poll(Unit(), 1.0) == ()
 
 
@@ -431,6 +443,44 @@ def test_ble_pause_confirms_only_from_post_dispatch_observation():
     assert link.client.ble.result == "Confirmed"
 
 
+def test_ble_duplicate_with_lost_first_reply_waits_for_dispatch_observation():
+    link = Link()
+    link.connect()
+    link.run(60)
+    assert link.client.queue_command("BLE_PAUSE")
+    link.client.step(link.ms)
+    wire, peer = link.client_socket.sent[-1]
+    link.client_socket.sent.append((wire, peer))
+    link.server_socket.drop_replies = 1
+    dispatched = poll_at(link.server, link.unit, link.ms / 1000.0)
+    assert dispatched == [b"BLE_PAUSE"]
+    command_replies = replies(link.server_socket)[-2:]
+    assert [message["dup"] for message in command_replies] == [False, True]
+    assert all(message["ble"] is None for message in command_replies)
+    link.client.step(link.ms)
+    assert link.client.ble.result == "Waiting"
+    link.server.note_ble_request(link.server.take_ble_request(b"BLE_PAUSE"))
+    link.unit.ble = ble_status(mode=2, flags=2)
+    link.ms += 25
+    link.run(60)
+    assert link.client.ble.result == "Confirmed"
+
+
+def test_status_from_another_client_in_ble_command_poll_suppresses_old_echo():
+    sock = ServerSocket()
+    server = make_server(sock)
+    for index in (1, 2):
+        sock.inbox.append((request(server, {"v": 1, "type": "hello",
+                                            "nonce": "%016x" % index}), CLIENT_ADDR))
+    poll_at(server, Unit(), 0.0)
+    clients = [message["client"] for message in replies(sock)]
+    for client, token in zip(clients, ("BLE_PAUSE", "STATUS")):
+        sock.inbox.append((request(server, {"v": 1, "type": "cmd", "unit": server.unit,
+                                            "client": client, "seq": 1, "token": token}), CLIENT_ADDR))
+    assert poll_at(server, Unit(), 1.0) == [b"BLE_PAUSE"]
+    assert all(message["ble"] is None for message in replies(sock)[-2:])
+
+
 def test_ble_request_superseded_by_another_remote_is_reported():
     link = Link()
     link.connect()
@@ -482,7 +532,7 @@ def test_unauthenticated_malformed_and_oversize_input_is_dropped_silently():
                    (request(server, {"v": 1, "type": "cmd", "client": 1, "seq": 1,
                                      "unit": server.unit, "token": "FORMAT"}), CLIENT_ADDR)]
     for step in range(3):
-        assert server.poll(Unit(), step * 0.05) == ()
+        assert poll_at(server, Unit(), step * 0.05) == ()
     assert sock.replies == []
     assert server._stats[1] == 6
 
@@ -493,7 +543,7 @@ def test_client_ip_lock_drops_other_senders():
     hello = {"v": 1, "type": "hello", "nonce": "00" * 8}
     sock.inbox.append((request(server, hello), CLIENT_ADDR))
     sock.inbox.append((request(server, hello), ("192.0.2.61", 50001)))
-    server.poll(Unit(), 0.0)
+    poll_at(server, Unit(), 0.0)
     assert [address for _wire, address in sock.replies] == [("192.0.2.61", 50001)]
 
 
@@ -501,7 +551,7 @@ def test_stale_and_zero_sequences_are_ignored():
     sock = ServerSocket()
     server = make_server(sock)
     sock.inbox.append((request(server, {"v": 1, "type": "hello", "nonce": "11" * 8}), CLIENT_ADDR))
-    server.poll(Unit(), 0.0)
+    poll_at(server, Unit(), 0.0)
     client = replies(sock)[0]["client"]
 
     def cmd(seq, token="BT_NEXT"):
@@ -509,9 +559,9 @@ def test_stale_and_zero_sequences_are_ignored():
                                  "seq": seq, "token": token}), CLIENT_ADDR)
 
     sock.inbox += [cmd(5), cmd(4)]
-    assert server.poll(Unit(), 1.0) == [b"BT_NEXT"]
+    assert poll_at(server, Unit(), 1.0) == [b"BT_NEXT"]
     sock.inbox += [cmd(0), cmd(5)]
-    assert server.poll(Unit(), 2.0) == ()
+    assert poll_at(server, Unit(), 2.0) == ()
     assert [m.get("dup") for m in replies(sock)[1:]] == [False, True]
 
 
@@ -521,11 +571,11 @@ def test_poll_is_rate_limited_and_bounded_per_pass():
     for index in range(5):
         sock.inbox.append((request(server, {"v": 1, "type": "hello",
                                             "nonce": "%016x" % index}), CLIENT_ADDR))
-    server.poll(Unit(), 0.0)
+    poll_at(server, Unit(), 0.0)
     assert len(sock.replies) == 2
-    server.poll(Unit(), 0.01)
+    poll_at(server, Unit(), 0.01)
     assert len(sock.replies) == 2
-    server.poll(Unit(), 0.03)
+    poll_at(server, Unit(), 0.03)
     assert len(sock.replies) == 4
 
 
@@ -536,15 +586,132 @@ def test_client_table_is_bounded_with_least_recent_eviction():
     for index in range(module.MAX_CLIENTS + 1):
         sock.inbox.append((request(server, {"v": 1, "type": "hello",
                                             "nonce": "%016x" % index}), CLIENT_ADDR))
-        server.poll(Unit(), now)
+        poll_at(server, Unit(), now)
         now += 0.05
     clients = [m["client"] for m in replies(sock)]
     assert len(server._clients) == module.MAX_CLIENTS
     sock.inbox.append((request(server, {"v": 1, "type": "cmd", "unit": server.unit,
                                         "client": clients[0], "seq": 1, "token": "STATUS"}),
                        CLIENT_ADDR))
-    server.poll(Unit(), now)
+    poll_at(server, Unit(), now)
     assert replies(sock)[-1] == {"v": 1, "type": "rehello", "client": clients[0], "seq": 1}
+
+
+def test_hello_retries_reuse_client_and_keep_its_sequence_watermark():
+    sock = ServerSocket()
+    server = make_server(sock)
+    hello = request(server, {"v": 1, "type": "hello", "nonce": "11" * 8})
+    sock.inbox.append((hello, CLIENT_ADDR))
+    poll_at(server, Unit(), 0.0)
+    client = replies(sock)[-1]["client"]
+    command = request(server, {"v": 1, "type": "cmd", "unit": server.unit,
+                               "client": client, "seq": 5, "token": "BT_PLAY"})
+    sock.inbox.append((command, CLIENT_ADDR))
+    assert poll_at(server, Unit(), 1.0) == [b"BT_PLAY"]
+    for step in range(6):
+        sock.inbox.append((hello, CLIENT_ADDR))
+        poll_at(server, Unit(), 2.0 + step)
+        assert replies(sock)[-1]["client"] == client
+    assert len(server._clients) == 1
+    sock.inbox.append((command, CLIENT_ADDR))
+    assert poll_at(server, Unit(), 9.0) == ()
+    assert replies(sock)[-1]["dup"] is True
+
+
+def test_evicted_hello_replay_cannot_evict_live_clients_again():
+    sock = ServerSocket()
+    server = make_server(sock)
+    hellos = [request(server, {"v": 1, "type": "hello", "nonce": "%016x" % index})
+              for index in range(module.MAX_CLIENTS + 1)]
+    for index, hello in enumerate(hellos):
+        sock.inbox.append((hello, CLIENT_ADDR))
+        poll_at(server, Unit(), float(index))
+    clients = [entry[0] for entry in server._clients]
+    count = len(sock.replies)
+    for index in range(6):
+        sock.inbox.append((hellos[0], CLIENT_ADDR))
+        poll_at(server, Unit(), 10.0 + index)
+    assert len(sock.replies) == count
+    assert [entry[0] for entry in server._clients] == clients
+
+
+def test_full_nonce_ledger_refuses_new_handshakes_but_keeps_retry_and_volume_release():
+    sock = ServerSocket()
+    server = make_server(sock)
+    assert module.MAX_HANDSHAKES == 64
+    assert len(server._seen_hellos) == 512
+    hellos = [request(server, {"v": 1, "type": "hello", "nonce": "%016x" % index})
+              for index in range(module.MAX_HANDSHAKES + 1)]
+    for index, hello in enumerate(hellos[:-1]):
+        sock.inbox.append((hello, CLIENT_ADDR))
+        poll_at(server, Unit(), float(index))
+    assert server._hello_count == module.MAX_HANDSHAKES
+    clients = [entry[0] for entry in server._clients]
+    client = clients[-1]
+
+    def command(seq, token):
+        return request(server, {"v": 1, "type": "cmd", "unit": server.unit,
+                                "client": client, "seq": seq, "token": token})
+
+    sock.inbox.append((command(1, "BT_VOLUP_P"), CLIENT_ADDR))
+    assert poll_at(server, Unit(), 100.0) == [b"BT_VOLUP_P"]
+    reply_count = len(sock.replies)
+    # Both a brand-new nonce at capacity and the oldest retired nonce fail shut.
+    sock.inbox.extend([(hellos[-1], CLIENT_ADDR), (hellos[0], CLIENT_ADDR)])
+    assert poll_at(server, Unit(), 101.0) == ()
+    assert len(sock.replies) == reply_count
+    assert [entry[0] for entry in server._clients] == clients
+    # Retrying the current HELLO still returns its original client and watermark.
+    sock.inbox.append((hellos[-2], CLIENT_ADDR))
+    poll_at(server, Unit(), 102.0)
+    assert replies(sock)[-1]["client"] == client
+    assert server._client(client)[1] == 1
+    sock.inbox.append((command(2, "BT_VOLUP_R"), CLIENT_ADDR))
+    assert poll_at(server, Unit(), 103.0) == [b"BT_VOLUP_R"]
+    sock.inbox.append((command(1, "BT_VOLUP_P"), CLIENT_ADDR))
+    assert poll_at(server, Unit(), 104.0) == ()
+    # Calling the already-open setup path must not reset replay state.
+    assert server.setup()
+    assert server._hello_count == module.MAX_HANDSHAKES
+    assert server._client(client)[1] == 2
+
+
+@pytest.mark.parametrize("start", [0, (1 << 29) - 10, 1000])
+def test_integer_tick_poll_gate_ignores_coarse_monotonic_and_handles_wrap(start):
+    ticks = [start]
+    sock = ServerSocket()
+    server = make_server(sock, ticks=lambda: ticks[0])
+    for index in range(6):
+        sock.inbox.append((request(server, {"v": 1, "type": "hello",
+                                            "nonce": "%016x" % index}), CLIENT_ADDR))
+    # Single-precision monotonic may have one value across many 20ms windows.
+    coarse_seconds = 6 * 24 * 60 * 60.0
+    server.poll(Unit(), coarse_seconds)
+    assert len(sock.replies) == 2
+    ticks[0] = (start + 19) & ((1 << 29) - 1)
+    server.poll(Unit(), coarse_seconds)
+    assert len(sock.replies) == 2
+    ticks[0] = (start + 20) & ((1 << 29) - 1)
+    server.poll(Unit(), coarse_seconds)
+    assert len(sock.replies) == 4
+    ticks[0] = (start + (1 << 28) + 40) & ((1 << 29) - 1)
+    server.poll(Unit(), coarse_seconds)
+    assert len(sock.replies) == 6
+
+
+def test_default_poll_gate_uses_hardware_ticks_despite_legacy_now_argument():
+    ticks = [100]
+    sock = ServerSocket()
+    with patch.object(module, "ticks_ms", side_effect=lambda: ticks[0]):
+        server = BadgeRemote(profile=profile(), socket=sock, log=lambda _m: None)
+    assert server.setup()
+    for index in range(4):
+        sock.inbox.append((request(server, {"v": 1, "type": "hello",
+                                            "nonce": "%016x" % index}), CLIENT_ADDR))
+    server.poll(Unit(), 500000.0)
+    ticks[0] += 20
+    server.poll(Unit(), 500000.0)
+    assert len(sock.replies) == 4
 
 
 def test_logs_never_contain_key_or_peer_address():

@@ -89,7 +89,9 @@ def test_existing_other_ap_is_not_silently_reconfigured(tmp_path):
     assert radio.calls == []
 
 
-def test_network_retry_only_restarts_with_a_valid_existing_profile(tmp_path):
+def test_network_retry_only_restarts_with_a_valid_existing_profile(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "supervisor",
+                        SimpleNamespace(runtime=SimpleNamespace(usb_connected=False)))
     called = []
     missing = str(tmp_path / "missing")
     assert not module.retry_artwork_wifi(missing, reload_fn=lambda: called.append(True), log=lambda _line: None)
@@ -105,7 +107,8 @@ def test_default_retry_uses_hard_reset_not_supervisor_reload(tmp_path, monkeypat
     monkeypatch.setitem(sys.modules, "microcontroller",
                         SimpleNamespace(reset=lambda: calls.append("hard")))
     monkeypatch.setitem(sys.modules, "supervisor",
-                        SimpleNamespace(reload=lambda: calls.append("soft")))
+                        SimpleNamespace(runtime=SimpleNamespace(usb_connected=False),
+                                        reload=lambda: calls.append("soft")))
     assert module.retry_artwork_wifi(path, log=logs.append)
     assert calls == ["hard"]
     assert logs == ["[NET] requested hard-reset artwork Wi-Fi startup retry"]
@@ -120,11 +123,80 @@ def test_retry_without_safe_reset_fails_closed(tmp_path, monkeypatch, controller
     calls, logs = [], []
     monkeypatch.setitem(sys.modules, "microcontroller", controller)
     monkeypatch.setitem(sys.modules, "supervisor",
-                        SimpleNamespace(reload=lambda: calls.append("soft")))
+                        SimpleNamespace(runtime=SimpleNamespace(usb_connected=False),
+                                        reload=lambda: calls.append("soft")))
     assert not module.retry_artwork_wifi(path, log=logs.append)
     assert calls == []
     assert logs == ["[NET] safe restart unavailable; use local RESET"]
     assert Path(path).read_bytes() == before
+
+
+@pytest.mark.parametrize("serial_connected", [False, True])
+@pytest.mark.parametrize("injected_reset", [False, True])
+def test_remote_retry_refuses_enumerated_usb_even_without_serial(
+        tmp_path, monkeypatch, serial_connected, injected_reset):
+    path = write_profile(tmp_path)
+    before = Path(path).read_bytes()
+    calls, logs = [], []
+
+    def reset():
+        calls.append("hard")
+
+    monkeypatch.setitem(sys.modules, "microcontroller", SimpleNamespace(reset=reset))
+    monkeypatch.setitem(sys.modules, "supervisor", SimpleNamespace(
+        runtime=SimpleNamespace(usb_connected=True, serial_connected=serial_connected),
+        reload=lambda: calls.append("soft")))
+    kwargs = {"reload_fn": reset} if injected_reset else {}
+    assert not module.retry_artwork_wifi(path, log=logs.append, **kwargs)
+    assert calls == []
+    assert logs == ["[NET] remote restart refused while USB connected; safely eject and disconnect USB first"]
+    assert Path(path).read_bytes() == before
+
+
+class UnreadableUSB:
+    @property
+    def usb_connected(self):
+        raise RuntimeError("synthetic USB read failure")
+
+
+@pytest.mark.parametrize("supervisor", [
+    None, SimpleNamespace(), SimpleNamespace(runtime=SimpleNamespace()),
+    SimpleNamespace(runtime=UnreadableUSB()),
+    *[SimpleNamespace(runtime=SimpleNamespace(usb_connected=value))
+      for value in (None, 0, 1, "false")],
+], ids=["missing-module", "missing-runtime", "missing-property", "read-error",
+        "none", "zero", "one", "text"])
+def test_remote_retry_refuses_unknown_usb_state(tmp_path, monkeypatch, supervisor):
+    path = write_profile(tmp_path)
+    before = Path(path).read_bytes()
+    calls, logs = [], []
+    monkeypatch.setitem(sys.modules, "supervisor", supervisor)
+    assert not module.retry_artwork_wifi(path, reload_fn=lambda: calls.append("hard"), log=logs.append)
+    assert calls == []
+    assert logs == ["[NET] USB state unavailable; remote restart refused"]
+    assert Path(path).read_bytes() == before
+
+
+@pytest.mark.parametrize("usb_connected", [True, False])
+def test_main_shared_retry_token_uses_usb_guard(tmp_path, monkeypatch, usb_connected):
+    # Drive the real main-loop dispatch with a CrowPanel token and the real
+    # retry implementation. Only reset/profile arguments are host fixtures.
+    from remote import artwork_wifi
+    from tests.test_main_metadata_retry import _Remote, _run_main
+
+    path = write_profile(tmp_path)
+    calls, logs = [], []
+    retry = artwork_wifi.retry_artwork_wifi
+    monkeypatch.setattr(artwork_wifi, "retry_artwork_wifi", lambda: retry(
+        path, reload_fn=lambda: calls.append("hard"), log=logs.append))
+    monkeypatch.setitem(sys.modules, "supervisor", SimpleNamespace(
+        runtime=SimpleNamespace(usb_connected=usb_connected)))
+    tokens = iter(((b"NET_RETRY",), ()))
+    monkeypatch.setattr(_Remote, "poll", lambda _self: next(tokens, ()))
+    _run_main(monkeypatch, [(100.0, ()), (100.1, ())])
+    assert calls == ([] if usb_connected else ["hard"])
+    assert logs == (["[NET] remote restart refused while USB connected; safely eject and disconnect USB first"]
+                    if usb_connected else ["[NET] requested hard-reset artwork Wi-Fi startup retry"])
 
 
 def test_invalid_network_retry_does_not_restart_or_expose_credentials(tmp_path):

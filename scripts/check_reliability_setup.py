@@ -24,8 +24,9 @@ OUT_OF_SCOPE = "# reliability-scope: out-of-scope legacy automation"
 PR_EVENTS = ("pull_request", "pull_request_target", "workflow_run")
 # Labeled unrelated automation may only run on these non-PR triggers.
 OUT_OF_SCOPE_EVENTS = ("schedule", "workflow_dispatch", "push")
-# The label is honored only for these preserved legacy files, never self-asserted.
-OUT_OF_SCOPE_WORKFLOWS = ("codacy.yml", "weekly-claude-audit.yml", "weekly-copilot-review.yml")
+# Only the existing Codacy scanner is preserved. Retired automation names must
+# not reserve exemptions for workflows that could be added in the future.
+OUT_OF_SCOPE_WORKFLOWS = ("codacy.yml",)
 
 
 def is_out_of_scope(text, name):

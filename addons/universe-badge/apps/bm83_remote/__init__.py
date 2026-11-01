@@ -249,12 +249,19 @@ class BM83Remote:
             return
         if not self.config_error:
             connected = self._wifi(now)
+            if self.remote:
+                # Even offline frames age pending work and discard unsent
+                # presses. Releases for presses already sent remain queued.
+                self.remote.step(now, connected=connected)
+                if self.remote.held_volume is None:
+                    self.hold_action = None
             if connected and self.remote:
-                self.remote.step(now)
                 self.playback = self.remote.playback
                 self.ble = self.remote.ble
                 self.feedback = self.remote.feedback
                 self.unit_status = "Authenticated" if self.remote.unit else "Awaiting unit"
+            elif connected:
+                self.unit_status = "No UDP socket" if Remote is None else "UDP failed"
             elif not connected:
                 self.unit_status = "Wi-Fi offline"
                 if self.remote:

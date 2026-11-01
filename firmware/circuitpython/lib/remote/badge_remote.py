@@ -14,6 +14,8 @@ import hashlib
 import json
 import os
 
+from utils.ticks import ticks_ms, ticks_recent
+
 PROFILE_PATH = "/.badge_remote.json"
 MAX_PROFILE_BYTES = 512
 DEFAULT_PORT = 8767
@@ -21,8 +23,9 @@ MAX_DATAGRAM = 1200
 MAX_REQUEST = 256
 MIN_DATAGRAM = 40
 MAX_CLIENTS = 4
+MAX_HANDSHAKES = 64
 DATAGRAMS_PER_POLL = 2
-POLL_PERIOD_S = 0.02
+POLL_PERIOD_MS = 20
 STATS_PERIOD_S = 60.0
 MAX_TIME_MS = 0xFFFFFFFE
 TEXT_CHARS = 96
@@ -228,7 +231,10 @@ class BadgeRemote:
     """One bounded UDP endpoint: hello/welcome, deduplicated commands, state."""
 
     def __init__(self, clock=None, log=print, profile_path=PROFILE_PATH, profile=None,
-                 socket=None, radio=None, pool=None, urandom=os.urandom):
+                 socket=None, radio=None, pool=None, urandom=os.urandom, ticks=None):
+        # Keep the seconds clock/now API for stats; sub-second pacing always
+        # uses integer hardware ticks (or an explicitly injected test clock).
+        self._ticks = ticks_ms if ticks is None else ticks
         if clock is None:
             import time
             clock = time.monotonic
@@ -244,6 +250,8 @@ class BadgeRemote:
         self._profile = None
         self._buffer = None
         self._clients = []
+        self._seen_hellos = None
+        self._hello_count = 0
         self._touch = 0
         self._next_client = 0
         self._last_poll_at = None
@@ -309,6 +317,11 @@ class BadgeRemote:
             self.unit = unit
             self._next_client = (int.from_bytes(self._urandom(3), "big") or 1)
             self._ble_session = int.from_bytes(self._urandom(4), "big")
+            self._clients = []
+            self._seen_hellos = bytearray(MAX_HANDSHAKES * 8)
+            self._hello_count = 0
+            self._touch = 0
+            self._last_poll_at = None
             self.enabled = True
             self._log("[BADGE] remote ready port=%d bond_erase=%s" % (
                 self._profile["port"], "allowed" if self._profile["allow_bond_erase"] else "local-only"))
@@ -341,14 +354,33 @@ class BadgeRemote:
         return None
 
     def _welcome(self, nonce):
+        for entry in self._clients:
+            if entry[4] == nonce:
+                # A lost welcome retries the same session, without resetting
+                # its sequence watermark or making a replay refresh the LRU.
+                return {"v": 1, "type": "welcome", "nonce": nonce,
+                        "unit": self.unit, "client": entry[0]}
+        nonce_bytes = binascii.unhexlify(nonce)
+        # Retain retired nonces for this boot. Forgetting them would let a set
+        # of recorded HELLOs continually rotate the live four-client table.
+        # Once the bounded ledger fills, existing sessions/retries still work;
+        # admitting a new handshake requires a local receiver restart.
+        for index in range(self._hello_count):
+            if self._seen_hellos[index * 8:index * 8 + 8] == nonce_bytes:
+                return None
+        if self._hello_count >= MAX_HANDSHAKES:
+            return None
+        offset = self._hello_count * 8
+        self._seen_hellos[offset:offset + 8] = nonce_bytes
+        self._hello_count += 1
         client_id = self._next_client
         self._next_client = (self._next_client % 0xFFFFFFFF) + 1
         if len(self._clients) >= MAX_CLIENTS:
             self._clients.sort(key=lambda entry: entry[2])
             self._clients.pop(0)
         self._touch += 1
-        # [client id, last seq, LRU touch, last seq was refused]
-        self._clients.append([client_id, 0, self._touch, False])
+        # [client id, last seq, LRU touch, last seq was refused, hello nonce]
+        self._clients.append([client_id, 0, self._touch, False, nonce])
         self._log("[BADGE] client %d authenticated" % client_id)
         return {"v": 1, "type": "welcome", "nonce": nonce, "unit": self.unit, "client": client_id}
 
@@ -359,7 +391,7 @@ class BadgeRemote:
         # A reply built before a BLE request is dispatched would carry a newer
         # sequence with the previous request echo, which the badge correctly
         # reads as "superseded". Only post-dispatch observations carry ble.
-        if ble_status is not None and include_ble:
+        if ble_status is not None and include_ble and not self._ble_requests:
             try:
                 mode, flags, error = ble_fields(ble_status)
             except Exception:
@@ -449,9 +481,10 @@ class BadgeRemote:
         # its token; never let a later fabricated token inherit it.
         self._ble_requests = []
         now = self._clock() if now is None else now
-        if self._last_poll_at is not None and 0 <= now - self._last_poll_at < POLL_PERIOD_S:
+        tick = self._ticks()
+        if ticks_recent(tick, self._last_poll_at, POLL_PERIOD_MS):
             return ()
-        self._last_poll_at = now
+        self._last_poll_at = tick
         tokens = None
         for _ in range(DATAGRAMS_PER_POLL):
             try:

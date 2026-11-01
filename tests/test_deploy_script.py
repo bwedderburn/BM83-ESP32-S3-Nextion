@@ -28,7 +28,7 @@ def fixture_repo(tmp_path, with_rsync):
         module = "module.py" if mode == "src" else "module.mpy"
         (source / "lib/example" / module).write_bytes(mode.encode("ascii"))
         (source / "lib/example/__pycache__/module.pyc").write_bytes(b"skip cache")
-        for name in ("settings.toml", ".artwork_wifi.json", ".metadata_bridge.json",
+        for name in ("settings.toml", ".artwork_wifi.json", ".metadata_bridge.json", ".badge_remote.json",
                      "ble_counter.txt"):
             (source / name).write_text("do not replace device-local " + name)
         sources[mode] = source
@@ -37,7 +37,7 @@ def fixture_repo(tmp_path, with_rsync):
     (destination / "lib/adafruit_ble/__init__.mpy").write_bytes(b"keep dependency")
     (destination / "boot.py").write_text("old startup\n")
     (destination / "main.py").write_text("old main\n")
-    for name in ("settings.toml", ".artwork_wifi.json", ".metadata_bridge.json",
+    for name in ("settings.toml", ".artwork_wifi.json", ".metadata_bridge.json", ".badge_remote.json",
                  "ble_counter.txt"):
         (destination / name).write_text("existing private " + name)
     executables = tmp_path / "bin"
@@ -57,7 +57,7 @@ def fixture_repo(tmp_path, with_rsync):
 def test_deploy_includes_source_boot_and_preserves_local_configuration(
         tmp_path, mode, with_rsync):
     bash, script, sources, destination, env = fixture_repo(tmp_path, with_rsync)
-    private_names = ("settings.toml", ".artwork_wifi.json", ".metadata_bridge.json",
+    private_names = ("settings.toml", ".artwork_wifi.json", ".metadata_bridge.json", ".badge_remote.json",
                      "ble_counter.txt")
     before = {name: (destination / name).read_bytes() for name in private_names}
     args = ["--mpy"] if mode == "mpy" else []

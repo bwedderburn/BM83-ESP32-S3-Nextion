@@ -3,8 +3,9 @@
 [Private Project](https://github.com/users/bwedderburn/projects/3) |
 [Milestone](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/milestone/1)
 
-Owner: @bwedderburn. This is a frozen, host-only investigation setup, not hardware
-authorization or Phase 1 acceptance. Both implementation PRs remain draft:
+Owner: @bwedderburn. This is a host-only investigation, not hardware authorization
+or Phase 1 acceptance. Codex now delivers validated work by direct commit/push;
+see [the current maintenance handoff](DIRECT-MAINTENANCE.md). Historical drafts:
 [BM83 #189](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/pull/189) and
 [Universe #10](https://github.com/bwedderburn/github-universe-2026/pull/10).
 
@@ -39,28 +40,18 @@ this record during repository work.
 Preparing this protocol does not require closing #194. Experiments follow the
 protocol, while #194 closes only after the resulting integration is accepted.
 
-## Local Copilot / VS Code
+## Local maintenance / VS Code
 
-Open the intended checkout in VS Code, retain the existing signed-in GitHub
-account and normal approval settings, and select its `.venv` Python interpreter.
-The two `.github/agents/reliability-*.agent.md` profiles are user-invoked, VS Code
-scoped and read/search only, with no model pin. Use the runtime profile for
-protocol/resource ownership and the delivery profile for CI/evidence/UX gates.
-Select an appropriate model actually offered in the Copilot picker. Claude
-models inside Copilot are allowed; separate Claude Code/app workflows are not.
-Omitting `model` uses the currently selected model, per the
-[VS Code agent reference](https://code.visualstudio.com/docs/agents/reference/custom-agent-file-reference).
-Verify both agents appear and actually run read-only reviews in VS Code. Record
-the selected model, exact diff/revision, tools used, findings and disposition.
-File validation and reviews in Copilot Desktop alone do not establish this.
+Codex owns the current work while Copilot's allowance is exhausted. Use isolated
+integration worktrees, pinned host tools and direct commits/normal pushes to
+`origin/main`; no new PRs or paid AI jobs. Preserve account, billing, credentials,
+MCP, approvals, folder trust and protected-branch policy. Never force-push.
+The two user-invoked read/search VS Code review profiles remain for future use;
+a loaded profile does not establish an executed review or hardware acceptance.
 
-Do not add MCP servers, accounts, tokens, firewall exceptions or change billing
-or approvals. If Restricted Mode blocks the agents, ask the owner before
-trusting the specific source folder; never broaden trust to its parent or
-disable Workspace Trust. Do not assign issues to the cloud coding agent. The
-weekly Claude/Copilot and Codacy workflows are preserved as labeled out-of-scope
-general automation (see `docs/agents/SETUP.md`); only these allowlisted files may
-use the label, they are not PR checks and must not be dispatched for reliability work. Existing secrets/settings are untouched.
+The weekly Copilot and Claude workflows are retired. Codacy remains the sole
+explicitly exempt legacy scanner; retired filenames cannot bypass policy checks.
+Existing secrets are untouched. Keep hardware offline throughout these checks.
 
 Development-only requirements pin pytest/flake8, Bandit, pip-audit and PyYAML.
 They provide host regression, security/dependency checks and configuration

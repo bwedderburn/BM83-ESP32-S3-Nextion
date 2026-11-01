@@ -62,7 +62,7 @@ def test_build_mpy_outputs():
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX build-script asset-copy branches")
 @pytest.mark.parametrize("with_rsync", [False, True])
-def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
+def test_private_profiles_are_never_packaged(tmp_path, with_rsync):
     """Exercise both real asset-copy paths without using device credentials."""
     bash = shutil.which("bash")
     rsync = shutil.which("rsync")
@@ -83,9 +83,10 @@ def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
     (source / "not_an_entrypoint.py").write_text("raise RuntimeError('do not package')\n")
     (source / "lib/example.py").write_text("VALUE = 1\n")
     (source / "assets/public.txt").write_text("keep this asset\n")
-    for parent in (source, source / "assets"):
-        (parent / ".artwork_wifi.json").write_text('{"password":"synthetic-fixture"}\n')
-        (parent / ".metadata_bridge.json").write_text('{"token":"synthetic-fixture"}\n')
+    private_profiles = (".artwork_wifi.json", ".metadata_bridge.json", ".badge_remote.json")
+    for parent in (source, source / "assets", source / "lib"):
+        for name in private_profiles:
+            (parent / name).write_text('{"private":"synthetic-fixture"}\n')
     compiler = tmp_path / "fake-mpy"
     compiler.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\n"
                         "if sys.argv[1:] == ['--version']:\n"
@@ -107,10 +108,35 @@ def test_private_wifi_profile_is_never_packaged(tmp_path, with_rsync):
         [bash, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     package = tmp_path / "dist/circuitpython"
-    assert not list(package.rglob(".artwork_wifi.json"))
-    assert not list(package.rglob(".metadata_bridge.json"))
+    for name in private_profiles:
+        assert not list(package.rglob(name)), name
     assert (package / "assets/public.txt").read_text() == "keep this asset\n"
     assert (package / "boot.py").read_bytes() == (source / "boot.py").read_bytes()
     assert not (package / "boot.mpy").exists()
     assert not (package / "not_an_entrypoint.py").exists()
     assert (package / "lib/example.mpy").read_bytes() == b"test-mpy"
+
+
+def test_private_receiver_profiles_are_ignored_by_git(tmp_path):
+    """Normal adds cannot include a local receiver profile at any source depth."""
+    git = shutil.which("git")
+    if not git:
+        pytest.skip("git is unavailable")
+    shutil.copyfile(REPO_ROOT / ".gitignore", tmp_path / ".gitignore")
+    profiles = (".badge_remote.json", "firmware/circuitpython/.badge_remote.json",
+                "firmware/circuitpython/assets/.badge_remote.json")
+    for name in profiles:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"key":"synthetic-fixture"}\n')
+    subprocess.run([git, "init", "-q"], cwd=tmp_path, check=True,
+                   capture_output=True, text=True)
+    subprocess.run([git, "add", "."], cwd=tmp_path, check=True,
+                   capture_output=True, text=True)
+    staged = subprocess.run([git, "ls-files"], cwd=tmp_path, check=True,
+                            capture_output=True, text=True).stdout.splitlines()
+    assert staged == [".gitignore"]
+    ignored = subprocess.run([git, "check-ignore", "--stdin"], cwd=tmp_path,
+                             input="\n".join(profiles) + "\n", check=True,
+                             capture_output=True, text=True).stdout.splitlines()
+    assert ignored == list(profiles)

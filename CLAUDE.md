@@ -55,33 +55,24 @@ When `firmware/` changes, run `build_mpy.sh` to refresh `dist/`. Do not
 hand-edit `dist/` — it will be overwritten on the next build.
 
 
-## Change workflow — branch + PR by default
+## Current change workflow — direct commit and push
 
-`main` is protected: it takes changes through a pull request, and the Python
-matrix must be green before merge. Admin bypass is deliberately left enabled
-for genuine emergencies (see below).
+The owner has moved the active paired BM83/Universe maintenance work to Codex
+because the Copilot allowance is exhausted. Commit validated changes and push
+normally to `origin/main`; do not create PRs or request Copilot reviews/jobs.
+Use an isolated integration checkout to preserve frozen candidates and user edits.
+Fetch first, check ancestry/concurrent changes and run the relevant host gates.
+Never force-push or change branch protection, credentials or approval settings.
+If a normal push is rejected, retain the commits and report the actual rejection.
 
-**Normal change:**
+Repository integration is separate from deployment and physical acceptance.
+BM83 and CrowPanel must remain offline during this maintenance. Do not enumerate,
+probe, reset, deploy to or change playback on connected devices. Preserve private
+captures/configuration and frozen source/compiler/artifact manifests. No CI or
+simulator result proves the screens, metadata, radio lifecycle or stable audio.
+Phase 2 BLE HID Disconnect remains blocked on actual Phase 1 acceptance; see
+`docs/reliability/README.md` and `docs/reliability/DIRECT-MAINTENANCE.md`.
 
-1. Branch off `main` (`fix/...`, `feat/...`, `chore/...`).
-2. Commit, push, open a PR. Request **Copilot** as a reviewer.
-3. Let CI finish, and respond to Copilot's comments — fix what is right,
-   push back on what is wrong, and say which and why in the thread.
-4. **Hardware-test on the actual unit**, then merge.
-
-**Do not merge on green CI alone.** Every fault that has actually hurt this
-project was invisible to CI: the first-play A2DP stall, the muted-path wedge,
-the PR #128 AUX regression (CI-green, Copilot-clean, and it pegged the Line-In
-gain and made the unit beep), and the 2026-08-26 phantom-AUX incident. Green
-means "the host tests still pass", not "it works on the hardware".
-
-**Emergency path:** when the unit is broken and Brian is waiting, push straight
-to `main` (admin bypass), then open a retroactive review PR against the parent
-commit so the change still gets reviewed. Say plainly in the PR that it is
-already merged and hardware-verified.
-
-**Reviewer split that works here:** Copilot is good at breadth — conventions,
-missing guards, things visible in a diff. Claude is better at the domain
-reasoning that needs the datasheet and a serial capture (why `0x08` must not
-demote the link, why clearing `audio_source` re-arms a boot heuristic). Neither
-substitutes for the hardware.
+The two weekly AI workflows have been retired so this work cannot automatically
+create new paid agent sessions or PRs. The Codacy security scan and host checks
+remain. Existing secrets and security policy are unchanged.

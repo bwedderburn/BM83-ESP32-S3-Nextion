@@ -11,6 +11,7 @@ from models import Playback, BleControl, valid_np, elapsed
 WOULD_BLOCK = (errno.EAGAIN, 11, 10035)
 COMMAND_LABELS = {"BT_EBIND": "Erase bonds"}
 RECEIVER_RETRY_UNAVAILABLE = "Receiver retry unavailable"
+REPLY_TIMEOUT_MS = 600
 
 
 class Remote:
@@ -69,6 +70,18 @@ class Remote:
             self.queue_command(self.held_volume + "_R")
             self.held_volume = None
 
+    def _drop_unsent(self):
+        dropped = len([command for command in self.queue if command != "STATUS"])
+        dropped += len([gesture for gesture in self.volume_queue if not gesture["pressed"]])
+        self.queue = []
+        self.volume_queue = [gesture for gesture in self.volume_queue if gesture["pressed"]]
+        # A discarded press must not create a standalone stop on button release.
+        # An older, already released gesture of the same button is not this hold.
+        if not any(gesture["command"] == self.held_volume and not gesture["released"]
+                   for gesture in self.volume_queue):
+            self.held_volume = None
+        return dropped
+
     def _send(self, now):
         p = self.pending
         try:
@@ -82,7 +95,7 @@ class Remote:
         self.nonce = binascii.hexlify(os.urandom(8)).decode()
         message = {"v": 1, "type": "hello", "nonce": self.nonce}
         self.pending = {"wire": encode(self.key, message), "command": None,
-                        "attempts": 0, "sent": now}
+                        "attempts": 0, "sent": now, "started": now}
         self._send(now)
 
     def _command(self, command, now):
@@ -90,7 +103,7 @@ class Remote:
         message = {"v": 1, "type": "cmd", "unit": self.unit, "client": self.client,
                    "seq": self.seq, "token": command}
         self.pending = {"wire": encode(self.key, message), "command": command,
-                        "attempts": 0, "sent": now}
+                        "attempts": 0, "sent": now, "started": now}
         if command in ("BLE_PAUSE", "BLE_ENABLE"):
             if not self.ble.begin(command == "BLE_PAUSE", self.client, self.seq, now):
                 self.pending = None
@@ -162,18 +175,36 @@ class Remote:
                     self.pending = None
                     self.rehello_count = 0
 
-    def step(self, now, closing=False):
-        self._receive(now)
+    def step(self, now, closing=False, connected=True):
+        if not connected:
+            self._drop_unsent()
+        # Expire by wall-clock age before accepting a welcome. A delayed frame
+        # must not deliver stale presses merely because few retries were made.
+        if (self.pending and self.pending["command"] is None
+                and elapsed(now, self.pending["started"]) >= REPLY_TIMEOUT_MS):
+            self.pending = None
+            dropped = self._drop_unsent()
+            self.feedback = "Audio unit: no reply"
+            if dropped:
+                self.feedback += " - %d not sent" % dropped
+            self.last_poll = now
+            self.ble.tick(now)
+            return
+        if connected:
+            self._receive(now)
         self.ble.tick(now)
         if self.pending:
             if self.pending.get("stalled"):
-                if elapsed(now, self.pending["sent"]) >= 1000:
+                if connected and elapsed(now, self.pending["sent"]) >= 1000:
                     self._send(now)
                 return
             if elapsed(now, self.pending["sent"]) < 150:
                 return
-            if self.pending["attempts"] < 4:
-                self._send(now)
+            age = elapsed(now, self.pending.get("started", self.pending["sent"]))
+            if (self.pending["attempts"] < 4
+                    and age < REPLY_TIMEOUT_MS):
+                if connected:
+                    self._send(now)
                 return
             command = self.pending["command"]
             self.feedback = "%s: no reply" % (command or "Audio unit")
@@ -185,16 +216,8 @@ class Remote:
                 self.last_poll = now
                 return
             self.pending = None
-            if command is None:
-                # Presses made while the unit is unreachable must not fire later.
-                dropped = len([c for c in self.queue if c != "STATUS"])
-                dropped += len([g for g in self.volume_queue if not g["pressed"]])
-                self.queue = []
-                self.volume_queue = [g for g in self.volume_queue if g["pressed"]]
-                if dropped:
-                    self.feedback = "Audio unit: no reply - %d not sent" % dropped
-                self.last_poll = now
-                return
+        if not connected:
+            return
         if closing and not self.volume_queue:
             return
         if not self.unit:

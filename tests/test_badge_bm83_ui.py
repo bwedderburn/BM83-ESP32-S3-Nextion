@@ -1,6 +1,7 @@
 """Offline checks of badge input and Wi-Fi pacing without starting the app."""
 
 import ast
+import errno
 import importlib.util
 from pathlib import Path
 import sys
@@ -31,6 +32,8 @@ def load_helper(name):
 protocol = load_helper("protocol")
 with patch.dict(sys.modules, {"protocol": protocol}):
     models = load_helper("models")
+    with patch.dict(sys.modules, {"models": models}):
+        transport = load_helper("transport")
 
 
 def method_class(names=("_wifi", "input"), **globals_):
@@ -319,8 +322,8 @@ class MissingNetworkSupportTests(unittest.TestCase):
 
 
 class HeaderStatusTests(unittest.TestCase):
-    def app(self, connected, remote):
-        app = method_class(names=("step",))()
+    def app(self, connected, remote, remote_class=None):
+        app = method_class(names=("step",), Remote=remote_class)()
         app.input = lambda now: None
         app._wifi = lambda now: connected
         app.sample_mode = False
@@ -332,12 +335,14 @@ class HeaderStatusTests(unittest.TestCase):
         app.feedback = "Waiting for audio unit"
         app.unit_status = "Not connected"
         app.last_art_key = None
+        app.hold_action = None
         app.artwork = SimpleNamespace(step=lambda now, connected: None)
         return app
 
     def remote(self, unit):
-        return SimpleNamespace(step=lambda now: None, unit=unit, playback=models.Playback(),
-                               ble=models.BleControl(), feedback="Audio unit authenticated")
+        return SimpleNamespace(step=Mock(), unit=unit, playback=models.Playback(),
+                               ble=models.BleControl(), held_volume=None,
+                               feedback="Audio unit authenticated")
 
     def test_header_statuses_are_short_and_wifi_detail_moves_to_feedback(self):
         for connected, unit, status, feedback in (
@@ -357,6 +362,69 @@ class HeaderStatusTests(unittest.TestCase):
         app.step(0)
         self.assertEqual(app.unit_status, "Wi-Fi offline")
         self.assertEqual(app.feedback, "Wi-Fi/UDP unavailable: no socket support")
+
+    def test_wifi_return_restores_missing_socket_or_failed_setup_header(self):
+        for remote_class, status, feedback in (
+                (None, "No UDP socket", "Wi-Fi/UDP unavailable: no socket support"),
+                (Mock(), "UDP failed", "UDP setup failed: unavailable")):
+            with self.subTest(status=status):
+                app = self.app(False, None, remote_class)
+                app.feedback = feedback
+                app.step(0)
+                self.assertEqual(app.unit_status, "Wi-Fi offline")
+                app._wifi = lambda now: True
+                app.step(1000)
+                self.assertEqual(app.unit_status, status)
+                self.assertEqual(app.feedback, feedback)
+
+    def test_offline_frame_services_remote_and_clears_dropped_input_marker(self):
+        remote = self.remote("01020304")
+        app = self.app(False, remote)
+        app.hold_action = "up"
+        app.step(1000)
+        remote.step.assert_called_once_with(1000, connected=False)
+        self.assertIsNone(app.hold_action)
+
+    def test_offline_frame_keeps_marker_for_a_sent_volume_press(self):
+        remote = self.remote("01020304")
+        remote.held_volume = "BT_VOLUP"
+        app = self.app(False, remote)
+        app.hold_action = "up"
+        app.step(1000)
+        self.assertEqual(app.hold_action, "up")
+
+
+class OfflineInputTests(unittest.TestCase):
+    def test_controls_pressed_during_outage_are_not_sent_after_wifi_returns(self):
+        badge = FakeBadge()
+        udp = SimpleNamespace(setblocking=Mock(), sendto=Mock(),
+                              recvfrom=Mock(side_effect=OSError(errno.EAGAIN, "no reply")))
+        with patch.object(transport.socket, "socket", return_value=udp):
+            remote = transport.Remote("192.0.2.50", 8767, bytes(range(32)))
+        remote.unit, remote.client = "01020304", 7
+        app = method_class(names=("step", "input", "_control"), badge=badge,
+                           Remote=transport.Remote)()
+        app.remote, app.page, app.hold_action = remote, "now", None
+        app.sample_mode, app.config_error = False, False
+        app._wifi = lambda now: False
+        app.wifi_error = "Connecting"
+        app.playback, app.ble = remote.playback, remote.ble
+        app.last_art_key = None
+        app.artwork = SimpleNamespace(step=Mock())
+        badge.frame(pressed=("select", "up"))
+        app.step(2)
+        self.assertFalse(remote.queue)
+        self.assertFalse(remote.volume_queue)
+        self.assertIsNone(remote.held_volume)
+        self.assertIsNone(app.hold_action)
+        udp.sendto.assert_not_called()
+        udp.recvfrom.assert_not_called()
+        badge.frame(released=("up",))
+        app._wifi = lambda now: True
+        app.step(3)
+        sent = [protocol.decode(remote.key, call.args[0])["token"]
+                for call in udp.sendto.call_args_list]
+        self.assertEqual(sent, ["STATUS"])
 
 class LocalRetryTests(unittest.TestCase):
     def constant(self):

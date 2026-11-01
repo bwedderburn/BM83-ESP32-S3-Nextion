@@ -1,211 +1,35 @@
-# Local Copilot review setup
+# Local review and validation setup
 
-Use the [verified reliability runbook](../reliability/README.md) for current
-instructions, evidence, host commands and physical acceptance gates.
+Current maintenance uses Codex with direct commits and normal pushes to
+`origin/main`, as authorized by the owner. Copilot's monthly allowance is
+exhausted; do not launch Copilot queries, reviews, assignments or cloud jobs.
+Do not create PRs, force-push, or change protected-branch rules to deliver work.
+See [the maintenance handoff](../reliability/DIRECT-MAINTENANCE.md) and
+[the reliability runbook](../reliability/README.md).
 
-Open the intended source checkout in VS Code using the existing signed-in GitHub
-Copilot account. Select its `.venv` interpreter and explicitly choose one of:
+The weekly Copilot issue-rotation and Claude audit workflows have been removed.
+Their setup and secret-provisioning instructions are retired with them; Git
+history retains the old configuration. No stored credential was read or changed.
+The existing Codacy security scan is retained for push/schedule analysis. Its
+explicit validator exemption does not exempt future files with retired names.
+The optional `copilot-setup-steps.yml` prepares dependencies on explicit dispatch
+and does not launch a model or create a coding-agent assignment.
 
-- **Reliability runtime review**: protocol deadlines, native ownership,
-  authentication/replay and metadata freshness.
-- **Reliability delivery review**: CI safety, evidence, rollback gates and status UX.
+## Host-only tools
 
-Both profiles expose only read/search tools and deliberately omit `model`, using
-the current Copilot picker selection. Choose an appropriate available Copilot
-model; Claude models offered inside Copilot are allowed. A separate Claude
-Code/app workflow or a cloud coding job is not allowed.
+Select the checkout's `.venv` interpreter in VS Code. Install the pinned
+`requirements-reliability.txt` and invoke only the relevant `BM83:` tasks.
+No task runs at folder open or deploys firmware. Keep approval settings, account,
+billing, credentials, MCP permissions and folder trust unchanged. Never start
+private device/capture tools from a repository review.
 
-Check that both agents appear in VS Code, then exercise their read-only review
-on the intended diff. Record the selected model, scope/revision, observed tools,
-findings and disposition. A parsed file or a Desktop-only review does not prove
-VS Code discovery or execution. If Restricted Mode blocks AI agents, ask the
-owner before trusting the specific folder; do not disable or broaden trust.
+The two `.github/agents/reliability-*.agent.md` profiles are preserved, explicitly
+invoked, read/search only and omit a model pin. Their presence is not evidence of
+an executed review. Future Copilot use needs an available allowance and owner
+instruction. The manual extensive-review skill and repo-health MCP configuration
+are retained; `repo_test_summary` executes tests and writes caches, so it is not
+a read-only tool. No wildcard permission grant is required by this maintenance.
 
-Keep normal approvals, account, billing, MCP permissions and existing credentials
-unchanged. This setup requires no new token, cloud-agent assignment, firewall
-exception or secret. Do not run private device/capture tools from review sessions.
-
-The weekly Claude audit, weekly Copilot issue rotation and Codacy workflows are
-general-purpose automation preserved below as **out of scope** for BM83
-reliability. Each is labeled in its first line and named in the validator's
-explicit allowlist (the label alone exempts nothing); none is a PR check, and
-none may be dispatched for reliability work. Codacy no longer runs on pull requests because
-PR jobs must not use secrets. This task does not alter their enabled state or any
-stored secrets. The retained `copilot-setup-steps.yml` only prepares dependencies;
-running an ordinary setup check does not launch a coding agent.
-
-Run only explicit host checks under the `BM83:` VS Code tasks. Independent review
-and green CI do not replace actual hardware acceptance. Keep both implementation
-PRs draft and Phase 2 blocked.
-
-## Legacy agent automation (out of scope for BM83 reliability)
-
-> **Out of scope.** This historical, general-purpose setup is preserved for its
-> existing owners. It is not part of the verified-reliability workflow, PR checks
-> or acceptance evidence. Do not dispatch these workflows, assign reliability
-> issues to a cloud agent or add secrets as part of reliability work.
-
-One-time setup for the extensive-review skill, the repo-health MCP server, and the two
-weekly improvement workflows. Everything here was added in the `chore/weekly-agent-automation`
-PR; this file is the runbook.
-
-### What was added
-
-| Path | Purpose |
-|---|---|
-| `.github/skills/extensive-review/SKILL.md` | The full code-review & modernization brief as a manual-only skill (`/extensive-review`; migrated from `.github/prompts/extensive-review.prompt.md`) |
-| `.github/copilot-instructions.md` | + Behavioral Contracts & automation conventions sections |
-| `.github/workflows/copilot-setup-steps.yml` | Preinstalls flake8/pytest/bandit + MCP deps in Copilot coding agent sessions |
-| `.github/workflows/weekly-copilot-review.yml` | Mondays: focused issue (deps→robustness→quality→tests rotation) auto-assigned to Copilot |
-| `.github/agent-tasks/weekly-copilot-body.md` | Issue body template for the Monday task |
-| `.github/workflows/weekly-claude-audit.yml` | Thursdays: Claude Code dependency/upgrade audit → report + safe-fix PR + issues |
-| `.github/dependabot.yml` | + pip ecosystem for the MCP server |
-| `tools/mcp/repo_health/` | Repo-health MCP server (inventory, TODOs, churn, deps, test/lint) — read-only except `repo_test_summary`, which runs repo tests and writes caches |
-| `.mcp.json` | Portable MCP registration for Copilot CLI/app, the VS Code Copilot harness and Claude Code (the deprecated `.vscode/mcp.json` duplicate was migrated here) |
-| `docs/agents/copilot-coding-agent-mcp.json` | MCP config to paste into repo settings (coding agent) |
-
-### One-time setup (after merging the PR)
-
-#### 1. Repo secrets
-
-**`GH_AGENT_PAT`** — lets the Monday workflow auto-assign Copilot, and lets the Thursday
-audit open its PR as you (so CI triggers on it). Create a fine-grained PAT at
-github.com → Settings → Developer settings → Fine-grained tokens, scoped to
-`bwedderburn/BM83-ESP32-S3-Nextion`, with **Read: metadata** and **Read + Write: actions,
-contents, issues, pull requests** (the permission set GitHub documents for Copilot issue
-assignment). Then:
-
-shell (PowerShell, B-Intel)
-```
-gh secret set GH_AGENT_PAT --repo bwedderburn/BM83-ESP32-S3-Nextion
-```
-(paste the token when prompted)
-
-**`CLAUDE_CODE_OAUTH_TOKEN`** — authenticates the Thursday audit against your Claude
-subscription. Generate it with Claude Code, then store it:
-
-shell (PowerShell, B-Intel)
-```
-claude setup-token
-```
-
-shell (PowerShell, B-Intel)
-```
-gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo bwedderburn/BM83-ESP32-S3-Nextion
-```
-
-Prefer API billing instead? Set `ANTHROPIC_API_KEY` as the secret and swap the one commented
-input line in `weekly-claude-audit.yml`.
-
-#### 2. Register the MCP server with the Copilot coding agent
-
-Repo → **Settings → Copilot → Coding agent → MCP configuration** (shown as "MCP servers" in
-some UI versions) → paste the contents of `docs/agents/copilot-coding-agent-mcp.json` → save.
-The coding agent's firewall and setup steps handle the rest; `copilot-setup-steps.yml`
-preinstalls the `mcp` package it needs. Note the pasted config's `"tools": ["*"]` enables
-all six tools for the coding agent and is NOT a read-only boundary — `repo_test_summary`
-executes repository tests and writes pytest caches, so never reuse this wildcard set for
-Copilot code review (see the server README's "Read-only guarantee").
-
-Copilot CLI, the GitHub Copilot app, the VS Code Copilot harness and Claude Code pick up
-`.mcp.json` automatically (VS Code will ask once to trust/start the server), but the
-server's own dependency must be installed once per machine or the auto-started process
-dies at `from mcp.server.fastmcp import ...`:
-
-shell (PowerShell, B-Intel)
-```
-python -m pip install -r tools/mcp/repo_health/requirements.txt
-```
-
-The same read-only exception applies to whatever those agents do with `repo_test_summary`.
-
-#### 3. Validate copilot-setup-steps
-
-The workflow only takes effect from the default branch. After merge:
-Actions tab → "Copilot Setup Steps" → Run workflow. Green run = agent sessions get the
-toolchain.
-
-#### 4. Optional but recommended (Copilot Pro+)
-
-Repo → Settings → Rules (or Branches) → enable **automatic Copilot code review** on pull
-requests, so every agent PR gets reviewed without you re-requesting. Your existing
-re-request loop (`pulls/N/requested_reviewers` with `copilot-pull-request-reviewer[bot]`)
-keeps working for iterations.
-
-### What runs when
-
-| When (Pacific) | What | Output |
-|---|---|---|
-| Mon ~06:17/07:17 | `weekly-copilot-review.yml` | Issue (label `agent:weekly`) → Copilot session → PR |
-| Mon 07:32/08:32 | Codacy scan (pre-existing) | SARIF to code scanning |
-| Thu ~06:47/07:47 | `weekly-claude-audit.yml` | `docs/weekly-audit/<date>.md` + PR + `code-health` issues |
-| Weekly | Dependabot | Action + pip bump PRs |
-
-Both weekly workflows also support **Run workflow** (workflow_dispatch) from the Actions tab;
-the Monday one takes a `focus` override (`deps|robustness|quality|tests`). Merges stay gated
-by your existing rules: branch protection, the Python matrix, Copilot/Codex review, and the
-hardware-test verdict for anything touching firmware behavior (agents are instructed not to
-touch firmware behavior at all).
-
-### Kicking off the one-time extensive review
-
-Three ways to run the manual-only `.github/skills/extensive-review/SKILL.md` — pick per session:
-
-1. **Copilot coding agent** (uses Pro+ premium requests): open a new issue titled
-   "Extensive code review & modernization audit", body:
-   "Read `.github/skills/extensive-review/SKILL.md` and execute it fully, all phases." —
-   then assign **Copilot** in the issue sidebar (works from GitHub mobile). Do this *after*
-   merging the automation PR so the prompt, MCP server and setup steps are on `main`.
-2. **VS Code agent mode**: open the repo, Copilot Chat → type `/extensive-review`, pick a
-   Claude model in the model picker (Copilot's built-in Claude, or your BYOK Anthropic key's
-   models), let it run in agent mode.
-3. **Claude Code in the cloud** (spends the $250 cloud allowance): start a session at
-   claude.ai/code on the GitHub repo and prompt:
-   "Read .github/skills/extensive-review/SKILL.md and execute it fully, all phases."
-
-### Which credential pays for what (as of 2026-10)
-
-| Resource | Covers | Does NOT cover |
-|---|---|---|
-| Copilot Pro+ premium requests | Coding agent sessions, Copilot code review, Copilot Chat | Claude Code anything |
-| BYOK Anthropic key (VS Code "Manage models") | Model choice in VS Code Copilot Chat | Coding agent on github.com, Copilot code review, Actions |
-| $250 Claude Code cloud allowance | Claude Code sessions on claude.ai/code (cloud) | The `weekly-claude-audit` Action |
-| `CLAUDE_CODE_OAUTH_TOKEN` (subscription) / `ANTHROPIC_API_KEY` | The `weekly-claude-audit` Action | — |
-
-### Levers
-
-- **Cadence**: edit the `cron:` lines (times are UTC; currently Mon 14:17 / Thu 14:47).
-- **Pause one bot**:
-
-shell (PowerShell, B-Intel)
-```
-gh workflow disable "Weekly code improvement (Copilot)" --repo bwedderburn/BM83-ESP32-S3-Nextion
-```
-
-- **Scope**: the Monday issue body lives in `.github/agent-tasks/weekly-copilot-body.md`;
-  the Thursday brief is the `prompt:` block in `weekly-claude-audit.yml`; the deep-review
-  method is `.github/skills/extensive-review/SKILL.md`.
-
-### Troubleshooting
-
-- **Issue created, Copilot never started** — `GH_AGENT_PAT` missing/expired (workflow log
-  will show the fallback comment), or the coding agent is disabled for the repo
-  (Settings → Copilot). Assigning Copilot by hand in the issue sidebar always works.
-- **Claude job fails at auth** — `CLAUDE_CODE_OAUTH_TOKEN` missing/expired; rerun
-  `claude setup-token` and reset the secret.
-- **repo-health tools missing in a Copilot session** — MCP JSON not saved in repo settings,
-  or `copilot-setup-steps` hasn't run green from `main` yet (the `mcp` package would be
-  missing). Session logs show MCP server startup under the session's "Copilot" step.
-- **Codex runtime blocked from `ab.chatgpt.com`** — a cloud-agent firewall warning can
-  identify this hostname and the command that attempted the connection. A repository admin
-  can open **Settings → Copilot → Internet access → Cloud agent → Custom allowlist**, add
-  only `ab.chatgpt.com`, and save changes. Keep the firewall enabled and preserve existing
-  rules. **Code review** has a separate section; add the rule there only if its own session
-  reports the same block. Setup steps run before the agent and cannot allow a later runtime
-  connection through this firewall. Start a fresh session after saving and check its logs
-  to verify that the original command no longer produces the warning. See GitHub's
-  [firewall configuration guide](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-the-firewall).
-- **CI didn't run on the Thursday audit PR** — the run fell back to `github.token`
-  (PRs created with it don't trigger workflows). Set `GH_AGENT_PAT`, or close/reopen the PR.
-- **3.9 matrix questions** — 3.9 is EOL; the first `deps`-focus runs will propose the matrix
-  bump as a CI diff for you to apply (agents don't edit workflows here).
+Offline tests and repository integration do not satisfy physical acceptance.
+Keep BM83 and CrowPanel offline and Phase 2 blocked until the separately
+authorized hardware protocol passes.

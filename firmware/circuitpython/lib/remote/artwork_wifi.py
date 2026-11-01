@@ -105,6 +105,9 @@ def retry_artwork_wifi(path=PROFILE_PATH, reload_fn=None, log=print):
 
     Keep the injectable reload_fn argument for existing callers, but the
     hardware default must bypass VM teardown with BLE and ESP-NOW active.
+    Refuse all reset callbacks while USB is enumerated or its state is unknown:
+    serial connectivity does not establish whether CIRCUITPY is host-mounted.
+    Safely eject and disconnect USB before requesting the shared retry.
     """
     try:
         profile = load_profile(path)
@@ -113,6 +116,19 @@ def retry_artwork_wifi(path=PROFILE_PATH, reload_fn=None, log=print):
         return False
     if profile is None:
         log("[NET] configure artwork Wi-Fi over USB before retrying")
+        return False
+    try:
+        import supervisor
+        usb_connected = supervisor.runtime.usb_connected
+    except Exception:
+        # Older/unsupported runtimes and failed native reads cannot prove that
+        # a host has released mass storage. Do not infer safety from silence.
+        usb_connected = None
+    if usb_connected is True:
+        log("[NET] remote restart refused while USB connected; safely eject and disconnect USB first")
+        return False
+    if usb_connected is not False:
+        log("[NET] USB state unavailable; remote restart refused")
         return False
     if reload_fn is None:
         try:

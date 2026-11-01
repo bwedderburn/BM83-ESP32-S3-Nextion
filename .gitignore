@@ -4,6 +4,7 @@ __pycache__/
 .env
 .artwork_wifi.json
 .metadata_bridge.json
+.badge_remote.json
 .venv
 *.pyc
 *.egg-info/

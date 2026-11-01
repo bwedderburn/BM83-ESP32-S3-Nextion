@@ -112,7 +112,7 @@ fi
 # Copy non-.py assets
 # -------------------------
 # Copies things like images, json, txt, etc., preserving folder structure,
-# while skipping __pycache__ and device-local private Wi-Fi enrollment.
+# while skipping __pycache__ and device-local private enrollment profiles.
 #
 # Note: We don't copy other *.py files; main.py and boot.py were handled above.
 if command -v rsync >/dev/null 2>&1; then
@@ -120,6 +120,7 @@ if command -v rsync >/dev/null 2>&1; then
     --exclude="__pycache__" \
     --exclude=".artwork_wifi.json" \
     --exclude=".metadata_bridge.json" \
+    --exclude=".badge_remote.json" \
     --exclude="*.py" \
     --exclude="lib/" \
     "${SRC_DIR}/" "${DIST_DIR}/"
@@ -137,7 +138,7 @@ else
       copy_failed=1
       break
     fi
-  done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -name ".artwork_wifi.json" ! -name ".metadata_bridge.json" ! -path "*/__pycache__/*" -print0)
+  done < <(find "${SRC_DIR}" -type f ! -name "*.py" ! -name ".artwork_wifi.json" ! -name ".metadata_bridge.json" ! -name ".badge_remote.json" ! -path "*/__pycache__/*" -print0)
 
   if (( copy_failed )); then
     exit 1

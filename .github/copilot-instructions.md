@@ -217,31 +217,23 @@ any change that touches one.
    `dist/circuitpython/main.py` must stay byte-identical to
    `firmware/circuitpython/main.py` (a test enforces parity).
 9. **Green CI is not a merge verdict for protocol changes** — the hardware serial capture is
-   (see `CLAUDE.md`). Label firmware-behavior PRs `needs-hardware-test`.
+   (see `CLAUDE.md`). Keep hardware acceptance explicitly pending for untested firmware behavior.
 
 ## Verified reliability workflow
 
 - Follow `docs/reliability/README.md` and the scoped reliability instructions.
-- Use local GitHub Copilot read-only review profiles in `.github/agents/`.
-  Choose an available Copilot model; Claude models inside Copilot are allowed.
-  Do not launch a separate Claude Code/app workflow or cloud coding job, or
-  assign reliability issues to bots.
-- Preserve frozen host candidates and private evidence. No hardware I/O during
-  repository validation; keep implementation PRs draft and Phase 2 blocked.
-- Use the pinned development requirements and explicit VS Code `BM83:` tasks.
+- Codex owns the current maintenance; Copilot usage is paused because the owner's
+  allowance is exhausted. Do not request Copilot responses/reviews or cloud jobs.
+- The owner authorizes tested direct commits and normal pushes to `origin/main`
+  in both active repositories, without new PRs. Never force-push or weaken branch
+  protections. Report an actual push rejection and retain the work if blocked.
+- Preserve frozen candidates and private evidence. No hardware I/O, deployment
+  or playback changes during repository validation. Phase 2 remains blocked on
+  actual Phase 1 hardware acceptance, separately authorized.
+- Use pinned development requirements and explicit VS Code `BM83:` tasks.
   CI uses Python 3.11/3.12/3.13; host CI is not physical acceptance.
-- The weekly agent and Codacy workflows below are preserved as out-of-scope
-  general automation. Do not dispatch them for reliability work.
-
-## Automation conventions (weekly agents) — out of scope for BM83 reliability
-
-- Monday: `weekly-copilot-review.yml` opens a focused issue (label `agent:weekly`, 4-week
-  rotation deps → robustness → quality → tests) assigned to the Copilot coding agent.
-- Thursday: `weekly-claude-audit.yml` runs the Claude dependency/upgrade audit and writes
-  `docs/weekly-audit/<date>.md`.
-- Agent ground rules: ≤ ~300 changed lines per PR, host-verifiable changes only, no firmware
-  behavior changes (those become `code-health` issues with proposed diffs), workflows and
-  `Documents/` read-only.
-- The full review brief lives in the manual-only `.github/skills/extensive-review/SKILL.md`.
-- Repo-health facts (inventory, TODO debt, churn, dependency report, test/lint status) are
-  available via the `repo-health` MCP server (`tools/mcp/repo_health/`).
+- Weekly Copilot and Claude automation is retired. The existing Codacy scanner
+  remains out of scope for the reliability validator and retains its security
+  analysis. Do not change stored secrets, accounts or security policy.
+- The manual-only extensive-review skill and read/search VS Code profiles remain
+  available for a future owner-authorized session; do not launch them automatically.

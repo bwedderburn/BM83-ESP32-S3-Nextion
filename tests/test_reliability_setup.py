@@ -5,7 +5,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError as exc:
+    if exc.name != "yaml":
+        raise
+    raise unittest.SkipTest(
+        "Optional PyYAML is unavailable; inside .venv run "
+        "python -m pip install -r requirements-reliability.txt "
+        "to run reliability policy tests.") from exc
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -138,6 +146,34 @@ class ReliabilityPolicyTests(unittest.TestCase):
             self.assertIn(
                 ".github/workflows/new-bypass.yml: forbidden credential/agent reference: secrets",
                 POLICY.check_workflows(Path(directory)))
+
+    def test_retired_workflow_filenames_cannot_bypass_policy(self):
+        self.assertEqual(POLICY.OUT_OF_SCOPE_WORKFLOWS, ("codacy.yml",))
+        data = self.workflow()
+        data["on"] = {"push": None}
+        job = data["jobs"]["test"]
+        job["permissions"] = {"contents": "write"}
+        job["runs-on"] = "self-hosted"
+        job["steps"] = [{"uses": "actions/checkout@v7"},
+                        {"run": "claude --print ${{ secrets.TOKEN }}"}]
+        expected = {
+            "out-of-scope label is not allowlisted for this workflow",
+            "forbidden credential/agent reference: secrets",
+            "forbidden credential/agent reference: separate Claude command",
+            "unexpected runner (no hardware/self-hosted runners)",
+            "job must have only contents: read",
+            "action must be pinned to a full commit: actions/checkout@v7",
+            "checkout must not persist credentials",
+        }
+        for name in ("weekly-claude-audit.yml", "weekly-copilot-review.yml"):
+            with self.subTest(name=name), TemporaryDirectory() as directory:
+                root = Path(directory)
+                workflows = root / ".github/workflows"
+                workflows.mkdir(parents=True)
+                (workflows / name).write_text(POLICY.OUT_OF_SCOPE + "\n" + yaml.safe_dump(data))
+                prefix = ".github/workflows/" + name + ": "
+                self.assertEqual(set(POLICY.check_workflows(root)), {
+                    prefix + message for message in expected})
 
     def test_mutable_action_and_credentials(self):
         data = self.workflow()
