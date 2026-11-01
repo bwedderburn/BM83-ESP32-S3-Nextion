@@ -27,8 +27,9 @@ exception or secret. Do not run private device/capture tools from review session
 
 The weekly Claude audit, weekly Copilot issue rotation and Codacy workflows are
 general-purpose automation preserved below as **out of scope** for BM83
-reliability. Each is labeled in its first line, is not a PR check and must not be
-dispatched for reliability work. Codacy no longer runs on pull requests because
+reliability. Each is labeled in its first line and named in the validator's
+explicit allowlist (the label alone exempts nothing); none is a PR check, and
+none may be dispatched for reliability work. Codacy no longer runs on pull requests because
 PR jobs must not use secrets. This task does not alter their enabled state or any
 stored secrets. The retained `copilot-setup-steps.yml` only prepares dependencies;
 running an ordinary setup check does not launch a coding agent.

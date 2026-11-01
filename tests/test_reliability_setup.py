@@ -81,20 +81,39 @@ class ReliabilityPolicyTests(unittest.TestCase):
         label = POLICY.OUT_OF_SCOPE + "\nrun: claude --print ${{ secrets.TOKEN }}\n"
         data = self.workflow()
         data["on"] = {"schedule": [{"cron": "0 0 * * 1"}]}
-        self.assertEqual(POLICY.workflow_errors(data, label), [])
+        self.assertEqual(POLICY.workflow_errors(data, label, "codacy.yml"), [])
         for event in POLICY.PR_EVENTS + ("pull_request_review", "issue_comment",
                                          "merge_group", "pull_request_review_comment"):
             with self.subTest(event=event):
                 data["on"] = {event: None}
-                self.assertEqual(POLICY.workflow_errors(data, label), [
+                self.assertEqual(POLICY.workflow_errors(data, label, "codacy.yml"), [
                     "out-of-scope workflow must not run on pull requests"])
         parsed = yaml.safe_load("on: [schedule, issue_comment]\njobs: {}\n")
-        self.assertEqual(POLICY.workflow_errors(parsed, label), [
+        self.assertEqual(POLICY.workflow_errors(parsed, label, "codacy.yml"), [
             "out-of-scope workflow must not run on pull requests"])
         data["on"] = {"schedule": None}
         unlabeled = "# out-of-scope\nrun: claude --print\n"
         self.assertIn("forbidden credential/agent reference: separate Claude command",
                       POLICY.workflow_errors(data, unlabeled))
+
+    def test_out_of_scope_label_cannot_exempt_unlisted_workflow(self):
+        label = POLICY.OUT_OF_SCOPE + "\nrun: claude --print ${{ secrets.TOKEN }}\n"
+        data = self.workflow()
+        data["on"] = {"push": None}
+        data["jobs"]["test"]["permissions"] = {"contents": "write"}
+        self.assertEqual(set(POLICY.workflow_errors(data, label, "new-bypass.yml")), {
+            "out-of-scope label is not allowlisted for this workflow",
+            "forbidden credential/agent reference: secrets",
+            "forbidden credential/agent reference: separate Claude command",
+            "job must have only contents: read",
+        })
+        with TemporaryDirectory() as directory:
+            workflows = Path(directory) / ".github/workflows"
+            workflows.mkdir(parents=True)
+            (workflows / "new-bypass.yml").write_text(label + yaml.safe_dump(data))
+            self.assertIn(
+                ".github/workflows/new-bypass.yml: forbidden credential/agent reference: secrets",
+                POLICY.check_workflows(Path(directory)))
 
     def test_mutable_action_and_credentials(self):
         data = self.workflow()

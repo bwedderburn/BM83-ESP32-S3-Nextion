@@ -24,15 +24,21 @@ OUT_OF_SCOPE = "# reliability-scope: out-of-scope legacy automation"
 PR_EVENTS = ("pull_request", "pull_request_target", "workflow_run")
 # Labeled unrelated automation may only run on these non-PR triggers.
 OUT_OF_SCOPE_EVENTS = ("schedule", "workflow_dispatch", "push")
+# The label is honored only for these preserved legacy files, never self-asserted.
+OUT_OF_SCOPE_WORKFLOWS = ("codacy.yml", "weekly-claude-audit.yml", "weekly-copilot-review.yml")
 
 
-def trigger_errors(data, text):
+def is_out_of_scope(text, name):
+    return text.startswith(OUT_OF_SCOPE) and name in OUT_OF_SCOPE_WORKFLOWS
+
+
+def trigger_errors(data, text, name=""):
     # PyYAML's YAML 1.1 loader treats the GitHub key `on` as True.
     events = data.get("on", data.get(True, {}))
     if isinstance(events, str):
         events = [events]
     # Explicitly labeled unrelated automation is preserved, but never as a PR job.
-    if text.startswith(OUT_OF_SCOPE):
+    if is_out_of_scope(text, name):
         if not events or any(event not in OUT_OF_SCOPE_EVENTS for event in events):
             return ["out-of-scope workflow must not run on pull requests"]
         return []
@@ -41,10 +47,12 @@ def trigger_errors(data, text):
     return []
 
 
-def workflow_errors(data, text):
-    errors = trigger_errors(data, text)
-    if text.startswith(OUT_OF_SCOPE):
+def workflow_errors(data, text, name=""):
+    errors = trigger_errors(data, text, name)
+    if is_out_of_scope(text, name):
         return errors
+    if text.startswith(OUT_OF_SCOPE):
+        errors.append("out-of-scope label is not allowlisted for this workflow")
     for pattern, label in (
             (r"\bsecrets\b", "secrets"),
             (r"anthropics/|@anthropic-ai/claude-code|agent_assignment|copilot-swe-agent",
@@ -70,7 +78,7 @@ def check_workflows(root):
                        if path.is_file() and path.suffix.lower() in (".yml", ".yaml")):
         text = path.read_text()
         errors.extend(str(path.relative_to(root)) + ": " + message
-                      for message in workflow_errors(yaml.safe_load(text), text))
+                      for message in workflow_errors(yaml.safe_load(text), text, path.name))
     return errors
 
 

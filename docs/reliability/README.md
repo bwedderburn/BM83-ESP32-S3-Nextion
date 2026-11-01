@@ -59,8 +59,8 @@ or approvals. If Restricted Mode blocks the agents, ask the owner before
 trusting the specific source folder; never broaden trust to its parent or
 disable Workspace Trust. Do not assign issues to the cloud coding agent. The
 weekly Claude/Copilot and Codacy workflows are preserved as labeled out-of-scope
-general automation (see `docs/agents/SETUP.md`); they are not PR checks and must
-not be dispatched for reliability work. Existing secrets/settings are untouched.
+general automation (see `docs/agents/SETUP.md`); only these allowlisted files may
+use the label, they are not PR checks and must not be dispatched for reliability work. Existing secrets/settings are untouched.
 
 Development-only requirements pin pytest/flake8, Bandit, pip-audit and PyYAML.
 They provide host regression, security/dependency checks and configuration
