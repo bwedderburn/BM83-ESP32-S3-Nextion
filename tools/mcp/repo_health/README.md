@@ -26,10 +26,24 @@ is fine). `repo_lint_summary` only reads sources.
 
 ## Install & run locally
 
+On Mac/Linux, from the repository root:
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install -r tools/mcp/repo_health/requirements.txt
+node tools/mcp/repo_health/launch.mjs
 ```
-python -m pip install -r tools/mcp/repo_health/requirements.txt
-python tools/mcp/repo_health/server.py
-```
+
+On Windows use `py -3 -m venv .venv`,
+`.venv\Scripts\python.exe -m pip install --upgrade pip`, and
+`.venv\Scripts\python.exe -m pip install -r tools/mcp/repo_health/requirements.txt`,
+then run the same Node command. Node must be in the MCP client's PATH. The
+launcher chooses only this checkout's `.venv` Python and fixed `server.py`,
+forwards stdio/exit status, and gives setup help instead of using a global Python
+when `.venv` is absent. No shell activation, package auto-install or model call
+is part of startup. Current maintenance pauses Copilot usage; see
+[the handoff](../../../docs/reliability/DIRECT-MAINTENANCE.md).
 
 The server resolves the repo root via `git rev-parse` (override with the
 `REPO_HEALTH_ROOT` environment variable).
