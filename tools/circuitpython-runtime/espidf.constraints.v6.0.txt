@@ -43,7 +43,7 @@ esp-idf-monitor>=1.10.0,<2
 
 esp-idf-size>=2.0.0,<3.0.0
 
-esp-idf-nvs-partition-gen~=0.1.9
+esp-idf-nvs-partition-gen~=0.3.0
 
 tree-sitter~=0.25
 tree-sitter-c~=0.24
