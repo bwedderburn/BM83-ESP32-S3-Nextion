@@ -4,10 +4,12 @@ Load helpers directly: importing the badge entrypoint would start its runtime.
 The socket is always replaced, and no artwork fetch or device files are used.
 """
 
+import ast
 import errno
 import hashlib
 import hmac
 import importlib.util
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -180,6 +182,20 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(models.display_text("ÀÁÂÃÄÅ Ç ÈÉÊË ÌÍÎÏ Ñ ÒÓÔÕÖØ ÙÚÛÜ ÝŸ"),
                          "AAAAAA C EEEE IIII N OOOOOO UUUU YY")
 
+    def test_display_text_folds_icelandic_and_ligatures_legibly(self):
+        self.assertEqual(models.display_text("Sigur R\u00f3s \u2013 \u00c1g\u00e6tis byrjun"),
+                         "Sigur Ros - Agaetis byrjun")
+        self.assertEqual(models.display_text("\u00de\u00f6gn \u00d0\u00f0 \u00c6 \u0153 Stra\u00dfe"),
+                         "Thogn Dd AE oe Strasse")
+        self.assertEqual(models.display_text("\u5742\u672c \U0001f389"), "?? ?")
+
+    def test_accent_folding_does_not_rely_on_unicode_case_methods(self):
+        # MicroPython's str.lower()/upper()/isupper() leave non-ASCII letters unchanged.
+        tree = ast.parse(inspect.getsource(models.display_text))
+        methods = {node.func.attr for node in ast.walk(tree)
+                   if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+        self.assertFalse(methods & {"lower", "upper", "isupper", "islower", "casefold"})
+
     def test_ble_confirmation_requires_new_matching_request(self):
         control = models.BleControl()
         control.accept(ble_state(), 0)
@@ -199,6 +215,24 @@ class ModelTests(unittest.TestCase):
         control.accept(ble_state(sequence=2, mode=2, flags=2, req_client=8, req_seq=9), 2)
         control.tick(2)
         self.assertEqual(control.result, "Unconfirmed (superseded)")
+
+    def test_source_label_shows_only_a_proven_text_origin(self):
+        self.assertTrue(models.valid_np(snapshot()))
+        self.assertEqual(models.source_label(snapshot()), "")
+        self.assertEqual(models.source_label(None), "")
+        for src, label in (("avrcp", "via AVRCP"), ("mac", "via Mac Wi-Fi"), ("", ""),
+                           ("AVRCP", ""), ("bt", ""), (None, ""), (1, ""), (["mac"], "")):
+            with self.subTest(src=src):
+                value = snapshot(src=src)
+                self.assertTrue(models.valid_np(value))
+                self.assertEqual(models.source_label(value), label)
+
+    def test_null_ble_is_ignored_without_clearing_fresh_status(self):
+        control = models.BleControl()
+        control.accept(ble_state(), 0)
+        control.accept(None, 10)
+        self.assertEqual(control.state, ble_state())
+        self.assertEqual(control.received, 0)
 
 
 class TransportTests(unittest.TestCase):
@@ -299,6 +333,133 @@ class TransportTests(unittest.TestCase):
         self.remote.step(4)
         self.assertIsNone(self.remote.pending)
         self.assertEqual(self.remote.feedback, "BT_PLAY: sent (reply)")
+
+    def test_denied_reply_reports_refusal_instead_of_delivery(self):
+        self.connect()
+        self.remote.queue_command("BT_EBIND")
+        self.remote.step(2)
+        self.reply(self.state_reply(denied=True))
+        self.remote.step(3)
+        self.assertIsNone(self.remote.pending)
+        self.assertEqual(self.remote.feedback, "Erase bonds: refused by audio unit")
+        for denied in (1, "true", False, None):
+            with self.subTest(denied=denied):
+                self.remote.queue_command("BT_EBIND")
+                self.remote.step(4)
+                self.reply(self.state_reply(denied=denied))
+                self.remote.step(5)
+                self.assertIsNone(self.remote.pending)
+                self.assertEqual(self.remote.feedback, "BT_EBIND: sent (reply)")
+
+    def test_status_reply_clears_link_errors_but_keeps_command_outcomes(self):
+        self.connect()
+        self.remote.queue_command("STATUS")
+        for now in (2, 152, 302, 452, 602):
+            self.remote.step(now)
+        self.assertEqual(self.remote.feedback, "STATUS: no reply")
+        for stale, expected in (
+                ("STATUS: no reply", "Audio unit responding"),
+                ("UDP receive error: 104", "Audio unit responding"),
+                ("UDP unavailable: 113", "Audio unit responding"),
+                ("BT_NEXT: no reply", "BT_NEXT: no reply"),
+                ("Erase bonds: refused by audio unit", "Erase bonds: refused by audio unit")):
+            with self.subTest(stale=stale):
+                self.remote.feedback = stale
+                self.remote.queue_command("STATUS")
+                self.remote.step(700)
+                self.reply(self.state_reply())
+                self.remote.step(701)
+                self.assertIsNone(self.remote.pending)
+                self.assertEqual(self.remote.feedback, expected)
+
+    def test_legacy_net_retry_outcomes_read_as_receiver_retry_unavailable(self):
+        for reply in ({"denied": True}, {"dup": True, "denied": True}, {"dup": True}):
+            with self.subTest(reply=reply):
+                self.setUp()
+                self.connect()
+                self.remote.queue_command("NET_RETRY")
+                self.remote.step(2)
+                self.reply(self.state_reply(**reply))
+                self.remote.step(3)
+                self.assertIsNone(self.remote.pending)
+                self.assertEqual(self.remote.feedback, "Receiver retry unavailable")
+        self.setUp()
+        self.connect()
+        self.remote.queue_command("NET_RETRY")
+        self.remote.step(2)
+        self.reply({"v": 1, "type": "rehello", "client": self.remote.client,
+                    "seq": self.remote.seq})
+        self.remote.step(3)
+        self.assertEqual(self.remote.feedback, "Receiver retry unavailable")
+
+    def sent_tokens(self):
+        return [protocol.decode(KEY, wire).get("token") for wire, _ in self.socket.sent]
+
+    def test_press_during_handshake_is_sent_after_welcome(self):
+        self.remote.step(0)
+        self.assertTrue(self.remote.queue_command("BT_PLAY"))
+        self.assertEqual(self.remote.feedback, "BT_PLAY: waiting for audio unit")
+        self.reply({"v": 1, "type": "welcome", "nonce": self.remote.nonce,
+                    "unit": "01020304", "client": 7})
+        self.remote.step(1)
+        self.remote.step(2)
+        self.assertEqual(self.remote.pending["command"], "BT_PLAY")
+
+    def test_presses_are_dropped_when_the_unit_never_answers(self):
+        self.remote.step(0)
+        self.remote.queue_command("BT_POWER")
+        self.remote.queue_command("BT_VOLUP_P")
+        for now in (150, 300, 450, 600):
+            self.remote.step(now)
+        self.assertIsNone(self.remote.pending)
+        self.assertEqual(self.remote.queue, [])
+        self.assertEqual(self.remote.volume_queue, [])
+        self.assertEqual(self.remote.feedback, "Audio unit: no reply - 2 not sent")
+        self.remote.step(1600)
+        self.reply({"v": 1, "type": "welcome", "nonce": self.remote.nonce,
+                    "unit": "01020304", "client": 7})
+        self.remote.step(1601)
+        self.remote.step(2601)
+        self.assertNotIn("BT_POWER", self.sent_tokens())
+        self.assertNotIn("BT_VOLUP_P", self.sent_tokens())
+        self.assertEqual(self.remote.pending["command"], "STATUS")
+
+    def load_ble_status(self):
+        self.remote.queue_command("STATUS")
+        self.remote.step(2)
+        self.reply(self.state_reply(ble=ble_state()))
+        self.remote.step(3)
+        self.assertTrue(self.remote.ble.available(3))
+
+    def test_null_ble_command_reply_waits_for_later_status_confirmation(self):
+        self.connect()
+        self.load_ble_status()
+        self.remote.queue_command("BLE_PAUSE")
+        self.remote.step(4)
+        seq = self.remote.seq
+        self.reply(self.state_reply(ble=None))
+        self.remote.step(5)
+        self.assertIsNone(self.remote.pending)
+        self.assertEqual(self.remote.feedback, "BLE_PAUSE: sent (reply)")
+        self.assertEqual(self.remote.ble.state, ble_state())
+        self.assertEqual(self.remote.ble.result, "Waiting")
+        self.remote.queue_command("STATUS")
+        self.remote.step(6)
+        self.reply(self.state_reply(ble=ble_state(sequence=2, mode=2, flags=2,
+                                                  req_client=7, req_seq=seq)))
+        self.remote.step(7)
+        self.assertEqual(self.remote.ble.result, "Confirmed")
+
+    def test_denied_ble_request_stops_waiting(self):
+        self.connect()
+        self.load_ble_status()
+        self.remote.queue_command("BLE_PAUSE")
+        self.remote.step(4)
+        self.assertEqual(self.remote.ble.result, "Waiting")
+        self.reply(self.state_reply(ble=None, denied=True))
+        self.remote.step(5)
+        self.assertEqual(self.remote.feedback, "BLE_PAUSE: refused by audio unit")
+        self.assertEqual(self.remote.ble.result, "Refused")
 
     def test_restart_does_not_replay_non_idempotent_command(self):
         self.connect()

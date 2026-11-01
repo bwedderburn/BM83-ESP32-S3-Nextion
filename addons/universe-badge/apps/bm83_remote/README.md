@@ -5,12 +5,18 @@ BM83 Remote brings the CrowPanel audio controls and Now Playing information to t
 ## Integration status
 
 This is an optional badge client imported from the user's BADGER app snapshot.
-BM83 `origin/main` at `d2e773d` does **not** include the matching BMW1 UDP
-receiver. This add-on does not add or deploy that receiver. Existing artwork
-Wi-Fi and ESP-NOW support alone cannot accept this client's UDP commands.
-Receiver interoperability and physical badge/audio-unit operation have not been
-verified by this import. Use the sample-state preview or host tests until a
-matching receiver is available and separately validated.
+The matching opt-in BMW1 UDP receiver lives in the BM83 repository at
+`firmware/circuitpython/lib/remote/badge_remote.py`; this add-on does not deploy
+it. Existing artwork Wi-Fi and ESP-NOW support alone cannot accept this client's
+UDP commands. The controller always refuses `NET_RETRY`, and the Settings retry
+here is badge-local only.
+
+The client has been checked with host tests and in the official Universe 2026
+badge simulator using fixture sockets. The simulator has no UDP sockets, HTTPS
+fetch or `os.urandom`, so it covers rendering and button handling against
+controlled replies, not real Wi-Fi/UDP, a BM83 unit, or the physical badge
+display and buttons. Physical badge and end-to-end BM83 acceptance are still
+pending.
 
 Playback validation now rejects snapshots that omit
 `duration_ms`, `position_ms`, or `position_age_ms`; these fields may explicitly
@@ -61,9 +67,11 @@ Open **BM83 Remote** from the badge menu while the badge and BM83 audio unit are
 - **Back**: mute on the Now Playing page; cancel/return on Settings.
 - **Hold Up / Down**: volume up / down; release the button to stop the unit's repeat.
 - **Menu**: open Settings. Use **Up / Down**, **Select**, and **Back** to navigate.
-- Settings provide Power, Pair, EQ, confirmed bond erasure, Wi-Fi/artwork retry, and BLE volume-remote pause/enable when a fresh BLE status permits the request.
+- Settings provide Power, Pair, EQ, confirmed bond erasure, a badge-local Wi-Fi/artwork retry, and BLE volume-remote pause/enable when a fresh BLE status permits the request. **Badge Wi-Fi / artwork retry** only reconnects the badge's Wi-Fi and restarts its artwork lookup (`Local retry: badge Wi-Fi/artwork only`); it never sends `NET_RETRY`, so the audio unit is not asked to reconnect or reload.
 
-The status line reports whether a command was sent and whether a reply arrived. A reply is delivery feedback, not proof that playback or volume changed. BLE Pause/Enable is reported as Waiting, Confirmed, Failed, or Unconfirmed and only confirms when a newer BLE status echoes the matching request client/sequence; null correlation means there is no current Wi-Fi-owned BLE request.
+The status line reports whether a command was sent and whether a reply arrived. A press made before the audio unit authenticates waits for it; if the handshake gets no reply, pending presses are dropped (`Audio unit: no reply - N not sent`) so they cannot fire later. A reply is delivery feedback, not proof that playback or volume changed. After a `STATUS: no reply` or UDP error, the next successful STATUS reply changes the line to `Audio unit responding`; command outcomes stay visible. A reply marked `"denied": true` is shown as refused instead, for example `Erase bonds: refused by audio unit` when the receiver keeps bond erasure local-only. Any reply to the legacy `NET_RETRY` token reads `Receiver retry unavailable`. BLE Pause/Enable is reported as Waiting, Confirmed, Failed, Refused, or Unconfirmed and only confirms when a newer BLE status echoes the matching request client/sequence; null correlation means there is no current Wi-Fi-owned BLE request. The immediate reply to a BLE request may carry `"ble": null`; confirmation then comes from a later STATUS reply.
+
+When the receiver reports the proven origin of the title/artist text in the optional `np.src` field, Now Playing shows `via AVRCP` or `via Mac Wi-Fi` beneath the EQ line. An empty, missing, or unknown value shows nothing; the app never guesses the source.
 
 ## Configuration and network
 
@@ -77,7 +85,7 @@ BM83_PORT = 8767             # optional; defaults to 8767
 BM83_KEY = "64 lowercase hex characters shared with the audio unit"
 ```
 
-The BM83 unit and badge need LAN connectivity. Automatic cover downloads also need internet access. Missing settings, Wi-Fi failures, unavailable units, missing artwork and unsupported/progressive JPEGs are shown in the app rather than treated as success. The simulator cannot use sockets or HTTPS; `inject_sample_state()` can be called from its REPL to preview Now Playing layout.
+The BM83 unit and badge need LAN connectivity. Automatic cover downloads also need internet access. Missing settings, Wi-Fi failures, unavailable units, missing artwork and unsupported/progressive JPEGs are shown in the app rather than treated as success. The header shows a short link state (`Authenticated`, `Awaiting unit`, `Wi-Fi offline`, `No UDP socket`); details such as the Wi-Fi error appear on the bottom feedback line. When valid settings are present but the firmware has no `socket` module, the app shows `No UDP socket` and `Wi-Fi/UDP unavailable` feedback instead of asking for configuration. The simulator cannot use sockets or HTTPS; `inject_sample_state()` can be called from its REPL to preview Now Playing layout.
 
 ## BMW1 details
 
@@ -103,6 +111,8 @@ The test files locate `addons/universe-badge/apps/bm83_remote` in the BM83
 repository or `badge/apps/bm83_remote` in the Universe workshop repository.
 Tests exercise authentication, malformed input, playback freshness, correlated
 BLE confirmation, artwork validation, and a fake UDP socket. They do not execute
-the badge entrypoint, contact networks/devices, or test a receiver. No receiver
-interoperability test was executed. Badge UI rendering and actual button/audio
-behavior still require separately authorized physical-device validation.
+the badge entrypoint, contact networks/devices, or test a receiver. In the BM83
+repository, `tests/test_badge_remote.py` runs this client's transport against
+the receiver in-process with fake sockets. Badge UI rendering on hardware and
+actual button/audio behavior still require separately authorized physical-device
+validation.

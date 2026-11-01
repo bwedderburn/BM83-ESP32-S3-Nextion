@@ -12,7 +12,8 @@ except OSError:
 if APP_DIR not in sys.path:
     sys.path.insert(0, APP_DIR)
 
-from models import BleControl, Playback, clamp_setting_index, clock_text, display_text
+from models import (BleControl, Playback, clamp_setting_index, clock_text, display_text,
+                    source_label)
 from artwork import Artwork
 from protocol import configuration
 
@@ -42,6 +43,7 @@ MUTED = color.rgb(148, 160, 174)
 ACCENT = color.rgb(211, 250, 55)
 GREEN = color.rgb(66, 211, 120)
 RED = color.rgb(255, 112, 105)
+LOCAL_RETRY_FEEDBACK = "Local retry: badge Wi-Fi/artwork only"
 
 
 def fit_text(text, width, size=1):
@@ -100,13 +102,18 @@ class BM83Remote:
             return None
 
     def _start_network(self):
-        if not self.config_error and Remote is not None:
-            try:
-                self.remote = Remote(*self.config)
-                self.unit_status = "Authenticating audio unit..."
-            except Exception as error:
-                self.feedback = "UDP setup failed: " + str(error)[:48]
-                self.unit_status = "Audio unit unavailable"
+        if self.config_error:
+            return
+        if Remote is None:
+            self.feedback = "Wi-Fi/UDP unavailable: no socket support"
+            self.unit_status = "No UDP socket"
+            return
+        try:
+            self.remote = Remote(*self.config)
+            self.unit_status = "Authenticating"
+        except Exception as error:
+            self.feedback = "UDP setup failed: " + str(error)[:48]
+            self.unit_status = "UDP failed"
 
     def _wifi(self, now):
         if self.config_error or wifi is None:
@@ -137,7 +144,7 @@ class BM83Remote:
             ("Pair", "BT_PAIR"),
             ("Cycle EQ", "BT_EQ"),
             ("Erase BLE bonds", "BT_EBIND"),
-            ("Wi-Fi / Artwork retry", "NET_RETRY"),
+            ("Badge Wi-Fi / artwork retry", "LOCAL_RETRY"),
         ]
         if self.ble.available(now):
             pause = self.ble.state["mode"] == 0
@@ -147,7 +154,8 @@ class BM83Remote:
 
     def _control(self, command, now):
         if self.remote is None:
-            self.feedback = "Configure Wi-Fi and BM83 secrets first"
+            self.feedback = ("Configure Wi-Fi and BM83 secrets first" if self.config_error
+                             else "Wi-Fi/UDP unavailable - command not sent")
             return
         if command in ("BLE_PAUSE", "BLE_ENABLE") and not self.ble.available(now):
             self.feedback = "Fresh BLE status required"
@@ -208,13 +216,14 @@ class BM83Remote:
             if command == "BT_EBIND":
                 self.erase_confirm = True
                 self.confirm_choice = 0
-            elif command == "NET_RETRY":
-                self._control(command, now)
-                if self.remote:
-                    self.remote.queue_command("STATUS")
+            elif command == "LOCAL_RETRY":
+                # Badge-local only: never asks the audio unit to reconnect or reload.
                 self.artwork.retry(now)
                 self.wifi_ready = False
                 self.next_wifi = now
+                self.feedback = LOCAL_RETRY_FEEDBACK
+                if self.remote:
+                    self.remote.feedback = LOCAL_RETRY_FEEDBACK
             else:
                 self._control(command, now)
 
@@ -245,10 +254,11 @@ class BM83Remote:
                 self.playback = self.remote.playback
                 self.ble = self.remote.ble
                 self.feedback = self.remote.feedback
-                self.unit_status = ("Authenticated audio unit" if self.remote.unit
-                                    else "Waiting for audio unit")
+                self.unit_status = "Authenticated" if self.remote.unit else "Awaiting unit"
             elif not connected:
-                self.unit_status = "Wi-Fi: " + (self.wifi_error or "connecting")
+                self.unit_status = "Wi-Fi offline"
+                if self.remote:
+                    self.feedback = "Wi-Fi: " + (self.wifi_error or "connecting")
             state = self.playback.state if self.playback.fresh(now) else None
             if state:
                 key = (state["artist"], state["album"])
@@ -296,10 +306,13 @@ class BM83Remote:
         if self.artwork.image:
             screen.blit(self.artwork.image, rect(14, 47, 110, 110))
         else:
+            lines = wrap_text(self.artwork.message, 100)[:4]
+            top = 118 - 12 * max(0, len(lines) - 3)
             screen.pen = ACCENT
-            screen.text("BM83", 43, 82, 2)
+            screen.text("BM83", 43, top - 36, 2)
             screen.pen = MUTED
-            screen.text(fit_text(self.artwork.message, 100), 18, 118)
+            for i, line in enumerate(lines):
+                screen.text(line, 18, top + i * 12)
 
         screen.pen = WHITE
         if state:
@@ -322,6 +335,10 @@ class BM83Remote:
                 playback = "Playing"
             elif state["play_status"] == 2:
                 playback = "Paused"
+            elif state["play_status"] == 0:
+                playback = "Stopped"
+            elif state["play_status"] in (3, 4):
+                playback = "Seeking"
             else:
                 playback = "Playback status unknown"
             screen.pen = GREEN if state["play_status"] == 1 else MUTED
@@ -329,13 +346,17 @@ class BM83Remote:
             screen.pen = MUTED
             screen.text(fit_text("EQ " + display_text(state.get("eq", "")), 170),
                         137, 136)
+            source = source_label(state)
+            if source:
+                screen.text(source, 137, 155)
             pos = self.playback.position(now)
             duration = state["duration_ms"]
         else:
             screen.pen = WHITE
             screen.text(fit_text("Waiting for audio unit", 170), 137, 72)
             screen.pen = MUTED
-            screen.text(fit_text("No fresh playback snapshot", 170), 137, 98)
+            for i, line in enumerate(wrap_text("No fresh playback snapshot", 170)[:2]):
+                screen.text(line, 137, 98 + i * 12)
             pos = duration = None
 
         screen.pen = color.rgb(60, 72, 84)

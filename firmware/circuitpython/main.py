@@ -18,6 +18,7 @@ from remote.state_tx import StatePublisher
 from remote.ble_status import BleStatusPublisher
 from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
 from remote.metadata_bridge import MetadataBridge
+from remote.badge_remote import BadgeRemote, np_from_snapshot
 from bm83.bm83 import Bm83
 from bm83.link_probe import StartupLinkProbe
 from blehid.ble import BleHid
@@ -91,6 +92,10 @@ def main():
     metadata_bridge = MetadataBridge()
     metadata_bridge.setup()
     startup_link_probe = StartupLinkProbe(bm, enabled=metadata_bridge.enabled)
+    # Optional authenticated Universe-badge endpoint; inert without its
+    # private profile and never joins Wi-Fi itself.
+    badge_remote = BadgeRemote()
+    badge_remote.setup()
 
     # Local bindings for speed/low allocation on mpy
     monotonic = time.monotonic
@@ -315,6 +320,16 @@ def main():
         desired_aux = ""
         bm.schedule_play_status(0.05)
         bm.schedule_attrs(0.3)
+
+    def badge_state():
+        """Cached observations for a badge reply; never sends UART commands."""
+        source = "mac" if bridge_active else ("avrcp" if native_metadata_seen else "")
+        try:
+            ble_observed = ble.snapshot_status() if BLE_ENABLED else None
+        except Exception:
+            ble_observed = {}
+        return (np_from_snapshot(remote_state.snapshot(ticks_ms()), desired_eq, source),
+                ble_observed)
 
     last_gc = monotonic()
     gc_interval_s = 4.0  # Empirically chosen: 4s strikes a balance between GC overhead and memory pressure
@@ -596,6 +611,9 @@ def main():
         remote_tokens = remote_poll()
         if remote_tokens:
             tokens = list(tokens) + list(remote_tokens)
+        badge_tokens = badge_remote.poll(badge_state, now)
+        if badge_tokens:
+            tokens = list(tokens) + list(badge_tokens)
 
         for tok in tokens:
             dprint("[NX] Token:", tok)
@@ -603,7 +621,15 @@ def main():
                 retry_artwork_wifi()
             elif tok in (b"BLE_PAUSE", b"BLE_ENABLE"):
                 request_seq = remote.take_ble_request(tok)
+                badge_request = None
+                if request_seq is None:
+                    badge_request = badge_remote.take_ble_request(tok)
+                    if badge_request is not None:
+                        # CrowPanel sequences start at 1, so a badge request
+                        # echoes 0 and can never confirm a waiting panel.
+                        request_seq = 0
                 if request_seq is not None:
+                    badge_remote.note_ble_request(badge_request)
                     if ble_status.request(tok, request_seq):
                         # A lost release from the old host must not become
                         # a repeated volume command after Enable reconnects.

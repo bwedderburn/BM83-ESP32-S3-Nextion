@@ -346,6 +346,54 @@ Ctrl+C
 Ctrl+C (twice if code is running)
 ```
 
+## Optional Universe badge receiver
+
+The BMW1 receiver is `lib/remote/badge_remote.py` (or its compiled `.mpy`).
+It is inert without the private `/.badge_remote.json` profile. The profile
+requires `v: 1`, a 64-character lowercase hexadecimal `key`, and optionally
+`port` (default 8767), `client_ip`, and `allow_bond_erase` (default false).
+The badge's root `secrets.py` uses the matching `BM83_HOST`, `BM83_PORT` and
+`BM83_KEY`. Never commit filled profiles, keys, network details, or device
+captures. Activating a listener or provisioning credentials requires explicit
+owner approval.
+
+The receiver uses an already connected Wi-Fi radio; it does not configure or
+join a network itself. Authenticated BMW1 requests receive cached Now Playing
+and BLE status. `src=mac` identifies the Mac Wi-Fi metadata bridge and
+`src=avrcp` identifies native metadata; an empty source is not proof of either.
+UART acknowledgments and working audio alone do not prove metadata delivery.
+
+**Runtime limitation:** the installed CircuitPython 10.3.1 runtime has been
+observed hard-faulting during VM teardown, including after Ctrl-C with playback
+paused and before any filesystem write. Do not treat a running-filesystem
+copy or a soft reload as a safe deployment. Pause the source, confirm the
+controller is stopped at the REPL with autoreload disabled (or in safe mode),
+then install and hash-verify only the approved delta. Preserve `boot.py`,
+existing profiles, entrypoints, and bonds. If stopping enters safe mode, retain
+the fault evidence; after verification, an ESP32-only
+`microcontroller.reset()` from the safe-mode REPL has restored normal startup.
+This is a recovery procedure, not a fix for the runtime fault. Do not
+reflash, erase bonds, or change configuration as a workaround.
+
+BMW1 `NET_RETRY` is always refused with `denied=true`, including duplicate
+requests; no reload token is dispatched. This protects older badge clients
+too. The badge settings retry is badge-local Wi-Fi/artwork recovery only.
+Existing non-BMW1 maintenance paths are unchanged and can still encounter the
+runtime fault. Bond erasure also remains refused unless separately opted in;
+allowing bond erasure does not enable receiver retry.
+
+Validation snapshot (2026-11-01): 1,239 host tests passed with one skip, strict
+CI lint passed, and the badge add-on/mirror passed parity checks. The official
+simulator covered 29 cases; a receive-error message frame remains unverified
+there. Authenticated receiver STATUS and retry refusal were checked on the
+controller. The badge app was installed and hash-verified, and its owner
+confirmed RESET and launch. During the subsequent physical run, a passive
+capture showed the shared Wi-Fi retry log followed by VM teardown and safe
+mode, without an accepted BMW1 `NET_RETRY` in that capture. The originating
+input is not established. Physical metadata, transport/volume controls and
+HOME/reopen acceptance are blocked pending recovery and investigation.
+Do not merge on host tests alone.
+
 ## Related Documentation
 
 - [README.md](README.md) - Project overview and setup

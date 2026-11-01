@@ -33,6 +33,15 @@ def valid_np(value):
                for name, limit in (("title", 96), ("artist", 96), ("album", 96), ("eq", 48)))
 
 
+SOURCE_LABELS = {"avrcp": "via AVRCP", "mac": "via Mac Wi-Fi"}
+
+
+def source_label(value):
+    # Optional np["src"] names the receiver's proven text origin; never guess one.
+    src = value.get("src") if isinstance(value, dict) else None
+    return SOURCE_LABELS.get(src, "") if isinstance(src, str) else ""
+
+
 def valid_ble(value):
     if not isinstance(value, dict):
         return False
@@ -151,14 +160,18 @@ class BleControl:
 def display_text(text):
     substitutions = {0x2018: "'", 0x2019: "'", 0x201c: '"', 0x201d: '"',
                      0x2026: "...", 0x2212: "-"}
-    accents = "aaaaaaceeeeiiiinoooooouuuuyy"
-    originals = "àáâãäåçèéêëìíîïñòóôõöøùúûüýÿ"
+    # MicroPython's str case methods are ASCII-only, so both cases are listed.
+    accents = "aaaaaaceeeeiiiinoooooouuuuyyAAAAAACEEEEIIIINOOOOOOUUUUYY"
+    originals = "àáâãäåçèéêëìíîïñòóôõöøùúûüýÿÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖØÙÚÛÜÝŸ"
+    ligatures = {"æ": "ae", "Æ": "AE", "œ": "oe", "Œ": "OE", "ß": "ss",
+                 "ð": "d", "Ð": "D", "þ": "th", "Þ": "Th"}
     out = ""
     for char in text.replace("o\u0308", "ö").replace("O\u0308", "Ö"):
         code = ord(char)
-        if char.lower() in originals:
-            replacement = accents[originals.index(char.lower())]
-            out += replacement.upper() if char.isupper() else replacement
+        if code > 127 and char in originals:
+            out += accents[originals.index(char)]
+        elif char in ligatures:
+            out += ligatures[char]
         elif code in substitutions:
             out += substitutions[code]
         elif 0x2010 <= code <= 0x2014:

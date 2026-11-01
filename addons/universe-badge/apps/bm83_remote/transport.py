@@ -9,6 +9,8 @@ from protocol import TOKENS, decode, encode, hex_text, uint
 from models import Playback, BleControl, valid_np, elapsed
 
 WOULD_BLOCK = (errno.EAGAIN, 11, 10035)
+COMMAND_LABELS = {"BT_EBIND": "Erase bonds"}
+RECEIVER_RETRY_UNAVAILABLE = "Receiver retry unavailable"
 
 
 class Remote:
@@ -51,6 +53,8 @@ class Remote:
             self.volume_queue.append({"command": command[:-2], "pressed": False, "released": False})
         else:
             self.queue.append(command)
+        if not self.unit and command != "STATUS":
+            self.feedback = "%s: waiting for audio unit" % command
         return True
 
     def volume(self, command):
@@ -131,7 +135,7 @@ class Remote:
                     elif command and command.endswith("_R") and self.rehello_count <= 3:
                         self.volume_queue.insert(0, {"command": command[:-2], "pressed": True, "released": True})
                     elif command == "NET_RETRY":
-                        self.feedback = "NET_RETRY: reconnecting/request sent; delivery unconfirmed"
+                        self.feedback = RECEIVER_RETRY_UNAVAILABLE
                     elif command:
                         self.feedback = "%s: unconfirmed after unit/client restart" % command
                     if command and command.startswith("BLE_") and self.ble.result == "Waiting":
@@ -142,8 +146,19 @@ class Remote:
                     command = self.pending["command"]
                     self.playback.accept(m["np"], now)
                     self.ble.accept(m.get("ble"), now)
-                    if command != "STATUS":
+                    if command == "NET_RETRY":
+                        # Legacy token only; this app never sends it and receivers refuse it.
+                        self.feedback = RECEIVER_RETRY_UNAVAILABLE
+                    elif command != "STATUS" and m.get("denied") is True:
+                        self.feedback = "%s: refused by audio unit" % COMMAND_LABELS.get(
+                            command, command)
+                        if command.startswith("BLE_") and self.ble.result == "Waiting":
+                            self.ble.result = "Refused"
+                    elif command != "STATUS":
                         self.feedback = "%s: sent (reply)" % command
+                    elif (self.feedback in ("STATUS: no reply", "Audio unit: no reply")
+                          or self.feedback.startswith("UDP ")):
+                        self.feedback = "Audio unit responding"
                     self.pending = None
                     self.rehello_count = 0
 
@@ -171,6 +186,13 @@ class Remote:
                 return
             self.pending = None
             if command is None:
+                # Presses made while the unit is unreachable must not fire later.
+                dropped = len([c for c in self.queue if c != "STATUS"])
+                dropped += len([g for g in self.volume_queue if not g["pressed"]])
+                self.queue = []
+                self.volume_queue = [g for g in self.volume_queue if g["pressed"]]
+                if dropped:
+                    self.feedback = "Audio unit: no reply - %d not sent" % dropped
                 self.last_poll = now
                 return
         if closing and not self.volume_queue:
