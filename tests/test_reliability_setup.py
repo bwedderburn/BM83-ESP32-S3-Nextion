@@ -77,6 +77,30 @@ class ReliabilityPolicyTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(POLICY.workflow_errors(self.workflow(), text))
 
+    def test_yaml_escapes_cannot_hide_secrets_or_agents(self):
+        for escaped, expected in (
+                (r'env: {TOKEN: "${{ \u0073ecrets.TOKEN }}"}', "secrets"),
+                (r'env: {TOKEN: "${{ \x73ecrets.TOKEN }}"}', "secrets"),
+                (r'env: {TOKEN: "${{ \U00000073ecrets.TOKEN }}"}', "secrets"),
+                (r'with: {a: "\u0061gent_assignment"}', "separate/cloud agent"),
+                (r'run: "\u0063laude --print"', "separate Claude command")):
+            with self.subTest(escaped=escaped):
+                text = "jobs: {test: {runs-on: ubuntu-latest, steps: [{" + escaped + "}]}}\n"
+                self.assertIn("forbidden credential/agent reference: " + expected,
+                              POLICY.workflow_errors(yaml.safe_load(text), text))
+        with TemporaryDirectory() as directory:
+            workflows = Path(directory) / ".github/workflows"
+            workflows.mkdir(parents=True)
+            text = yaml.safe_dump(self.workflow()) + 'env:\n  TOKEN: "${{ \\u0073ecrets.T }}"\n'
+            (workflows / "escaped.yml").write_text(text)
+            self.assertEqual(POLICY.check_workflows(Path(directory)), [
+                ".github/workflows/escaped.yml: forbidden credential/agent reference: secrets"])
+
+    def test_decoded_step_names_are_not_claude_commands(self):
+        data = self.workflow()
+        data["jobs"]["test"]["steps"][0]["name"] = "Claude model offered inside Copilot"
+        self.assertEqual(POLICY.workflow_errors(data, yaml.safe_dump(data)), [])
+
     def test_labeled_unrelated_automation_is_preserved_but_not_on_prs(self):
         label = POLICY.OUT_OF_SCOPE + "\nrun: claude --print ${{ secrets.TOKEN }}\n"
         data = self.workflow()
@@ -122,6 +146,16 @@ class ReliabilityPolicyTests(unittest.TestCase):
             "action must be pinned to a full commit: actions/checkout@v7",
             "checkout must not persist credentials",
         })
+
+    def test_checkout_credentials_check_ignores_repository_case(self):
+        for action in ("Actions/checkout", "actions/Checkout", "ACTIONS/CHECKOUT"):
+            with self.subTest(action=action):
+                data = self.workflow()
+                data["jobs"]["test"]["steps"] = [{"uses": action + "@" + "a" * 40}]
+                self.assertEqual(POLICY.workflow_errors(data, ""), [
+                    "checkout must not persist credentials"])
+                data["jobs"]["test"]["steps"][0]["with"] = {"persist-credentials": False}
+                self.assertEqual(POLICY.workflow_errors(data, ""), [])
 
     def test_write_permissions_and_hardware_runner(self):
         data = self.workflow()

@@ -14,7 +14,7 @@ def step_errors(step):
     action = step.get("uses")
     if action and not re.fullmatch(r"[\w./-]+@[0-9a-f]{40}", action):
         errors.append("action must be pinned to a full commit: " + action)
-    if action and action.startswith("actions/checkout@"):
+    if action and action.lower().startswith("actions/checkout@"):
         if step.get("with", {}).get("persist-credentials") is not False:
             errors.append("checkout must not persist credentials")
     return errors
@@ -47,19 +47,47 @@ def trigger_errors(data, text, name=""):
     return []
 
 
+def decoded_strings(value):
+    # YAML escapes such as \u0073 decode before GitHub evaluates expressions.
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield from decoded_strings(key)
+            yield from decoded_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from decoded_strings(item)
+    elif isinstance(value, str):
+        yield value
+
+
+def run_strings(data):
+    for job in data.get("jobs", {}).values():
+        for step in job.get("steps", []):
+            if isinstance(step.get("run"), str):
+                yield step["run"]
+
+
+def reference_errors(data, text):
+    decoded = "\n".join([text, *decoded_strings(data)])
+    commands = "\n".join([text, *run_strings(data)])
+    errors = []
+    for pattern, label, scanned in (
+            (r"\bsecrets\b", "secrets", decoded),
+            (r"anthropics/|@anthropic-ai/claude-code|agent_assignment|copilot-swe-agent",
+             "separate/cloud agent", decoded),
+            (r"(?:^|\brun:|[;&|])\s*(?:exec\s+)?claude\b", "separate Claude command", commands)):
+        if re.search(pattern, scanned, re.IGNORECASE | re.MULTILINE):
+            errors.append("forbidden credential/agent reference: " + label)
+    return errors
+
+
 def workflow_errors(data, text, name=""):
     errors = trigger_errors(data, text, name)
     if is_out_of_scope(text, name):
         return errors
     if text.startswith(OUT_OF_SCOPE):
         errors.append("out-of-scope label is not allowlisted for this workflow")
-    for pattern, label in (
-            (r"\bsecrets\b", "secrets"),
-            (r"anthropics/|@anthropic-ai/claude-code|agent_assignment|copilot-swe-agent",
-             "separate/cloud agent"),
-            (r"(?:^|\brun:|[;&|])\s*(?:exec\s+)?claude\b", "separate Claude command")):
-        if re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
-            errors.append("forbidden credential/agent reference: " + label)
+    errors.extend(reference_errors(data, text))
     for job in data.get("jobs", {}).values():
         if job.get("runs-on") not in ("ubuntu-latest", "macos-26"):
             errors.append("unexpected runner (no hardware/self-hosted runners)")

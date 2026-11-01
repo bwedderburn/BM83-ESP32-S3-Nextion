@@ -242,6 +242,6 @@ any change that touches one.
 - Agent ground rules: ≤ ~300 changed lines per PR, host-verifiable changes only, no firmware
   behavior changes (those become `code-health` issues with proposed diffs), workflows and
   `Documents/` read-only.
-- The full review brief lives in `.github/prompts/extensive-review.prompt.md`.
+- The full review brief lives in the manual-only `.github/skills/extensive-review/SKILL.md`.
 - Repo-health facts (inventory, TODO debt, churn, dependency report, test/lint status) are
   available via the `repo-health` MCP server (`tools/mcp/repo_health/`).

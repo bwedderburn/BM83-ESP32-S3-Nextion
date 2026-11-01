@@ -42,7 +42,7 @@ know what is deliberately out of scope this week.
 
 - Read `.github/copilot-instructions.md` — including **Behavioral Contracts** — and
   `CLAUDE.md` before touching anything. Do not re-litigate a listed contract.
-- The full review method lives in `.github/prompts/extensive-review.prompt.md`; this issue is
+- The full review method lives in `.github/skills/extensive-review/SKILL.md`; this issue is
   one focused slice of it.
 - One PR, at most ~300 changed lines, host-verifiable only. flake8 strict pass and pytest
   fully green before you finish.

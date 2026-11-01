@@ -1,8 +1,12 @@
 ---
-description: 'Extensive code review & modernization audit: correctness, upgradeable code, packages, dependencies, toolchain — with a phased fix plan'
-agent: 'agent'
-model: Claude Sonnet 4.5
+name: extensive-review
+description: 'Extensive code review & modernization audit: correctness, upgradeable code, packages, dependencies, toolchain — with a phased fix plan. Legacy manual workflow; run only when explicitly invoked as /extensive-review.'
+disable-model-invocation: true
 ---
+
+> Legacy general-purpose review workflow, out of scope for BM83 Remote reliability
+> work. Migrated from `.github/prompts/extensive-review.prompt.md`; it stays
+> manual-only and no longer pins a model (pick one in the Copilot model picker).
 
 # Extensive code review & modernization audit — BM83-ESP32-S3-Nextion
 

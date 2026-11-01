@@ -36,9 +36,10 @@ The server resolves the repo root via `git rev-parse` (override with the
 
 ## Where it is registered
 
-- **Claude Code**: `.mcp.json` at the repo root (project scope, picked up
-  automatically).
-- **VS Code / Copilot agent mode**: `.vscode/mcp.json`.
+- **Copilot CLI, GitHub Copilot app, VS Code Copilot harness and Claude Code**:
+  `.mcp.json` at the repo root (portable `mcpServers` format, repo-relative
+  path, no secrets). The deprecated duplicate `.vscode/mcp.json` entry was
+  migrated here and removed.
 - **Copilot coding agent (github.com)**: paste
   `docs/agents/copilot-coding-agent-mcp.json` into
   *Repo Settings → Copilot → Coding agent → MCP configuration*. The

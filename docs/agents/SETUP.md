@@ -45,7 +45,7 @@ PRs draft and Phase 2 blocked.
 > or acceptance evidence. Do not dispatch these workflows, assign reliability
 > issues to a cloud agent or add secrets as part of reliability work.
 
-One-time setup for the extensive-review prompt, the repo-health MCP server, and the two
+One-time setup for the extensive-review skill, the repo-health MCP server, and the two
 weekly improvement workflows. Everything here was added in the `chore/weekly-agent-automation`
 PR; this file is the runbook.
 
@@ -53,7 +53,7 @@ PR; this file is the runbook.
 
 | Path | Purpose |
 |---|---|
-| `.github/prompts/extensive-review.prompt.md` | The full code-review & modernization brief (VS Code `/extensive-review`, Copilot coding agent, or Claude Code) |
+| `.github/skills/extensive-review/SKILL.md` | The full code-review & modernization brief as a manual-only skill (`/extensive-review`; migrated from `.github/prompts/extensive-review.prompt.md`) |
 | `.github/copilot-instructions.md` | + Behavioral Contracts & automation conventions sections |
 | `.github/workflows/copilot-setup-steps.yml` | Preinstalls flake8/pytest/bandit + MCP deps in Copilot coding agent sessions |
 | `.github/workflows/weekly-copilot-review.yml` | Mondays: focused issue (deps→robustness→quality→tests rotation) auto-assigned to Copilot |
@@ -61,7 +61,7 @@ PR; this file is the runbook.
 | `.github/workflows/weekly-claude-audit.yml` | Thursdays: Claude Code dependency/upgrade audit → report + safe-fix PR + issues |
 | `.github/dependabot.yml` | + pip ecosystem for the MCP server |
 | `tools/mcp/repo_health/` | Repo-health MCP server (inventory, TODOs, churn, deps, test/lint) — read-only except `repo_test_summary`, which runs repo tests and writes caches |
-| `.mcp.json`, `.vscode/mcp.json` | MCP registration for Claude Code and VS Code agent mode |
+| `.mcp.json` | Portable MCP registration for Copilot CLI/app, the VS Code Copilot harness and Claude Code (the deprecated `.vscode/mcp.json` duplicate was migrated here) |
 | `docs/agents/copilot-coding-agent-mcp.json` | MCP config to paste into repo settings (coding agent) |
 
 ### One-time setup (after merging the PR)
@@ -107,9 +107,10 @@ all six tools for the coding agent and is NOT a read-only boundary — `repo_tes
 executes repository tests and writes pytest caches, so never reuse this wildcard set for
 Copilot code review (see the server README's "Read-only guarantee").
 
-Claude Code and VS Code pick up `.mcp.json` and `.vscode/mcp.json` automatically (VS Code
-will ask once to trust/start the server), but the server's own dependency must be installed
-once per machine or the auto-started process dies at `from mcp.server.fastmcp import ...`:
+Copilot CLI, the GitHub Copilot app, the VS Code Copilot harness and Claude Code pick up
+`.mcp.json` automatically (VS Code will ask once to trust/start the server), but the
+server's own dependency must be installed once per machine or the auto-started process
+dies at `from mcp.server.fastmcp import ...`:
 
 shell (PowerShell, B-Intel)
 ```
@@ -148,11 +149,11 @@ touch firmware behavior at all).
 
 ### Kicking off the one-time extensive review
 
-Three equivalent ways to run `.github/prompts/extensive-review.prompt.md` — pick per session:
+Three ways to run the manual-only `.github/skills/extensive-review/SKILL.md` — pick per session:
 
 1. **Copilot coding agent** (uses Pro+ premium requests): open a new issue titled
    "Extensive code review & modernization audit", body:
-   "Read `.github/prompts/extensive-review.prompt.md` and execute it fully, all phases." —
+   "Read `.github/skills/extensive-review/SKILL.md` and execute it fully, all phases." —
    then assign **Copilot** in the issue sidebar (works from GitHub mobile). Do this *after*
    merging the automation PR so the prompt, MCP server and setup steps are on `main`.
 2. **VS Code agent mode**: open the repo, Copilot Chat → type `/extensive-review`, pick a
@@ -160,7 +161,7 @@ Three equivalent ways to run `.github/prompts/extensive-review.prompt.md` — pi
    models), let it run in agent mode.
 3. **Claude Code in the cloud** (spends the $250 cloud allowance): start a session at
    claude.ai/code on the GitHub repo and prompt:
-   "Read .github/prompts/extensive-review.prompt.md and execute it fully, all phases."
+   "Read .github/skills/extensive-review/SKILL.md and execute it fully, all phases."
 
 ### Which credential pays for what (as of 2026-10)
 
@@ -183,7 +184,7 @@ gh workflow disable "Weekly code improvement (Copilot)" --repo bwedderburn/BM83-
 
 - **Scope**: the Monday issue body lives in `.github/agent-tasks/weekly-copilot-body.md`;
   the Thursday brief is the `prompt:` block in `weekly-claude-audit.yml`; the deep-review
-  method is `.github/prompts/extensive-review.prompt.md`.
+  method is `.github/skills/extensive-review/SKILL.md`.
 
 ### Troubleshooting
 
