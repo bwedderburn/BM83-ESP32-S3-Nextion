@@ -84,3 +84,20 @@ physical display verification.
 
 No runtime/native images were installed. These counts are host validation and
 are deliberately separate from physical acceptance or backend AI connectivity.
+
+## Existing dependency proposals
+
+The remaining host-only proposals are integrated directly: the repo-health MCP
+requirement is pinned to 2.3.0 (#185), and Codacy SARIF upload uses the verified
+full commit for CodeQL action 4.39.1 (#186). No new PR is needed. Frozen native
+build proposals #183, #196 and #197 remain unmerged for the isolated compatibility
+and reproducibility work in #193. Existing Dependabot automation may open such
+proposals independently; alerting and security settings have not been disabled.
+
+The repo-health registration also uses a portable Node launcher selecting the
+checkout's `.venv`, replacing bare `python` (unavailable in the Mac's clean PATH).
+Only command/args changed; existing servers, environment and permissions were
+preserved. Both direct-venv and exact registered-command stdio initialization
+listed the same six tools with unchanged read-only annotations, without tool
+execution, AI requests or hardware access. Four launcher fixtures cover missing
+venv, inherited stdio/exit status, paths with spaces and platform-specific layout.
