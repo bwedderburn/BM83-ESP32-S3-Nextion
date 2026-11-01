@@ -49,12 +49,13 @@ an AI backend response test; Copilot requests are intentionally paused.
   capacity; established clients, retries and required releases continue. A local
   restart is required to admit more sessions. This is a host-tested candidate,
   not a deployed or physically accepted protocol change.
-- **Native build dependencies:** four open cryptography advisories affect the
-  frozen host-build recipe. All fixes require cryptography 50.0.0, while its
-  pinned ESP-IDF constraint requires `<46.1`. A pin-only upgrade is unsatisfiable.
-  Keep alerts visible; issue #193 must validate compatible updated constraints
-  and reproducible native builds in a separate isolated experiment before
-  replacing frozen pins or artifacts. This is not proof of native fault cause.
+- **Native build dependencies:** the active recipe now uses cryptography 50.0.0
+  and a reviewed compatible constraint override in an isolated Linux amd64
+  builder. It preserves the original source/compiler pins, board patch and
+  historical reference hashes. See the [separate validation record](../../tools/circuitpython-runtime/VALIDATION-2026-11-01.md)
+  for real tool checks and fresh-build comparison. Original frozen images and
+  backups are preserved. Dependency remediation does not prove native fault
+  cause or close issue #193's radio/resource investigation.
 - **Phase 1 acceptance:** requires the separately authorized run card, measured
   latency budgets, fresh-only status and at least 30 uninterrupted stable minutes
   plus actual screens/buttons/reconnect checks. Unit tests do not close it.
@@ -75,8 +76,9 @@ physical display verification.
 - Policy suites pass (16 BM83, 15 Universe); clean no-PyYAML discovery skips are
   verified. Retired workflow filenames cannot reserve exemptions.
 - Strict CI lint, production Bandit analysis and whitespace checks pass. Audits
-  of development/MCP/map dependencies report no known vulnerabilities. This
-  does not include the frozen native-build manifest's four alerts above.
+  of development/MCP/map dependencies report no known vulnerabilities. The later
+  isolated native-build remediation and full-manifest audit are recorded
+  separately in the validation record linked above.
 - Python/Node loopback smoke checks, offline geography catalog and iOS export
   reproduction pass. Pinned HYB26 tooling tests: 68 tests, two expected skips.
 - Independent final source review found no new actionable regression. The 39
@@ -89,10 +91,12 @@ are deliberately separate from physical acceptance or backend AI connectivity.
 
 The remaining host-only proposals are integrated directly: the repo-health MCP
 requirement is pinned to 2.3.0 (#185), and Codacy SARIF upload uses the verified
-full commit for CodeQL action 4.39.1 (#186). No new PR is needed. Frozen native
-build proposals #183, #196 and #197 remain unmerged for the isolated compatibility
-and reproducibility work in #193. Existing Dependabot automation may open such
-proposals independently; alerting and security settings have not been disabled.
+full commit for CodeQL action 4.39.1 (#186). No new PR is needed. The cryptography
+50 update proposed by #183 is handled by the later isolated direct-maintenance
+change. Optional IDF-build-apps/NVS-generator proposals #196 and #197 are not
+required for that security fix; their existing bounds are retained to limit
+compatibility changes. Existing Dependabot automation may open proposals
+independently; alerting and security settings have not been disabled.
 
 The repo-health registration also uses a portable Node launcher selecting the
 checkout's `.venv`, replacing bare `python` (unavailable in the Mac's clean PATH).

@@ -1,0 +1,11 @@
+--- a/tools/gen_web_workflow_static.py
++++ b/tools/gen_web_workflow_static.py
+@@ -32,7 +32,7 @@
+         uncompressed = jsmin.jsmin(uncompressed.decode("utf-8"), quote_chars="'\"`").encode(
+             "utf-8"
+         )
+-    compressed = gzip.compress(uncompressed)
++    compressed = gzip.compress(uncompressed, mtime=0)
+     clen = len(compressed)
+     compressed = ", ".join([hex(x) for x in compressed])
+     mime = mimetypes.guess_type(f.name)[0]
