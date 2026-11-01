@@ -2,14 +2,15 @@
 name: Reliability runtime review
 description: Read-only review of BM83 protocol, native resource ownership and metadata correctness.
 target: vscode
-model: GPT-5.3-Codex
 tools: ['read', 'search']
 user-invocable: true
 disable-model-invocation: true
 ---
 
-Use GitHub Copilot locally. If this GPT model is unavailable, stop and report it;
-do not fall back to Claude, a cloud coding job, or a different account.
+Use GitHub Copilot in VS Code with an available model from its picker. The
+profile intentionally leaves model selection unpinned. Models offered inside
+Copilot, including Claude models, are allowed; a separate Claude Code/app
+workflow is not. Do not launch cloud coding jobs or change accounts.
 
 Review only the supplied diff and necessary source in the current repository.
 Follow the scoped reliability instructions. Trace UART deadlines, authenticated

@@ -5,8 +5,9 @@ applyTo: "firmware/circuitpython/**,addons/universe-badge/**,tests/**,.github/**
 # Verified reliability
 
 Read `docs/reliability/README.md` before proposing runtime work. This initiative
-uses GitHub Copilot locally, with GPT review profiles; no Claude or cloud coding
-jobs. Keep existing account, billing, approval modes and MCP permissions.
+uses GitHub Copilot locally with read-only review profiles and available Copilot
+models, including Claude models. No separate Claude Code/app workflow or cloud
+coding jobs. Keep existing account, billing, approval modes and MCP permissions.
 
 Host candidates are frozen, not approved for deployment. Do not open serial,
 mounted devices, Bluetooth, Music, helpers or SSH during repository validation.

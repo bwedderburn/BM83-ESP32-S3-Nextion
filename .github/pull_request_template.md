@@ -26,5 +26,8 @@ rather than checking unperformed gates. Preserve draft status and the Phase 2 bl
 
 ## Review and remaining limits
 
-<!-- Independent local Copilot read-only review; GPT model; no cloud coding assignment.
+<!-- Record actual VS Code agent discovery, selected available Copilot model,
+reviewed revision/diff, read-only tool use, findings and disposition.
+File creation or a Desktop-only review is not VS Code integration evidence.
+No separate Claude Code/app workflow or cloud coding assignment.
 Record unresolved native-runtime risks and missing physical evidence. -->

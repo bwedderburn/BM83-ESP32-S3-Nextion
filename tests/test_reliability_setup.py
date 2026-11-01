@@ -32,6 +32,38 @@ class ReliabilityPolicyTests(unittest.TestCase):
     def test_safe_workflow(self):
         self.assertEqual(POLICY.workflow_errors(self.workflow(), ""), [])
 
+    def agent(self):
+        return {
+            "target": "vscode", "tools": ["read", "search"],
+            "user-invocable": True, "disable-model-invocation": True,
+        }
+
+    def test_agent_uses_picker_without_model_pin(self):
+        self.assertEqual(POLICY.agent_errors(self.agent()), [])
+        for name in ("runtime", "delivery"):
+            path = ROOT / ".github/agents" / ("reliability-" + name + ".agent.md")
+            data = yaml.safe_load(path.read_text().split("---", 2)[1])
+            self.assertNotIn("model", data)
+
+    def test_agent_policy_does_not_exclude_copilot_model_families(self):
+        data = self.agent()
+        for model in ("Claude model inside Copilot", "GPT model inside Copilot"):
+            with self.subTest(model=model):
+                data["model"] = model
+                self.assertEqual(POLICY.agent_errors(data), [])
+        self.assertEqual(POLICY.workflow_errors(
+            self.workflow(), "# A Claude model offered inside Copilot is allowed."), [])
+
+    def test_agent_still_requires_read_only_tools_and_picker_visibility(self):
+        for field, value in (
+                ("tools", ["read", "search", "execute"]), ("target", "github-copilot"),
+                ("user-invocable", False), ("disable-model-invocation", False)):
+            with self.subTest(field=field):
+                data = self.agent()
+                data[field] = value
+                self.assertEqual(POLICY.agent_errors(data), [
+                    "expected user-invoked VS Code read-only profile"])
+
     def test_privileged_trigger(self):
         data = self.workflow()
         data["on"] = {"pull_request_target": None}
@@ -39,9 +71,25 @@ class ReliabilityPolicyTests(unittest.TestCase):
 
     def test_secrets_and_cloud_assignment(self):
         for text in ("${{ secrets.TOKEN }}", "${{ secrets['TOKEN'] }}",
-                     "agent_assignment", "anthropics/action", "run: CLAUDE --print"):
+                     "agent_assignment", "anthropics/action", "run: CLAUDE --print",
+                     "  claude --print", "npx @anthropic-ai/claude-code"):
             with self.subTest(text=text):
                 self.assertTrue(POLICY.workflow_errors(self.workflow(), text))
+
+    def test_labeled_unrelated_automation_is_preserved_but_not_on_prs(self):
+        label = POLICY.OUT_OF_SCOPE + "\nrun: claude --print ${{ secrets.TOKEN }}\n"
+        data = self.workflow()
+        data["on"] = {"schedule": [{"cron": "0 0 * * 1"}]}
+        self.assertEqual(POLICY.workflow_errors(data, label), [])
+        for event in POLICY.PR_EVENTS:
+            with self.subTest(event=event):
+                data["on"] = {event: None}
+                self.assertEqual(POLICY.workflow_errors(data, label), [
+                    "out-of-scope workflow must not run on pull requests"])
+        data["on"] = {"schedule": None}
+        unlabeled = "# out-of-scope\nrun: claude --print\n"
+        self.assertIn("forbidden credential/agent reference: separate Claude command",
+                      POLICY.workflow_errors(data, unlabeled))
 
     def test_mutable_action_and_credentials(self):
         data = self.workflow()

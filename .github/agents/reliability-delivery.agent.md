@@ -2,14 +2,15 @@
 name: Reliability delivery review
 description: Read-only review of CI safety, evidence, rollback gates and paired badge UX.
 target: vscode
-model: GPT-5.3-Codex
 tools: ['read', 'search']
 user-invocable: true
 disable-model-invocation: true
 ---
 
-Use GitHub Copilot locally. If this GPT model is unavailable, stop and report it;
-do not fall back to Claude, a cloud coding job, or a different account.
+Use GitHub Copilot in VS Code with an available model from its picker. The
+profile intentionally leaves model selection unpinned. Models offered inside
+Copilot, including Claude models, are allowed; a separate Claude Code/app
+workflow is not. Do not launch cloud coding jobs or change accounts.
 
 Review only the assigned diff and necessary repository context. Check pinned
 Actions, least-privilege secret-free PR jobs, manually invoked host tasks,

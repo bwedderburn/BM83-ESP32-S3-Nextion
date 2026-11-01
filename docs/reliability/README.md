@@ -44,17 +44,23 @@ protocol, while #194 closes only after the resulting integration is accepted.
 Open the intended checkout in VS Code, retain the existing signed-in GitHub
 account and normal approval settings, and select its `.venv` Python interpreter.
 The two `.github/agents/reliability-*.agent.md` profiles are user-invoked, VS Code
-scoped, read/search only and request GPT-5.3-Codex. Use the runtime profile for
+scoped and read/search only, with no model pin. Use the runtime profile for
 protocol/resource ownership and the delivery profile for CI/evidence/UX gates.
-If that model is unavailable, stop rather than falling back to Claude. Model
-availability and picker loading need an actual VS Code check; file validation
-alone does not establish them.
+Select an appropriate model actually offered in the Copilot picker. Claude
+models inside Copilot are allowed; separate Claude Code/app workflows are not.
+Omitting `model` uses the currently selected model, per the
+[VS Code agent reference](https://code.visualstudio.com/docs/agents/reference/custom-agent-file-reference).
+Verify both agents appear and actually run read-only reviews in VS Code. Record
+the selected model, exact diff/revision, tools used, findings and disposition.
+File validation and reviews in Copilot Desktop alone do not establish this.
 
-No new MCP server, account, token, firewall exception, billing or permission
-change is needed. Do not assign issues to the cloud coding agent. This draft
-retires the legacy weekly Claude/cloud-assignment workflows from source;
-default-branch schedules are NOT disabled by an unmerged draft. Do not dispatch
-them. Existing secrets/settings are untouched.
+Do not add MCP servers, accounts, tokens, firewall exceptions or change billing
+or approvals. If Restricted Mode blocks the agents, ask the owner before
+trusting the specific source folder; never broaden trust to its parent or
+disable Workspace Trust. Do not assign issues to the cloud coding agent. The
+weekly Claude/Copilot and Codacy workflows are preserved as labeled out-of-scope
+general automation (see `docs/agents/SETUP.md`); they are not PR checks and must
+not be dispatched for reliability work. Existing secrets/settings are untouched.
 
 Development-only requirements pin pytest/flake8, Bandit, pip-audit and PyYAML.
 They provide host regression, security/dependency checks and configuration

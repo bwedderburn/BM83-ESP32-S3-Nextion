@@ -222,11 +222,26 @@ any change that touches one.
 ## Verified reliability workflow
 
 - Follow `docs/reliability/README.md` and the scoped reliability instructions.
-- Use local GitHub Copilot GPT read-only review profiles in `.github/agents/`.
-  Do not launch Claude or cloud coding jobs or assign reliability issues to bots.
+- Use local GitHub Copilot read-only review profiles in `.github/agents/`.
+  Choose an available Copilot model; Claude models inside Copilot are allowed.
+  Do not launch a separate Claude Code/app workflow or cloud coding job, or
+  assign reliability issues to bots.
 - Preserve frozen host candidates and private evidence. No hardware I/O during
   repository validation; keep implementation PRs draft and Phase 2 blocked.
 - Use the pinned development requirements and explicit VS Code `BM83:` tasks.
   CI uses Python 3.11/3.12/3.13; host CI is not physical acceptance.
-- The legacy weekly agent workflows are retired in this draft, not disabled on
-  the remote default branch until it is merged. Do not dispatch them.
+- The weekly agent and Codacy workflows below are preserved as out-of-scope
+  general automation. Do not dispatch them for reliability work.
+
+## Automation conventions (weekly agents) — out of scope for BM83 reliability
+
+- Monday: `weekly-copilot-review.yml` opens a focused issue (label `agent:weekly`, 4-week
+  rotation deps → robustness → quality → tests) assigned to the Copilot coding agent.
+- Thursday: `weekly-claude-audit.yml` runs the Claude dependency/upgrade audit and writes
+  `docs/weekly-audit/<date>.md`.
+- Agent ground rules: ≤ ~300 changed lines per PR, host-verifiable changes only, no firmware
+  behavior changes (those become `code-health` issues with proposed diffs), workflows and
+  `Documents/` read-only.
+- The full review brief lives in `.github/prompts/extensive-review.prompt.md`.
+- Repo-health facts (inventory, TODO debt, churn, dependency report, test/lint status) are
+  available via the `repo-health` MCP server (`tools/mcp/repo_health/`).

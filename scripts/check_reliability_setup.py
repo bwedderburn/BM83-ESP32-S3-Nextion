@@ -20,18 +20,35 @@ def step_errors(step):
     return errors
 
 
-def workflow_errors(data, text):
-    errors = []
+OUT_OF_SCOPE = "# reliability-scope: out-of-scope legacy automation"
+PR_EVENTS = ("pull_request", "pull_request_target", "workflow_run")
+
+
+def trigger_errors(data, text):
     # PyYAML's YAML 1.1 loader treats the GitHub key `on` as True.
     events = data.get("on", data.get(True, {}))
     if isinstance(events, str):
         events = [events]
+    # Explicitly labeled unrelated automation is preserved, but never as a PR job.
+    if text.startswith(OUT_OF_SCOPE):
+        if any(event in events for event in PR_EVENTS):
+            return ["out-of-scope workflow must not run on pull requests"]
+        return []
     if any(event in events for event in ("pull_request_target", "workflow_run")):
-        errors.append("privileged follow-up trigger")
+        return ["privileged follow-up trigger"]
+    return []
+
+
+def workflow_errors(data, text):
+    errors = trigger_errors(data, text)
+    if text.startswith(OUT_OF_SCOPE):
+        return errors
     for pattern, label in (
             (r"\bsecrets\s*[.\[]", "secrets"),
-            (r"claude|anthropics/|agent_assignment|copilot-swe-agent", "cloud/Claude agent")):
-        if re.search(pattern, text, re.IGNORECASE):
+            (r"anthropics/|@anthropic-ai/claude-code|agent_assignment|copilot-swe-agent",
+             "separate/cloud agent"),
+            (r"(?:^|\brun:|[;&|])\s*(?:exec\s+)?claude\b", "separate Claude command")):
+        if re.search(pattern, text, re.IGNORECASE | re.MULTILINE):
             errors.append("forbidden credential/agent reference: " + label)
     for job in data.get("jobs", {}).values():
         if job.get("runs-on") not in ("ubuntu-latest", "macos-26"):
@@ -55,15 +72,20 @@ def check_workflows(root):
     return errors
 
 
+def agent_errors(data):
+    if (data.get("tools") != ["read", "search"] or data.get("target") != "vscode"
+            or data.get("user-invocable") is not True
+            or data.get("disable-model-invocation") is not True):
+        return ["expected user-invoked VS Code read-only profile"]
+    return []
+
+
 def check(root):
     errors = check_workflows(root)
-    for path in sorted((root / ".github/agents").glob("reliability-*.agent.md")):
-        text = path.read_text()
-        data = yaml.safe_load(text.split("---", 2)[1])
-        if (data.get("tools") != ["read", "search"] or data.get("target") != "vscode"
-                or not str(data.get("model", "")).lower().startswith("gpt-")
-                or data.get("disable-model-invocation") is not True):
-            errors.append(path.name + ": expected explicit local GPT read-only profile")
+    for name in ("reliability-runtime.agent.md", "reliability-delivery.agent.md"):
+        path = root / ".github/agents" / name
+        data = yaml.safe_load(path.read_text().split("---", 2)[1])
+        errors.extend(name + ": " + message for message in agent_errors(data))
     form = yaml.safe_load((root / ".github/ISSUE_TEMPLATE/reliability.yml").read_text())
     fields = [field for field in form["body"] if field["type"] != "markdown"]
     ids = [field["id"] for field in fields]
