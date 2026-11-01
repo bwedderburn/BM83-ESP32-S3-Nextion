@@ -240,6 +240,12 @@ BSSID; replacing the AP requires enrollment again.
    Pause playback for setup, which
    briefly restarts the audio controller. Ensure its writable `CIRCUITPY`
    volume is mounted and Python with `pyserial` is available.
+   **Known runtime exception:** the evaluated controller's CircuitPython
+   `10.3.1-dirty` build faults during VM teardown. The utility below still uses
+   Ctrl-D; do not run it unmodified on that device. Follow the
+   [controller recovery safeguards](../../DEPLOYMENT.md#optional-universe-badge-receiver)
+   and first check whether recovery restores the existing link. A fresh
+   playback snapshot proves the control link, not artwork Wi-Fi or the screen.
 2. Close serial monitors and captures. From the repository root, start the
    one-time utility with a **new** private rollback directory:
 

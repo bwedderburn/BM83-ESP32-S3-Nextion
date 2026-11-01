@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -95,6 +96,35 @@ def test_network_retry_only_restarts_with_a_valid_existing_profile(tmp_path):
     path = write_profile(tmp_path)
     assert module.retry_artwork_wifi(path, reload_fn=lambda: called.append(True), log=lambda _line: None)
     assert called == [True]
+
+
+def test_default_retry_uses_hard_reset_not_supervisor_reload(tmp_path, monkeypatch):
+    path = write_profile(tmp_path)
+    before = Path(path).read_bytes()
+    calls, logs = [], []
+    monkeypatch.setitem(sys.modules, "microcontroller",
+                        SimpleNamespace(reset=lambda: calls.append("hard")))
+    monkeypatch.setitem(sys.modules, "supervisor",
+                        SimpleNamespace(reload=lambda: calls.append("soft")))
+    assert module.retry_artwork_wifi(path, log=logs.append)
+    assert calls == ["hard"]
+    assert logs == ["[NET] requested hard-reset artwork Wi-Fi startup retry"]
+    assert Path(path).read_bytes() == before
+
+
+@pytest.mark.parametrize("controller", [None, SimpleNamespace()],
+                         ids=["missing-module", "missing-reset"])
+def test_retry_without_safe_reset_fails_closed(tmp_path, monkeypatch, controller):
+    path = write_profile(tmp_path)
+    before = Path(path).read_bytes()
+    calls, logs = [], []
+    monkeypatch.setitem(sys.modules, "microcontroller", controller)
+    monkeypatch.setitem(sys.modules, "supervisor",
+                        SimpleNamespace(reload=lambda: calls.append("soft")))
+    assert not module.retry_artwork_wifi(path, log=logs.append)
+    assert calls == []
+    assert logs == ["[NET] safe restart unavailable; use local RESET"]
+    assert Path(path).read_bytes() == before
 
 
 def test_invalid_network_retry_does_not_restart_or_expose_credentials(tmp_path):

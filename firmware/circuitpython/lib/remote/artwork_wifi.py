@@ -101,7 +101,11 @@ def start_artwork_wifi(path=PROFILE_PATH, radio=None, timeout_s=6, log=print):
 
 
 def retry_artwork_wifi(path=PROFILE_PATH, reload_fn=None, log=print):
-    """User-requested startup retry; never connect in the hot UART loop."""
+    """User-requested hard restart; never connect in the hot UART loop.
+
+    Keep the injectable reload_fn argument for existing callers, but the
+    hardware default must bypass VM teardown with BLE and ESP-NOW active.
+    """
     try:
         profile = load_profile(path)
     except (ValueError, TypeError, UnicodeError):
@@ -111,8 +115,12 @@ def retry_artwork_wifi(path=PROFILE_PATH, reload_fn=None, log=print):
         log("[NET] configure artwork Wi-Fi over USB before retrying")
         return False
     if reload_fn is None:
-        import supervisor
-        reload_fn = supervisor.reload
-    log("[NET] requested coordinated artwork Wi-Fi startup retry")
+        try:
+            import microcontroller
+            reload_fn = microcontroller.reset
+        except (ImportError, AttributeError):
+            log("[NET] safe restart unavailable; use local RESET")
+            return False
+    log("[NET] requested hard-reset artwork Wi-Fi startup retry")
     reload_fn()
     return True

@@ -1,5 +1,9 @@
 # Firmware Deployment Guide
 
+> **Installed-controller exception:** the evaluated `10.3.1-dirty` controller
+> hard-faults during VM teardown. Its [recovery safeguards](#optional-universe-badge-receiver)
+> take precedence over the general copy/soft-reload instructions below.
+
 This guide explains how to deploy updated firmware to your ESP32-S3 device in two explicit modes:
 
 1. **Baseline mode (.py)**: copy plain source files from `firmware/circuitpython/`.
@@ -363,7 +367,7 @@ and BLE status. `src=mac` identifies the Mac Wi-Fi metadata bridge and
 `src=avrcp` identifies native metadata; an empty source is not proof of either.
 UART acknowledgments and working audio alone do not prove metadata delivery.
 
-**Runtime limitation:** the installed CircuitPython 10.3.1 runtime has been
+**Runtime limitation:** the installed CircuitPython 10.3.1-dirty runtime has been
 observed hard-faulting during VM teardown, including after Ctrl-C with playback
 paused and before any filesystem write. Do not treat a running-filesystem
 copy or a soft reload as a safe deployment. Pause the source, confirm the
@@ -378,21 +382,54 @@ reflash, erase bonds, or change configuration as a workaround.
 BMW1 `NET_RETRY` is always refused with `denied=true`, including duplicate
 requests; no reload token is dispatched. This protects older badge clients
 too. The badge settings retry is badge-local Wi-Fi/artwork recovery only.
-Existing non-BMW1 maintenance paths are unchanged and can still encounter the
-runtime fault. Bond erasure also remains refused unless separately opted in;
-allowing bond erasure does not enable receiver retry.
+The shared non-BMW1 artwork retry now requests `microcontroller.reset()`, not
+`supervisor.reload()`. It retains existing-profile validation and never joins
+Wi-Fi in the hot UART loop. If the hard-reset API is unavailable it logs an
+explicit refusal, with no soft-reload fallback. The injectable `reload_fn`
+argument is retained for existing host callers. This candidate mitigation still
+requires a live retry regression; a successful safe-mode recovery is not that
+test. Bond erasure remains refused unless separately opted in; allowing bond
+erasure does not enable BMW1 receiver retry.
 
-Validation snapshot (2026-11-01): 1,239 host tests passed with one skip, strict
-CI lint passed, and the badge add-on/mirror passed parity checks. The official
+The one-time `tools/provision_artwork_wifi.py` utility still uses Ctrl-D after
+stopping the controller. Do not run it unmodified on this faulting runtime.
+Recover the controller first and check existing links before reprovisioning.
+Any necessary USB setup must use a fresh on-panel Save, private profile
+comparison/backup, and a separately verified stopped-runtime/hard-reset path.
+
+Pre-recovery validation (2026-11-01): 1,239 host tests passed with one skip, strict
+CI lint passed, and the badge add-on/mirror passed parity checks. The subsequent
+shared-retry candidate passed 79 focused receiver/retry/main-loop tests. The official
 simulator covered 29 cases; a receive-error message frame remains unverified
 there. Authenticated receiver STATUS and retry refusal were checked on the
 controller. The badge app was installed and hash-verified, and its owner
 confirmed RESET and launch. During the subsequent physical run, a passive
 capture showed the shared Wi-Fi retry log followed by VM teardown and safe
 mode, without an accepted BMW1 `NET_RETRY` in that capture. The originating
-input is not established. Physical metadata, transport/volume controls and
-HOME/reopen acceptance are blocked pending recovery and investigation.
-Do not merge on host tests alone.
+input is not established. The shared retry candidate was subsequently installed
+as the only file delta from confirmed safe mode, followed by an ESP32-only hard
+reset. Boot, Wi-Fi and receiver readiness returned; authenticated title/artist
+matched Music with `src=mac`. CrowPanel passive telemetry showed fresh playback
+snapshots with an advancing clock. Playback state/position were restored and
+volumes were unchanged. Existing files, keys and profiles were preserved.
+
+Recovery SHA256 values:
+
+| Artifact | SHA256 |
+| --- | --- |
+| Tested `artwork_wifi.py` | `72b6f2b97dc6e91ce5d0ce4da8bad9751eebbf6cbd0bd5449c7398f5a03ce55c` |
+| Installed `artwork_wifi.mpy` | `d89a5ee2f0fe73fe90996d6338b755a844a10d027975895be30f877fd79ae230` |
+| Previous module, privately backed up | `55d2e1ff83ca328d0048bc41552458df2c776618775152dc7ea115fe97b145eb` |
+| Unchanged `badge_remote.mpy` | `9f8dc98e7af36d83171d3b5bda1d8bbac314c16197f66cb81fa6081caa28a87a` |
+
+The owner subsequently confirmed "All three screens are working again"
+(Nextion, CrowPanel and badge metadata). Live retry and power/reconnect
+regressions, physical transport/volume and HOME/reopen remain pending. Fresh
+CrowPanel state does not prove artwork connectivity or rendered metadata.
+The read-only USB profile request returned `SAVE_REQUIRED`; no profile was
+applied or committed. The owner has authorized the bounded live regression;
+observe the documented command paths without changing bonds, keys or profiles.
+Do not merge or claim the defect closed on host tests or recovery alone.
 
 ## Related Documentation
 
