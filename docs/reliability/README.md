@@ -81,25 +81,31 @@ YAML is supported for issue forms; GitHub PR templates are Markdown, not YAML.
 The structural checker is a regression guard, not a complete GitHub/VS Code
 schema validator or security sandbox.
 
-### Separate frozen native-build dependency gate
+### Native-build dependency security and separate hardware gate
 
-GitHub currently reports **four pre-existing alerts (three high, one moderate)**
-for `cryptography==46.0.7` in `tools/circuitpython-runtime/requirements-build.txt`.
-The explicit non-installing audit below also fails. These are host build-tool
-dependencies, not evidence about the controller's native PSA/SHA failure.
+The active isolated recipe updates `cryptography==46.0.7` to **50.0.0**, covering
+the four previously reported advisories (three high, one moderate). The matching
+constraint is a deliberate security override validated against the pinned IDF
+tools. Because cryptography 49+ removed Intel macOS support/wheels, preparation
+and compilation use a supported Linux amd64 container on the Mac. The native
+CircuitPython/IDF/NimBLE source commits and reviewed board configuration remain
+unchanged. These are host build-tool dependencies, not evidence about the
+controller's native PSA/SHA failure.
 
 ```sh
 .venv/bin/python -m pip_audit --disable-pip --no-deps -r tools/circuitpython-runtime/requirements-build.txt
 ```
 
 The corresponding VS Code task preserves a nonzero result; no advisory is
-ignored. Dependabot now covers this directory for reviewed update proposals.
-The frozen build snapshot, native source/compiler pins and candidate artifacts
-are unchanged. Compatible remediation and reproducible-build validation remain
-an open gate in #193. The PR host-security job audits development/MCP dependencies,
-not this frozen toolchain; its green result must not be called a clean bill of
-health for every manifest. See the repository's protected Dependabot alerts for
-details; do not publish private build reports.
+ignored. Host-security CI now audits this entire pinned manifest alongside the
+development and MCP requirements. Dependabot continues to cover the directory.
+See the [isolated build recipe](../../tools/circuitpython-runtime/README.md) and
+its [sanitized validation record](../../tools/circuitpython-runtime/VALIDATION-2026-11-01.md)
+for actual tool compatibility, clean-build reproduction and provenance checks.
+Keep raw logs and generated firmware outside Git. Original frozen images,
+backups and historical constraint hashes remain intact; the active snapshot has
+separate hashes. Issue #193's native-radio causality investigation and the
+physical acceptance gates remain open independently of dependency remediation.
 
 ## Derive budgets before claiming responsiveness
 

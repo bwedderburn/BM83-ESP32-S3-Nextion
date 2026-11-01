@@ -10,7 +10,7 @@ charset-normalizer==3.5.2
 click==8.1.8
 colorama==0.4.6
 construct==2.10.70
-cryptography==46.0.7
+cryptography==50.0.0
 esp-coredump==1.17.2
 esp-idf-diag==0.2.0
 esp-idf-kconfig==3.14.0

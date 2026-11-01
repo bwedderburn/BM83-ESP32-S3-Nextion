@@ -19,6 +19,14 @@ and does not launch a model or create a coding-agent assignment.
 
 Select the checkout's `.venv` interpreter in VS Code. Install the pinned
 `requirements-reliability.txt` and invoke only the relevant `BM83:` tasks.
+For the repo-health MCP server, also install
+`tools/mcp/repo_health/requirements.txt` with that `.venv` Python. The registration
+uses `node tools/mcp/repo_health/launch.mjs`, which selects this checkout's
+`.venv/bin/python` on Mac/Linux or `.venv/Scripts/python.exe` on Windows, with
+inherited stdio. It never falls back to a global Python or installs packages.
+Node must be in the client's PATH; missing `.venv` produces explicit setup help.
+No shell activation or new credential is needed. Host fixtures exercise the
+platform layouts; only the Mac command has a live protocol handshake here.
 No task runs at folder open or deploys firmware. Keep approval settings, account,
 billing, credentials, MCP permissions and folder trust unchanged. Never start
 private device/capture tools from a repository review.

@@ -1,125 +1,139 @@
-# Build the reviewed CircuitPython BLE capacity configuration
+# Secure isolated CircuitPython runtime build
 
-This recipe reproduces the pinned source and configuration of the reviewed
-ESP32-S3 N8R8 runtime. It changes two settings: eight stored bonds and 24 CCCD
-records. It preserves the stock partition layout, native BLE workflow services,
-8 MiB flash and 8 MiB octal PSRAM.
+The active recipe uses **cryptography 50.0.0** on **Linux amd64**, with Python
+3.11.18, pinned CMake 3.30.9, Ninja package 1.13.2 and the official
+`esp-15.2.0_20251204` target toolchain. cryptography 49 removed Intel macOS
+support/wheels, so this recipe runs in a local Linux container on the Intel Mac.
+It does not source-build an unsupported cryptography wheel or relax TLS checks.
 
-This is a reproducible build recipe, not a claim of byte-for-byte deterministic
-output. Build timestamps, absolute paths, host tools and generated metadata can
-change ELF/image hashes. Review a newly built image and its manifest before use;
-do not substitute a new digest into an already approved artifact silently.
+The CircuitPython 10.3.1, ESP-IDF and NimBLE commits remain pinned in
+[source-pins.json](source-pins.json). The only board patch is still eight stored
+bonds and 24 CCCD records. Stock partition layout, BLE workflow services, 8 MiB
+flash and 8 MiB octal PSRAM remain in the pinned source configuration. No device
+access, deployment, pairing, playback or live NVS data is part of this recipe.
 
-The reference build used Intel macOS, Apple Clang 21, Python 3.11.13, CMake
-3.30.9, the Ninja 1.13.2 Python package, and the official
-`esp-15.2.0_20251204` toolchain. The exact source commits are in
-[source-pins.json](source-pins.json). Although CircuitPython's submodule branch
-label says `circuitpython-v5.5.1`, its pinned IDF commit reports
-`v6.0.1-7-g2b900d1222`. Always follow the gitlink, never a current branch tip.
+`reference_tools` retains the original Intel macOS environment's provenance,
+including its old constraints digest. `security_build` identifies the new active
+Linux snapshot and its current requirements/constraints hashes. Do not relabel
+an original artifact with new digests or replace frozen candidates silently.
+The unrelated NVS-generator and IDF-build-apps version bounds are preserved.
 
-## Fetch and verify sources
+The additional [one-line web-asset build-tool patch](reproducible-web-assets.patch)
+sets gzip's timestamp to zero before compression. The pinned upstream generator
+otherwise embeds the current time under Python 3.11, even with
+`SOURCE_DATE_EPOCH` set. Both the complete generator contents and patch hash are
+checked/recorded. Decoded web assets were checked against the original build
+during [validation](VALIDATION-2026-11-01.md); that additional comparison is not
+an automatic build-script step. Completed images are never normalized to hide
+differences. The original board
+patch and all native source commit pins remain unchanged.
 
-Use a new external build directory and a Python 3.11 installation. Set the two
-absolute paths below for the checkout containing this recipe and the new build.
-These commands prepare/build files only; they do not access a device.
+## Prepare the immutable builder
+
+Docker Desktop must be running. Choose a new private output directory outside
+Git; the source/SDK/toolchain cache stays in Docker. Keep adequate disk headroom
+and do not prune unrelated images, volumes or containers to make room.
 
 ```sh
 recipe_dir=/absolute/repository/tools/circuitpython-runtime
-runtime_root=/absolute/new/private/cp1031-build
-mkdir -p "$runtime_root"
-chmod 700 "$runtime_root"
-python3.11 -m venv "$runtime_root/host-venv"
-"$runtime_root/host-venv/bin/python" -m pip install cmake==3.30.9 ninja==1.13.2
+runtime_root=/absolute/new/private/bm83-secure-runtime
+umask 077
+mkdir -p "$runtime_root/run-a" "$runtime_root/run-b"
+chmod 700 "$runtime_root" "$runtime_root/run-a" "$runtime_root/run-b"
 
-git clone --filter=blob:none --no-checkout https://github.com/adafruit/circuitpython.git "$runtime_root/circuitpython"
-git -C "$runtime_root/circuitpython" checkout --detach c9dee12beed76e4ffa11d2d6d99ff104fc976c3a
-cd "$runtime_root/circuitpython"
-"$runtime_root/host-venv/bin/python" tools/ci_fetch_deps.py espressif_esp32s3_devkitc_1_n8r8
-git -C ports/espressif/esp-idf submodule update --init --recursive --depth 1
-
-test "$(git rev-parse HEAD)" = c9dee12beed76e4ffa11d2d6d99ff104fc976c3a
-test "$(git -C ports/espressif/esp-idf rev-parse HEAD)" = 2b900d1222cfce5dfa340ed99375af69ec1ee192
-test "$(git -C ports/espressif/esp-idf/components/bt/host/nimble/nimble rev-parse HEAD)" = 7075927f97c648af650a288e94a8c80dd7f00c27
-git apply --check "$recipe_dir/bonds8-cccd24.patch"
-git apply "$recipe_dir/bonds8-cccd24.patch"
+docker build --platform linux/amd64 --progress=plain \
+  --tag bm83-circuitpython-secure "$recipe_dir" \
+  > "$runtime_root/prepare.log" 2>&1
+builder_id="$(docker image inspect --format '{{.Id}}' bm83-circuitpython-secure)"
 ```
 
-The board dependency script and recursive submodule update check out the commits
-recorded by the pinned repositories. Do not run `git submodule update --remote`.
+The Dockerfile pins the official Python base by immutable digest, fetches the
+exact source gitlinks and checks the IDF tool manifest. IDF verifies official
+compiler-download hashes. All Python build dependencies are explicitly pinned;
+installation is checked against the reviewed local constraints. The tool-download
+cache is task-specific. OpenOCD's installer version check requires `libusb-1.0-0`
+in the container, but no USB device is exposed or used.
 
-## Install isolated build tools
+Preparation downloads official/public build inputs. The two actual builds below
+use the same immutable image ID with network disabled and independent writable
+container filesystems. No host source checkout, Docker socket, device, account
+or credential directory is mounted into either build.
 
-IDF's pinned `tools/tools.json` selects the official target toolchains and checks
-download digests. Keep them and Python environments inside the external build.
-The included constraints snapshot and complete Python package versions preserve
-the reference environment instead of fetching a changing constraints URL.
+## Run two genuinely clean builds
+
+Run these sequentially to bound RAM and disk use. Each output directory must be
+empty. The entrypoint refuses existing board/mpy-cross object directories, and
+neither command includes a flash target.
 
 ```sh
-export IDF_TOOLS_PATH="$runtime_root/idf-tools"
-export PIP_CACHE_DIR="$runtime_root/pip-cache"
-idf_source="$runtime_root/circuitpython/ports/espressif/esp-idf"
-"$runtime_root/host-venv/bin/python" "$idf_source/tools/idf_tools.py" install --targets esp32s3
+for run in run-a run-b; do
+  docker run --rm --network none --cpus 4 --memory 4g --memory-swap 4g \
+    --pids-limit 4096 \
+    --env "BM83_BUILDER_IMAGE=$builder_id" \
+    --volume "$runtime_root/$run:/output" \
+    "$builder_id" > "$runtime_root/$run.log" 2>&1
+done
 
-export IDF_PYTHON_ENV_PATH="$IDF_TOOLS_PATH/python_env/idf6.0_py3.11_env"
-python3.11 -m venv "$IDF_PYTHON_ENV_PATH"
-cp "$recipe_dir/espidf.constraints.v6.0.txt" "$IDF_TOOLS_PATH/espidf.constraints.v6.0.txt"
-"$IDF_PYTHON_ENV_PATH/bin/python" -m pip install \
-  --constraint "$recipe_dir/espidf.constraints.v6.0.txt" \
-  --requirement "$recipe_dir/requirements-build.txt"
-"$IDF_PYTHON_ENV_PATH/bin/python" -c \
-  'import os,pathlib; (pathlib.Path(os.environ["IDF_PYTHON_ENV_PATH"])/"idf_version.txt").write_text("6.0")'
-"$IDF_PYTHON_ENV_PATH/bin/python" -m pip check
+python3 "$recipe_dir/verify_reproducibility.py" \
+  "$runtime_root/run-a" "$runtime_root/run-b"
 ```
 
-The version marker identifies this manually provisioned virtual environment to
-the pinned IDF export/check scripts. It does not modify IDF source. Package pins
-are version locks, not a vendored wheel archive or a cryptographic attestation.
+The build checks exact source commits, the whole reviewed board/tool patches, dirty
+source paths, host/compiler versions and active dependency hashes. It uses the
+pinned CircuitPython commit's `SOURCE_DATE_EPOCH`, UTC, a fixed Python hash seed
+and identical internal paths, plus deterministic gzip generation. No extra board
+reproducibility flag is silently added. These controls address build date/path
+metadata while preserving the reviewed firmware configuration.
 
-## Build the application image
+The repeat verifier requires matching provenance, independently verifies every
+declared artifact digest, then compares **raw bytes**. It checks the application
+image, actual application ELF, sdkconfig, sdkconfig header, partition table,
+distro package manifest and Python package manifest, plus recorded bootloader,
+mpy-cross and recursive-submodule provenance. Missing artifacts, modified input
+metadata, symlinks, reused build directories and mismatches fail verification.
+It does not normalize differences away or infer source approval from equality;
+the separate pinned-source checks and preparation logs establish that evidence.
 
-On the reference Apple Clang 21 host, mpy-cross needs the host-only
-`-fomit-frame-pointer` flag. No corresponding firmware compiler flag is added.
-The wrappers below keep CMake pinned and Ninja limited to four workers.
+A cached immutable builder and repeatable firmware output do not promise that
+recreating the builder later with changing Debian/PyPI metadata yields the same
+image ID. Keep the actual builder ID, package manifests and logs with the outputs.
+
+## Verify real host-tool compatibility
+
+Before compilation, [verify_host_tools.py](verify_host_tools.py) exercises the
+installed tools using disposable synthetic files and test keys:
+
+- NVS generation twice, encryption and exact plaintext decryption round trip.
+- ESP32-S3 AES-XTS and legacy ESP32 AES-ECB repeat/round-trip checks.
+- ECDSA P-256 and RSA-3072 Secure Boot V2 signing/verification, with rejection of
+  modified signed data.
+
+After compilation it also runs fixed offline ESP32-S3 `image-info`. Reports
+record the cryptography/OpenSSL versions and results without key bytes or raw
+subprocess output. They execute no port discovery, device command or network I/O.
+The build also runs IDF's own Python-dependency checker and `pip check`.
+
+CI audits every package in the pinned native-build snapshot in addition to the
+existing development/MCP dependency audits. It does not dismiss advisories.
+
+## Artifacts remain uninstalled candidates
+
+Each output contains `build-manifest.json` for repeat verification and a separate
+`artifact-manifest.json` for the existing **default offline** image validator:
 
 ```sh
-export PATH="$IDF_PYTHON_ENV_PATH/bin:$runtime_root/host-venv/bin:$PATH"
-cd "$runtime_root/circuitpython"
-make -C mpy-cross -j4 PYTHON="$IDF_PYTHON_ENV_PATH/bin/python" CFLAGS_EXTRA=-fomit-frame-pointer
-
-export BM83_RUNTIME_BUILD_ROOT="$runtime_root"
-mkdir -p "$runtime_root/bounded-tools"
-cat > "$runtime_root/bounded-tools/ninja" <<'SH'
-#!/bin/sh
-exec "$BM83_RUNTIME_BUILD_ROOT/host-venv/bin/ninja" -j4 "$@"
-SH
-cat > "$runtime_root/bounded-tools/cmake" <<'SH'
-#!/bin/sh
-exec "$BM83_RUNTIME_BUILD_ROOT/host-venv/bin/cmake" "$@"
-SH
-chmod 700 "$runtime_root/bounded-tools/ninja" "$runtime_root/bounded-tools/cmake"
-. "$idf_source/export.sh"
-export PATH="$runtime_root/bounded-tools:$PATH"
-export CMAKE_BUILD_PARALLEL_LEVEL=4
-cd "$runtime_root/circuitpython/ports/espressif"
-make -j4 BOARD=espressif_esp32s3_devkitc_1_n8r8 PYTHON="$IDF_PYTHON_ENV_PATH/bin/python" \
-  build-espressif_esp32s3_devkitc_1_n8r8/circuitpython-firmware.bin
+python3 /absolute/repository/tools/update_circuitpython_runtime.py \
+  "$runtime_root/run-a/artifact-manifest.json"
 ```
 
-The output `circuitpython-firmware.bin` is the app-only image for offset
-`0x10000`, limited to the stock 2 MiB `ota_0` partition. **Do not flash the
-combined `firmware.bin` at address zero.** The build can also generate bootloader
-and partition reference files as dependencies; they are not update targets.
+Without `--write`, that validator checks the image header, appended digest,
+checksum, segment bounds, exact stock partition layout and partition MD5 without
+launching a subprocess or accessing hardware. The application is restricted to
+the stock 2 MiB `ota_0` partition at `0x10000`. Bootloader and partition files are
+reference artifacts, not write targets. Do not flash a combined `firmware.bin`.
 
-Record the image/ELF digests, complete generated `esp-idf/sdkconfig` and
-`esp-idf/config/sdkconfig.h`, the patch, recursive submodule status, tools and
-build logs. Check `CONFIG_BT_NIMBLE_MAX_BONDS=8`,
-`CONFIG_BT_NIMBLE_MAX_CCCDS=24`, and `CONFIG_BT_NIMBLE_NVS_PERSIST=y` in sdkconfig.
-The reference compiled `CIRCUITPY_BLE_FILE_SERVICE=1`,
-`CIRCUITPY_BLE_SERIAL_SERVICE=1`, and `CIRCUITPY_SETTINGS_TOML=1`; the real setter
-branch supports `supervisor.runtime.ble_workflow = False`.
-
-Use `esptool --chip esp32s3 image-info` for offline checksum/header inspection,
-then construct/review the manifest described in
-[the guarded update guide](../../docs/ble-runtime-update.md). Default validation
-with `tools/update_circuitpython_runtime.py` never accesses hardware. A build
-success or offline validation does not establish a hardware-tested runtime.
+Keep the old images, source/compiler manifests, private backups and saved state
+intact. A reproducible build and offline validation do not establish radio/audio
+stability, physical screens/buttons or deployment approval. Follow the separately
+authorized [guarded update guide](../../docs/ble-runtime-update.md) only when
+hardware work is explicitly resumed.

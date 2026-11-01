@@ -27,5 +27,14 @@
     "gcc": "esp-15.2.0_20251204",
     "idf_tools_json_sha256": "8e3d9468434bb5b08a97ed4820c809f420011effe364e2bfc54f21b4382f6d2c",
     "constraints_sha256": "6b7626572c759b3f1431fe781688af68eba8a3da81bbf5a9744ad24b0fbfaa45"
+  },
+  "security_build": {
+    "host_platform": "linux/amd64",
+    "python": "3.11.18",
+    "cryptography": "50.0.0",
+    "container_base": "python@sha256:84fa927127b46670e768371d1ad1be271d57ba93a6fbb3479045c7c6c452432f",
+    "constraints_sha256": "5fd09d32a90c26f06e371f5a4ebd56291337e727ac70713a85fb3fccb0dcf674",
+    "requirements_sha256": "b9d95cf0328a05d6bcd67cf7d7c2bbb260b100de8169f2d656a110057981bb95",
+    "preserves_reference_sources_and_board_configuration": true
   }
 }
