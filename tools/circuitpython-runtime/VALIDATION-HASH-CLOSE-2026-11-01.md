@@ -1,4 +1,4 @@
-# Native Hash lifetime candidate — 2026-11-01
+# Native Hash lifetime validation — 2026-11-01
 
 This record distinguishes an observed allocation defect and host validation
 from delivery or physical acceptance. Raw device captures, machine details,
@@ -60,7 +60,7 @@ CCCD, NVS persistence, partition and deterministic web-asset settings remain
 unchanged. The six complete native source outputs and new patch digest are
 explicitly guarded. Original build images and evidence are retained.
 
-## Host validation and remaining delivery gates
+## Host validation
 
 - Full pinned suite: 1,469 tests and 116 subtests passed, real compiler enabled.
 - Native/receiver/provenance preflight: 181 tests passed, including the patched
@@ -72,13 +72,68 @@ explicitly guarded. Original build images and evidence are retained.
   findings; one pre-existing low finding remains.
 - Both generated images passed the offline ESP32-S3 application validator.
 
-Native flashing has not yet been approved or performed for this candidate.
-The guarded updater requires a separately scoped owner approval, exact tool
-identity, physical chip/security/flash checks, two identical full backups, a
-validated rollback image, and verification of every byte outside the app slot.
+## Approved native installation and target checks
+
+The owner explicitly approved the native update and entered ROM download mode.
+The guarded updater verified the target identity, 8 MiB flash, unsigned and
+unencrypted configuration, exact application and partition table, and a
+validated original rollback image. Two independent full-flash backups matched.
+The application image above was written only within the 2 MiB application slot;
+a third full-flash readback verified the new image and every byte outside that
+slot unchanged. Bootloader, partition table, NVS, bonds, profiles and files were
+outside the write area. The owner then reset the controller into CircuitPython.
 See [runtime flash guards](../../docs/reliability/RUNTIME-FLASH-GUARDS.md).
 
-After a successful write, actual native cleanup, GC behavior, HMAC latency,
-unchanged device files and bonds, real badge controls, fresh metadata and a new
-1,800-second receiver-enabled observation are still required. No issue or
-cross-platform acceptance gate is closed by this host record.
+The first stopped-runtime probe confirmed the new capability, SHA-1/SHA-256
+known answers, repeated digest/update, idempotent deinitialization and closed
+operation errors. Its 128 explicitly closed hashes showed zero native loss.
+Its strict first-collection acceptance failed: one discarded native context
+retained 120 bytes at that reading and recovered fully by the last reading.
+The original helper collected internally, so its label suggesting a second
+collection actually followed three collections. That failed result is retained
+unchanged. A later 33,048-byte allocation step in that first experiment remains
+unattributed; it is not presented as a permanent leak or explained away.
+
+A separate, fixed follow-up used the exact production hash/HMAC helpers,
+public vectors, a no-Hash allocation control and explicit collection labels.
+It warmed the same maximum workload sizes before establishing the baseline.
+The predeclared decision required every second-collection native-free value to
+meet its batch, phase and common warm baseline; the third collection could not
+rescue a failure. Actual results were:
+
+- 256 discarded hashes: each batch held 32 × 120 bytes before collection and
+  released all of it by the first recorded post-batch collection.
+- 256 explicitly closed hashes, 384 measured production HMACs and the no-Hash
+  controls: zero native loss even before a post-batch collection.
+- All 26 measured batches and the complete warmed run: zero native loss.
+- 1,446 total native hash constructions including fixed warmup; 81 explicit
+  collections. Automatic collection remained enabled.
+- Maximum measured HMAC: 4.425056 ms; complete diagnostic: 4.642639161 seconds.
+- Matching largest-block brackets throughout; derived usable Python GC-pool
+  capacity stayed 62,976 bytes. Overlapping Python/native figures are not
+  added together or represented as DMA-specific headroom.
+
+The scoped native hash checks passed through a separate aggregate record that
+binds the new raw measurements and preserves the original failure. The observed
+VM-teardown HARD_FAULT remains unresolved; these results do not establish safe
+soft reload.
+
+## Receiver delivery and remaining physical acceptance
+
+The exact three-file application update (`main.py`, `artwork_wifi.mpy`, and
+`badge_remote.mpy`) was hash-verified against the committed reproducible build.
+The tested receiver source is commit `95dde864b08d44b07bfbe75d26f583fa316a2099`.
+The complete sixty-file snapshot verified every other file unchanged. After a
+safe host unmount and one controller hard reset, Wi-Fi, the metadata bridge and
+the authenticated badge receiver all reported ready without a startup fault.
+Apple Music's saved playback state, route and volumes were restored.
+
+A read-only authenticated client received nine fresh status samples matching
+Music's title and artist, with genuinely advancing cached source positions.
+This did not send playback, volume, power, pairing or retry commands.
+
+Physical badge controls, actual screen observations and a new uninterrupted
+1,800-second receiver-enabled run remain pending. CrowPanel's cold-start join
+and shared retry behavior, native AVRCP without the helper, VM teardown and
+cross-platform BLE handoff are separate gates. No broad hardware or platform
+acceptance is inferred from this native or client-level record.
