@@ -36,5 +36,18 @@
     "constraints_sha256": "5fd09d32a90c26f06e371f5a4ebd56291337e727ac70713a85fb3fccb0dcf674",
     "requirements_sha256": "b9d95cf0328a05d6bcd67cf7d7c2bbb260b100de8169f2d656a110057981bb95",
     "preserves_reference_sources_and_board_configuration": true
+  },
+  "runtime_patches": {
+    "hashlib_close": {
+      "sha256": "03b79f04f9d4ac3575512647856d9b7ce341acc45b83a27a516ec22527932a14",
+      "files": {
+        "shared-bindings/hashlib/Hash.c": "fdf9529f1e4d84d679ae567669c75adee28b041ed896a6bc332c4918b4f753b3",
+        "shared-bindings/hashlib/Hash.h": "359d6e4abff22831ccc0279ed96a717a0691171ed62034812f004a51ada78cd5",
+        "shared-bindings/hashlib/__init__.c": "4507c7dfcaabe35fe8e6d89e35fb6d03e5cf56e1c3e88114e9f9aa2d82a38e66",
+        "shared-module/hashlib/Hash.c": "e5570fd5b1b95a5a94f2fa64dc22b767422d555f10bfdab54fd95784704ad139",
+        "shared-module/hashlib/Hash.h": "84f6053baff9174de3cdadc3d7e44dfd7c957124076541eddbef90b4fef04e8f",
+        "shared-module/hashlib/__init__.c": "6178e3efb49d3cf0a913678bb9ebd89acc92c4b66a3ed99269e2f82c486092e7"
+      }
+    }
   }
 }

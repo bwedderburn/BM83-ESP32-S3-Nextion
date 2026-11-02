@@ -40,11 +40,13 @@ RUN --mount=type=cache,target=/opt/idf-tools/dist,id=bm83-cp1031-tool-downloads 
     printf '6.0' > /opt/idf-venv/idf_version.txt && \
     /opt/idf-venv/bin/python -m pip check
 
-COPY build-runtime.sh record-build.py verify_host_tools.py reproducible-web-assets.patch /opt/recipe/
+COPY build-runtime.sh record-build.py verify_host_tools.py reproducible-web-assets.patch hashlib-close.patch /opt/recipe/
 # Python 3.11's gzip default embeds wall-clock time in the web assets.
 # Fix the generator input, never normalize or rewrite a completed binary.
 RUN cd /opt/circuitpython && \
     git apply --check /opt/recipe/reproducible-web-assets.patch && \
-    git apply /opt/recipe/reproducible-web-assets.patch
+    git apply /opt/recipe/reproducible-web-assets.patch && \
+    git apply --check /opt/recipe/hashlib-close.patch && \
+    git apply /opt/recipe/hashlib-close.patch
 WORKDIR /opt/circuitpython
 ENTRYPOINT ["/bin/bash", "/opt/recipe/build-runtime.sh"]

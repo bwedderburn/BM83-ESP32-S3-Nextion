@@ -28,6 +28,34 @@ an automatic build-script step. Completed images are never normalized to hide
 differences. The original board
 patch and all native source commit pins remain unchanged.
 
+## Native hash-operation ownership
+
+The additional [native hash cleanup patch](hashlib-close.patch) fixes ownership
+of PSA operations in the shared Mbed TLS `hashlib` implementation. It adds an
+idempotent `Hash.deinit()`, a GC finalizer, guards update/digest after close and
+checks native initialization/update/clone/finish failures. Digest still finishes
+only a clone, so repeated digest calls and subsequent updates retain their normal
+meaning. Unsupported algorithms and partial initialization remain safe to finalize.
+Other hashlib backends retain their existing bindings.
+
+The controller's HMAC helper explicitly closes each operation in `finally`.
+The private `_deinit_supported` module flag lets it refuse an older embedded
+runtime before opening the receiver or allocating a test context. It does not
+substitute a pure-Python hash or change authentication, keys or wire encoding.
+
+`runtime_patches.hashlib_close` in `source-pins.json` pins the reviewed patch and
+all six complete patched files. The source checker rejects any additional edits,
+including staged changes, and `hashlib_close_patch_sha256` is a required input
+in the repeat-build manifest. The existing board/gzip patches, source commits,
+NVS layout, bond capacities and build dependencies remain unchanged.
+
+The host C ownership harness applies the real patch to pinned source fixtures,
+uses a bounded PSA allocation/error model and host SHA known answers, and checks
+repeated digest/update, explicit close, failed operations and 1,000 cycles. It
+does not emulate ESP32 DMA or real GC scheduling. Physical allocation recovery,
+finalizer fallback, authentication latency and the normal >=30-minute run card
+must still pass before hardware acceptance. A compiled image is not acceptance.
+
 ## Prepare the immutable builder
 
 Docker Desktop must be running. Choose a new private output directory outside

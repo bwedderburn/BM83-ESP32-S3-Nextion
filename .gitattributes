@@ -1,0 +1,3 @@
+# A unified patch's blank context lines contain a structural single space.
+# Preserve the reviewed patch bytes on every host and allow only that format.
+tools/circuitpython-runtime/hashlib-close.patch text eol=lf whitespace=-blank-at-eol
