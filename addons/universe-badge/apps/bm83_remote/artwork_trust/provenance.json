@@ -1,0 +1,30 @@
+{
+  "scope": "Exact public CA assets already retained in this project; no added trust roots, device data, credentials or system trust changes.",
+  "mozilla_snapshot_utc": "2026-10-20T13:32:40Z",
+  "source_url": "https://curl.se/ca/cacert.pem",
+  "source_license": "MPL-2.0",
+  "godaddy_g2": "Existing subset of retained Mozilla store; not an additional root.",
+  "files": [
+    {
+      "path": "cacert.pem",
+      "source_path": "firmware/crowpanel-remote/lib/artwork_trust/ca/cacert.pem",
+      "bytes": 200116,
+      "sha256": "796f1389bfea13c0ed78f663b765baaff54a508e5483786bd6ece73c5e3e3cbe"
+    },
+    {
+      "path": "godaddy-root-g2.pem",
+      "source_path": "firmware/crowpanel-remote/lib/artwork_trust/ca/godaddy-root-g2.pem",
+      "bytes": 1367,
+      "sha256": "500329abac100a953a7396b54b36be57d333022f17401bc948248ea179cf1784"
+    }
+  ],
+  "der_store": {
+    "path": "roots.der-store",
+    "format": "BMCA1; uint16be count; repeated uint16be DER length + exact DER; no trailer",
+    "certificates": 118,
+    "bytes": 127346,
+    "sha256": "f92335a8257776a862cfdb4e675441db344c29d67cc05462dbf1381f7b38a4fb",
+    "godaddy_g2_already_included": true,
+    "added_roots": 0
+  }
+}

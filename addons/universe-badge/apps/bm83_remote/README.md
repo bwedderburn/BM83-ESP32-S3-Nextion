@@ -42,6 +42,16 @@ to a temporary file. Firmware lacking this API shows a bounded-fetch-required
 message; cached artwork and audio controls remain available. The upstream API
 can block during DNS, which the cooperative deadline cannot preempt.
 
+Artwork start, retry and cooperative pumping wait until the authenticated
+remote has no transaction, queued control or volume gesture outstanding. The
+latest album is selected when that work actually starts; a changed album is
+not lost while the remote is busy. Each frame performs one artwork operation,
+and rendering checks freshness again afterward. Offline cancellation still runs
+immediately. This scheduling keeps potentially slow artwork work outside an
+in-flight UDP reply window; it does not make the firmware's DNS, file I/O or
+image decoder nonblocking, extend the 600 ms reply deadline, or establish
+physical network or TLS behavior.
+
 A targeted `F821` lint annotation also identifies the `image`
 global supplied by badge firmware in `artwork.py`; it changes no behavior.
 Internal command identifiers and pending-state fields use `command` so static
@@ -67,7 +77,7 @@ Open **BM83 Remote** from the badge menu while the badge and BM83 audio unit are
 - **Back**: mute on the Now Playing page; cancel/return on Settings.
 - **Hold Up / Down**: volume up / down; release the button to stop the unit's repeat.
 - **Menu**: open Settings. Use **Up / Down**, **Select**, and **Back** to navigate.
-- Settings provide Power, Pair, EQ, confirmed bond erasure, a badge-local Wi-Fi/artwork retry, and BLE volume-remote pause/enable when a fresh BLE status permits the request. **Badge Wi-Fi / artwork retry** only reconnects the badge's Wi-Fi and restarts its artwork lookup (`Local retry: badge Wi-Fi/artwork only`); it never sends `NET_RETRY`, so the audio unit is not asked to reconnect or reload.
+- Settings provide Power, Pair, EQ, confirmed bond erasure, a badge-local Wi-Fi/artwork retry, and BLE volume-remote pause/enable when a fresh BLE status permits the request. **Badge Wi-Fi / artwork retry** only reconnects the badge's Wi-Fi and requests a new artwork lookup (`Local retry: badge Wi-Fi/artwork only`). The lookup waits for the authenticated remote to become idle and uses its latest album; it never sends `NET_RETRY`, so the audio unit is not asked to reconnect or reload.
 
 The status line reports whether a command was sent and whether a reply arrived. A press made before the audio unit authenticates waits for it; if the handshake gets no reply, pending presses are dropped (`Audio unit: no reply - N not sent`) so they cannot fire later. A reply is delivery feedback, not proof that playback or volume changed. After a `STATUS: no reply` or UDP error, the next successful STATUS reply changes the line to `Audio unit responding`; command outcomes stay visible. A reply marked `"denied": true` is shown as refused instead, for example `Erase bonds: refused by audio unit` when the receiver keeps bond erasure local-only. Any reply to the legacy `NET_RETRY` token reads `Receiver retry unavailable`. BLE Pause/Enable is reported as Waiting, Confirmed, Failed, Refused, or Unconfirmed and only confirms when a newer BLE status echoes the matching request client/sequence; null correlation means there is no current Wi-Fi-owned BLE request. The immediate reply to a BLE request may carry `"ble": null`; confirmation then comes from a later STATUS reply.
 
@@ -93,11 +103,17 @@ Datagrams use the `BMW1.` prefix, a 16-byte HMAC-SHA256 tag, and UTF-8 JSON. The
 
 Artwork uses exact artist/album identity, a MusicBrainz score threshold of 95, unique release-group matches, a minimum 1.1-second MusicBrainz request interval and bounded response/cache sizes. Requests are HTTPS-only and limited to MusicBrainz, Cover Art Archive, Archive.org and Deezer hosts. The badge's `fetch` does not follow redirects, so the app follows at most three itself within that same allow-list. A busy MusicBrainz (HTTP 429, 502, 503 or 504) is retried up to three times at the same request interval before the app reports that artwork is unavailable; Settings then offers a retry. Artwork data is untrusted; only matching artist/album data and baseline JPEGs with bounded dimensions are used.
 
-The [referenced upstream fetch implementation](https://github.com/pimoroni/tufty2350/blob/ee84772fb7f7d5424e9593029caba815c6f89c80/modules/common/fetch.py)
-uses `CERT_NONE`: its HTTPS connection does not authenticate server certificates.
-The app's URL allow-list does not replace certificate verification. Downloaded
-metadata and images are treated as untrusted data; verified TLS on a physical
-badge has not been established by this import.
+The frozen upstream fetch connection uses `CERT_NONE`. This app instead uses
+its own `verified_fetch` connection adapter with `CERT_REQUIRED`, the requested
+hostname and the exact public CA roots already retained by CrowPanel. The
+upstream insecure connection method is never dispatched. Unsupported APIs,
+invalid UTC clocks and certificate failures stop artwork requests; there is no
+insecure fallback. A reset badge's clock can recover through the existing NTP
+module, at most three attempts with backoff, serviced only at the same
+control-idle background gate. Settings' local retry rearms those attempts.
+Cached covers still work without clock sync. See
+[artwork trust and physical release gates](artwork_trust/README.md) for the
+source/license, exact roots, bounded context cache and remaining acceptance.
 
 ## Host tests
 
