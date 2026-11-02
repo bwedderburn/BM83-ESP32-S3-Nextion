@@ -82,8 +82,52 @@ stopped at a read-only identity check, before any flash write. A long cable
 intended mainly for charging was replaced, but cable causation is unproven.
 The delivery tooling also needs the explicit retained-stub option: esptool
 5.6.0's `--after no-reset` can issue a software reset to exit its RAM helper;
-`--after no-reset-stub` leaves that helper running. These behaviors must not be
-described as equivalent.
+`--after no-reset-stub` leaves that helper running. The delivery used 115200 baud
+consistently, with no automatic reset or rollback.
+
+Two initial matching full-flash backups revealed valid existing OTA boot
+records and non-erased data beyond the parsed original app. The initial empty
+metadata/tail assumptions were rejected. Independent checks of IDF 4.4.7 and
+the actual saved bytes established that the records select the sole OTA0 app,
+the original image is valid, and the retained bootloader is byte-identical to
+the candidate build's bootloader. The final guard was restricted to this exact
+original full-flash, OTA, app-slot and original-image snapshot, and obtained two
+fresh matching backups before writing. It did not generalize an exception for
+unknown populated boot records or unknown app data.
+
+The candidate is 80 bytes longer than the original valid 1,633,392-byte image.
+Its sector erase extent ends at `0x19f000`. All 912 bytes between the old image
+end and that boundary were already erased; non-erased retained data begins at
+the boundary. Verification therefore protects every byte outside
+`[0x10000, 0x19f000)`, a stricter boundary than the entire application slot.
+
+The single app write from the Mac completed in 97.9 seconds and passed
+esptool's written-data hash check. The first full verification read then failed
+on a 4,063-byte SLIP frame where 4,096 bytes were required. Its empty output and
+failed report remain preserved. This identifies a transfer failure, not its
+electrical or software cause. No automatic second flash or reset occurred.
+
+A separately reviewed verification-only helper performed one new complete
+4 MiB read, with fresh identity/security checks before and after. It rechecked
+the old evidence unchanged and compared the entire readback byte for byte with
+the original snapshot plus only the new candidate and erased final-sector
+padding. The complete result matched the exact private reference image; its
+device-specific full-flash digest remains outside Git.
+Bootloader, partition table, NVS/Wi-Fi settings, OTA metadata, retained unknown
+app-slot data, SPIFFS and coredump bytes were unchanged. This establishes the
+Mac flash and preservation result for this delivery; it does not establish a
+general cure for the occasional USB transfer failure.
+
+The owner then pressed normal RESET on CrowPanel and confirmed current track,
+advancing time and artwork without **Retry both**. This startup check had the
+audio controller already playing; it is not a complete cold-start-order matrix.
+
+The badge's 15-file app was installed from BM83 commit `9cf00e8`, byte-identical
+to the Universe mirror at `c785801`. A fresh complete badge backup and the
+previous app backup were verified. All 470 current files outside the app stayed
+unchanged, including credentials, other apps, saved state and artwork cache.
+The badge was safely ejected. The owner confirmed metadata/time/artwork,
+pause/resume, next/previous, volume and HOME/reopen, with Nextion still updating.
 
 A five-minute receiver diagnostic had fresh authenticated replies and advancing
 matching playback, but opening CrowPanel's diagnostic serial port coincided
@@ -92,7 +136,66 @@ required uninterrupted 30-minute physical acceptance run. Future observation
 must account for serial-open/close effects rather than infer electrical silence
 from a zero-byte-write counter.
 
-Updated badge installation, CrowPanel flash/readback and boot, unassisted
-startup recovery, live uncached artwork/control checks, and a receiver-enabled
-uninterrupted 30-minute window remain pending. Private backups, hardware
-identifiers, credentials and raw device captures are deliberately outside Git.
+The updated acceptance observer separately records requested operations and
+detected boot/restart evidence. It opens each serial connection once, requires
+20 continuous seconds of fresh matching metadata and advancing clocks before
+arming, and rejects post-arm boots, unit/uptime changes, stale source/transport
+data, clock drift, UART faults, route/helper/volume changes or a six-second
+observer scheduling gap. The final timestamp repeats freshness checks and
+requires at least 1,800 actual monotonic seconds; cleanup time cannot extend a
+short run into a pass. It sends no serial bytes or control commands.
+
+The receiver-enabled run armed at **2026-11-02 09:43:57 UTC** and passed after
+**1,800.010162 uninterrupted monotonic seconds**, ending at about 10:13:57 UTC.
+There were no detected post-arm boots, UART degradation or UART silence events.
+The largest observer scheduling gap was 214.7 ms. Route, helper process, volume,
+metadata/source freshness and clock-progress checks remained within their
+specified bounds. The final endpoint independently rechecked those conditions.
+
+Within the timed window, the saved records contain **1,767 unique fresh
+authenticated replies**, **1,762 matching replies** and **seven natural track
+changes**. Another 33 replies and one track change belong to preflight and are
+not timed-window evidence. The last-send reply latency was 167 ms at the 95th
+percentile; whole-transaction latency was 216 ms at the 95th percentile.
+
+This was a bounded health pass, not a zero-retry network result. Two raw panel
+clock decreases correspond to old/new track-duration handoffs, not established
+same-track rewinds. The five-second periodic panel clock reports straddled
+those transitions; source drift recovered within the unchanged six-second
+sustained-mismatch limit. The preserved raw drift maximum compares clocks from
+different tracks and must not be presented as steady-state timing accuracy.
+Five periodic host snapshots also recorded `STATUS: no reply` while cached
+playback remained fresh and matching. They are real transient observations,
+not a complete failed-transaction count or proof of the badge's UI behavior.
+The longest successful whole transaction was 625 ms across four sends, with
+125 ms since the final send. The transport processes buffered replies before
+its nominal 600 ms timeout check; not every whole transaction was below 600 ms.
+
+After the run and diagnostic release, the owner confirmed that Music was still
+audible, all three screens showed current metadata, advancing time and artwork,
+and badge SELECT still paused and resumed playback without Retry both, power or
+reset. Combined with the earlier controls/HOME checks, this passes the scoped
+Mac-route delivery and 30-minute physical acceptance gate.
+
+The independent host STATUS client cannot establish actual badge UI, artwork,
+button or audio behavior by itself. Its raw host result therefore retains
+`overall_physical_acceptance_passed=false`; the owner's start/end observations
+and the host pass are combined in a separate private acceptance record rather
+than rewriting that evidence. Private backups, hardware identifiers,
+credentials and raw device captures remain outside Git.
+
+## Remaining limits
+
+- The Ctrl-C/VM teardown fault remains a separate unresolved maintenance issue;
+  normal operation and this run did not invoke it.
+- This is not a zero-retry or zero-packet-loss network result. The transient
+  host observations and timing semantics above are retained explicitly.
+- CrowPanel startup was verified with the audio controller already playing.
+  Every cold-start order, power interruption and prolonged outage has not been
+  physically retested by this window.
+- This Mac route uses the existing metadata helper. Helper-free AVRCP delivery,
+  Windows/Pi behavior and cross-platform BLE handoff are separate validation
+  scopes, not implied by this result.
+- The successful complete readback does not identify or cure the cause of the
+  earlier USB framing failure. Future updates still require complete verified
+  backups, a valid rollback and protected-range readback.
