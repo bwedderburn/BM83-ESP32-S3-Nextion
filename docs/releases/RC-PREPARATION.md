@@ -89,3 +89,54 @@ The native Windows compiler available for this preparation reports
 `0f57daeaeda62d9f4b36c110ea0dc6e80f60ef8eb8adb77d576741167e1a47a9`.
 This is an observed host compiler, distinct from the separately pinned Linux
 download digest. Neither compiler binary is bundled in the RC archives.
+
+## Local dependency refresh on November 2, 2026
+
+The candidate incorporates the two squash-merged dependency updates while
+retaining the original release preparation commit:
+
+- PR #196: `afc0c3b9632e20d4c2fd2871e18b0ce29a4285da`, allowing
+  `idf-build-apps < 3.2` on Python >=3.10. That package is not installed by the
+  frozen native build requirements.
+- PR #197: `f7cffd27c23855c82a20305276eb14fbeca41015`, updating the NVS
+  partition generator to `0.3.0` in both requirements and constraints.
+
+At the final merged revision, GitHub's Python 3.11/3.12/3.13 tests, host-security
+policy/dependency audits, Codacy scan, CodeQL language scans and dependency graph
+update passed. These are host checks, not a native-runtime compilation or
+hardware acceptance record.
+
+The merged dependency files changed without corresponding active provenance
+hash updates. The local refresh repairs only `security_build` in
+`tools/circuitpython-runtime/source-pins.json`: constraints SHA-256
+`54ee078efacb8de913ba75d0132b783a192e5f887ddda539d13a2937f71dd3b5`
+and requirements SHA-256
+`47e0b8723a7e1439e1bbc1ac0e961f1c91160539ea0331efbbf619d8984de6b0`.
+The new two-case repository consistency test failed against the merged files
+before this repair and passed afterward. Historical `reference_tools` hashes,
+native source/patch pins and dated native-build reports retain their original
+bytes and scope.
+
+Refresh validation on Ubuntu 24.04 / Python 3.12.3:
+
+- **128 passed** across native provenance, host-tool safety and reproducibility
+  tests, including the new repository consistency cases. Fatal lint passed.
+- A fresh isolated environment installed the complete frozen native build
+  requirements with the refreshed constraints; `pip check` passed.
+- The actual host-tool verifier passed all five synthetic check groups: NVS
+  generate/repeat/encrypt/decrypt, AES-XTS, legacy ESP32 AES-ECB, ECDSA P-256 and
+  RSA-3072 signing/verification with tamper rejection. It reported
+  `hardware_access: false`, NVS `0.3.0`, cryptography `50.0.0`, esptool `5.6.0`,
+  cffi `2.1.1` and OpenSSL `4.0.1`.
+
+These new checks do not rerun or replace the earlier full regression record.
+The native builder's Python 3.11.18 environment and a new native CircuitPython
+image have not been built or validated for this dependency refresh.
+
+Refreshed controller archives use the pinned Linux mpy-cross 10.3.1 at -O2,
+SHA-256 `aa74dcb51e51c1a70fd268dad9e05b40f72c29df3082f86c3a20665360e4acda`.
+Their output folder is `dist/releases/v1.0.0-rc.1-dependency-refresh/`; the
+original `dist/releases/v1.0.0-rc.1/` archives are preserved. Each refreshed
+archive's manifest records the exact final local candidate revision, and the
+compiled archive includes matching `BUILD_INFO.txt`. The selected source and
+compiled archives exclude the native build recipe and its dependencies.

@@ -14,10 +14,15 @@ BMW1 authenticated UDP receiver. Playback metadata, press/release volume
 gestures, connection handling, bounded work, and native hash cleanup admission
 are represented by the existing source and host tests.
 
-This candidate changes release metadata, licensing, and documentation. It does
-not introduce new controller behavior or represent a new hardware validation
-run. Historical documentation is corrected to recognize the receiver and the
-later scoped Mac/helper acceptance record.
+This candidate changes release metadata, licensing, documentation, and the
+native-runtime build dependency recipe. It includes merged PR #196
+(`idf-build-apps < 3.2` on Python >=3.10) and PR #197 (NVS partition generator
+`0.3.0`), with refreshed active dependency hashes and a regression check that
+rejects stale hashes. These build tools remain outside the selected download
+archives. The controller and badge application source is unchanged by this
+refresh; no new native-runtime build or hardware validation is claimed.
+Historical documentation is corrected to recognize the receiver and the later
+scoped Mac/helper acceptance record.
 
 ## Candidate downloads
 

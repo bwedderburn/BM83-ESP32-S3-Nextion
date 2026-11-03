@@ -16,7 +16,13 @@ access, deployment, pairing, playback or live NVS data is part of this recipe.
 including its old constraints digest. `security_build` identifies the new active
 Linux snapshot and its current requirements/constraints hashes. Do not relabel
 an original artifact with new digests or replace frozen candidates silently.
-The unrelated NVS-generator and IDF-build-apps version bounds are preserved.
+The local release candidate incorporates dependency updates from PRs #196 and
+#197: `idf-build-apps < 3.2` for Python >=3.10 and NVS partition generator
+`0.3.0`. The frozen build requirements do not install `idf-build-apps`; the
+expanded constraint does not add that tool to this recipe. The active
+dependency hashes identify the refreshed files. The dated November 1 native
+build reports retain their original inputs and do not validate this refreshed
+dependency snapshot; a new native build has not been run for this update.
 
 The additional [one-line web-asset build-tool patch](reproducible-web-assets.patch)
 sets gzip's timestamp to zero before compression. The pinned upstream generator
@@ -48,7 +54,8 @@ substitute a pure-Python hash or change authentication, keys or wire encoding.
 all six complete patched files. The source checker rejects any additional edits,
 including staged changes, and `hashlib_close_patch_sha256` is a required input
 in the repeat-build manifest. The existing board/gzip patches, source commits,
-NVS layout, bond capacities and build dependencies remain unchanged.
+NVS layout and bond capacities remain unchanged. The dependency refresh above
+is separate from these native source patches.
 
 The host C ownership harness applies the real patch to pinned source fixtures,
 uses a bounded PSA allocation/error model and host SHA known answers, and checks
