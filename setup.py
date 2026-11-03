@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="esp32-audio-remote",
-    version="1.0.0",
+    version="1.0.0rc1",
     description="CircuitPython-based audio remote with BM83, BLE HID, and Nextion display",
     author="Brian Wedderburn",
     author_email="78520287+bwedderburn@users.noreply.github.com",

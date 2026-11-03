@@ -15,8 +15,11 @@ The client has been checked with host tests and in the official Universe 2026
 badge simulator using fixture sockets. The simulator has no UDP sockets, HTTPS
 fetch or `os.urandom`, so it covers rendering and button handling against
 controlled replies, not real Wi-Fi/UDP, a BM83 unit, or the physical badge
-display and buttons. Physical badge and end-to-end BM83 acceptance are still
-pending.
+display and buttons. Separate later
+[Mac/helper validation](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/main/docs/validation/bm83-startup-artwork-validation-2026-11-01.md)
+records scoped 30-minute physical acceptance with owner observations. That
+result does not extend the simulator's scope or establish all platforms and
+startup/recovery combinations.
 
 Playback validation now rejects snapshots that omit
 `duration_ms`, `position_ms`, or `position_age_ms`; these fields may explicitly

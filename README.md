@@ -1,5 +1,9 @@
 # BM83 Remote — ESP32-S3, Nextion and CrowPanel
 
+Local release candidate: **1.0.0rc1** (proposed Git tag `v1.0.0-rc.1`). See the
+[draft release notes](RELEASE_NOTES-v1.0.0-rc.1.md) for package scope, checks, and
+remaining limits. A candidate archive is not an installed or published release.
+
 An audio controller and touchscreen remote built around the Microchip BM83.
 The BM83 carries Bluetooth audio; an ESP32-S3 running CircuitPython sends UART
 control commands, reads playback metadata and drives a Nextion display. An
