@@ -13,7 +13,7 @@ HOST = ROOT / "tests/crowpanel_host"
 
 
 @pytest.mark.parametrize("name", ["matching", "artist_aliases", "artist_credit", "album_fallback",
-                                  "tls_time", "network_setup_parser"])
+                                  "tls_time", "network_setup_parser", "network_recovery_policy"])
 def test_artwork_host_helpers(name, tmp_path):
     compiler = shutil.which("clang++") or shutil.which("g++")
     if not compiler:

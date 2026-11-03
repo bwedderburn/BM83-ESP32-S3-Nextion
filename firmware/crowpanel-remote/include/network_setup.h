@@ -11,7 +11,8 @@ void network_setup_begin();
 void network_setup_tick();
 void network_setup_show(_lv_obj_t *parent);
 bool network_setup_ready();
-void network_setup_peer_fresh(bool fresh);
+// Pass only freshness from the validated BMS2/BLS2 decoders, not radio ACKs.
+void network_setup_peer_fresh(bool playback_fresh, bool status_fresh);
 bool network_setup_take_rescan_request();
 void network_setup_set_retry_callback(void (*callback)());
 // Credential export must quiesce the artwork/TLS worker first. prepare may

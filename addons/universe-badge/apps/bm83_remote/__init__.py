@@ -85,6 +85,7 @@ class BM83Remote:
         self.sample_mode = False
         self.next_wifi = 0
         self.last_art_key = None
+        self.artwork_retry_pending = False
         self.unit_status = "Not connected"
         self.hold_action = None
         self._start_network()
@@ -218,7 +219,12 @@ class BM83Remote:
                 self.confirm_choice = 0
             elif command == "LOCAL_RETRY":
                 # Badge-local only: never asks the audio unit to reconnect or reload.
-                self.artwork.retry(now)
+                # Retry may create/decode an artwork request. Defer that work
+                # until the authenticated remote has finished any transaction.
+                self.artwork_retry_pending = True
+                rearm_clock = getattr(self.artwork, "rearm_clock", None)
+                if callable(rearm_clock):
+                    rearm_clock()
                 self.wifi_ready = False
                 self.next_wifi = now
                 self.feedback = LOCAL_RETRY_FEEDBACK
@@ -243,6 +249,12 @@ class BM83Remote:
         self.feedback = "Sample state (no commands sent)"
         self.artwork.set_result(sample)
 
+    def _artwork_idle(self):
+        remote = self.remote
+        return bool(remote and remote.unit and remote.client
+                    and remote.pending is None and not remote.queue
+                    and not remote.volume_queue and remote.held_volume is None)
+
     def step(self, now):
         self.input(now)
         if self.sample_mode:
@@ -266,13 +278,27 @@ class BM83Remote:
                 self.unit_status = "Wi-Fi offline"
                 if self.remote:
                     self.feedback = "Wi-Fi: " + (self.wifi_error or "connecting")
-            state = self.playback.state if self.playback.fresh(now) else None
-            if state:
-                key = (state["artist"], state["album"])
-                if key != self.last_art_key:
-                    self.last_art_key = key
+            if not connected:
+                # Offline cancellation/resume bookkeeping must still run even
+                # while a UDP transaction or volume release remains pending.
+                self.artwork.step(now, False)
+            elif self._artwork_idle():
+                state = self.playback.state if self.playback.fresh(now) else None
+                if state and (state["artist"], state["album"]) != self.last_art_key:
+                    key = (state["artist"], state["album"])
                     self.artwork.start(key[0], key[1], now)
-            self.artwork.step(now, connected)
+                    # Read the latest album only at dispatch, and never latch
+                    # a deferred lookup as if it had already started.
+                    self.last_art_key = key
+                    self.artwork_retry_pending = False
+                elif state and self.artwork_retry_pending:
+                    self.artwork.retry(now)
+                    self.artwork_retry_pending = False
+                else:
+                    # One background operation per frame. The underlying fetch
+                    # may still block in DNS or file/image work; this gate only
+                    # keeps it outside in-flight UDP/control deadlines.
+                    self.artwork.step(now, True)
 
     def draw(self, now):
         screen.pen = BG
@@ -419,7 +445,9 @@ class BM83Remote:
     def update(self):
         now = badge.ticks
         self.step(now)
-        self.draw(now)
+        # Background APIs may consume real time. Do not render stale snapshots
+        # as fresh merely because the frame's original tick predates that work.
+        self.draw(badge.ticks)
 
 
 app = BM83Remote()

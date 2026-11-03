@@ -11,6 +11,14 @@ try:
 except ImportError:
     fetch = None
 
+try:
+    from verified_fetch import (ClockRecovery, clock_ready,
+                                create as verified_factory, release_context)
+except ImportError:
+    verified_factory = None
+    release_context = None
+    ClockRecovery = clock_ready = None
+
 USER_AGENT = "BM83-Badge-Remote/1.0 (https://github.com/badger/home)"
 MAX_JSON = 32768
 MAX_JPEG = 131072
@@ -38,13 +46,13 @@ class BoundedRequest:
     """
 
     def __init__(self, url, headers, destination, limit):
-        factory = getattr(fetch, "AsyncFetch", None)
-        if not callable(factory):
-            raise ValueError("bounded fetch support required")
+        if (not callable(getattr(fetch, "AsyncFetch", None))
+                or not callable(verified_factory)):
+            raise ValueError("verified bounded fetch support required")
         host, _, path = url[8:].partition("/")
         try:
-            core = factory(host, use_tls=True, max_bytes=limit,
-                           timeout=FETCH_TIMEOUT_SECONDS)
+            core = verified_factory(host, use_tls=True, max_bytes=limit,
+                                    timeout=FETCH_TIMEOUT_SECONDS)
         except TypeError:
             raise ValueError("bounded fetch support required")
         if not all(callable(getattr(core, name, None))
@@ -325,6 +333,8 @@ class Artwork:
         self.busy = 0
         self.deezer_id = None
         self.hops = 0
+        self.clock_recovery = ClockRecovery() if callable(ClockRecovery) else None
+        self.clock_request = None
         self._make_dir()
 
     def _make_dir(self):
@@ -361,6 +371,8 @@ class Artwork:
 
     def close(self):
         self.cancel()
+        if callable(release_context):
+            release_context()
 
     def _cache_key(self, artist, album):
         value = (_normal(artist) + "\0" + _normal(album, True)).encode("utf-8")
@@ -437,6 +449,13 @@ class Artwork:
         if not callable(getattr(fetch, "AsyncFetch", None)):
             self.message, self.stage = "Artwork needs bounded fetch support", ""
             return
+        if self.clock_recovery is not None and not clock_ready():
+            # Configuration only. The authenticated-idle pump services NTP on
+            # another frame, preserving control/release ordering and cache hits.
+            self.clock_request = (url, stage, limit, hops)
+            self.stage = "clock-wait"
+            self.message = self.clock_recovery.message
+            return
         # Release previous response buffers before allocating another response.
         gc.collect()
         self.temp = self._path(self.key, ".tmp")
@@ -494,6 +513,11 @@ class Artwork:
         self.group = None
         self.image = None
         self.path = None
+        self.clock_request = None
+
+    def rearm_clock(self):
+        if self.clock_recovery is not None:
+            self.clock_recovery.rearm()
 
     def retry(self, now):
         if self.artist and self.album:
@@ -602,6 +626,15 @@ class Artwork:
             self.message = "Artwork needs internet"
             self.cancel()
             self._resume_after_connect = resume
+            return
+        if self.stage == "clock-wait":
+            if self.clock_recovery.step(now):
+                url, stage, limit, hops = self.clock_request
+                self.clock_request = None
+                self.started = now
+                self._request_url(url, stage, limit, now, hops)
+            else:
+                self.message = self.clock_recovery.message
             return
         if ((now - self.started) & 0xffffffff) > 45000:
             self.message = "Artwork lookup timed out"

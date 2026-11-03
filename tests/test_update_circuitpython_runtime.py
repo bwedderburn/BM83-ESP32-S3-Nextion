@@ -66,14 +66,21 @@ class FakeFlasher:
         self.flash = bytearray(b"\xff" * updater.FLASH_SIZE)
         self.flash[updater.TABLE_OFFSET:updater.TABLE_OFFSET + len(table)] = table
         self.flash[updater.NVS_OFFSET:updater.NVS_OFFSET + updater.NVS_SIZE] = b"\xA5" * updater.NVS_SIZE
+        original = app_image()
+        self.flash[updater.APP_OFFSET:updater.APP_OFFSET + len(original)] = original
         self.calls = []
         self.mac = MAC
         self.corrupt_after = None
         self.reads = 0
+        self.version = "5.6.0"
+        self.flash_size = "8MB"
+        self.security = "Chip ID: 9\nSecure Boot: Disabled\nFlash Encryption: Disabled\n"
 
     def __call__(self, argv, timeout):
         self.calls.append(argv)
         assert timeout <= 240
+        if argv[1:] == ["version"]:
+            return "esptool v" + self.version + "\n" + self.version + "\n"
         assert argv[argv.index("--before") + 1] == "no-reset"
         assert argv[argv.index("--after") + 1] == "no-reset"
         # Bulk 8MiB operations need esptool's packaged RAM stub. ROM-only
@@ -81,6 +88,10 @@ class FakeFlasher:
         assert "--no-stub" not in argv
         if "read-mac" in argv:
             return "MAC: " + self.mac.lower() + "\n"
+        if "flash-id" in argv:
+            return "Detected flash size: " + self.flash_size + "\n"
+        if "get-security-info" in argv:
+            return self.security
         if "read-flash" in argv:
             index = argv.index("read-flash")
             assert argv[index + 1:index + 3] == ["0x0", "0x800000"]
@@ -88,7 +99,7 @@ class FakeFlasher:
             assert stat.S_IMODE(destination.stat().st_mode) == 0o600
             assert stat.S_IMODE(destination.parent.stat().st_mode) == 0o700
             self.reads += 1
-            if self.reads == 2 and self.corrupt_after is not None:
+            if self.reads == 3 and self.corrupt_after is not None:
                 self.flash[self.corrupt_after] ^= 1
             destination.write_bytes(self.flash)
             return "Read complete"
@@ -106,7 +117,17 @@ def write_args(artifact, tmp_path, fake):
     executable = tmp_path / "reviewed esptool"
     executable.write_text("not executed by tests")
     executable.chmod(0o700)
-    return (path, executable, "/dev/cu.test-ROM", MAC, tmp_path / "private-backups", fake)
+    approval = {"schema_version": 1, "kind": "bm83-runtime-app-only-approval", "approved": True,
+                "board": updater.BOARD, "manifest_sha256": updater.sha256(path.read_bytes()),
+                "app_sha256": updater.sha256(app_image()), "port": "/dev/cu.test-ROM", "expected_mac": MAC,
+                "flash_size": updater.FLASH_SIZE, "app_offset": updater.APP_OFFSET,
+                "app_partition_size": updater.APP_SIZE, "preserve_outside_app": True, "no_reset": True,
+                "esptool": {"path": str(executable), "version": "5.6.0",
+                            "sha256": updater.sha256(executable.read_bytes())}}
+    approval_path = tmp_path / "approval.json"
+    approval_path.write_text(json.dumps(approval))
+    approval_path.chmod(0o600)
+    return (path, executable, "/dev/cu.test-ROM", MAC, tmp_path / "private-backups", fake, approval_path)
 
 
 def test_default_cli_and_import_never_launch_hardware(artifact, capsys):
@@ -202,6 +223,11 @@ def test_mock_roundtrip_preserves_nvs_bootloader_and_filesystem(artifact, tmp_pa
     assert (folder / "flash-before.bin").read_bytes() == original
     report = json.loads((folder / "report.json").read_text())
     assert report["outside_app_unchanged"]
+    assert report["independent_backups_identical"]
+    assert (folder / "flash-before-confirm.bin").read_bytes() == original
+    rollback = (folder / "rollback-app-validated.bin").read_bytes()
+    updater.validate_app_image(rollback)
+    assert report["rollback_app"]["sha256"] == updater.sha256(rollback)
     for file in folder.iterdir():
         assert stat.S_IMODE(file.stat().st_mode) == 0o600
 
@@ -230,7 +256,7 @@ def test_write_uses_private_validated_bytes_if_source_artifact_changes(artifact,
         return fake(argv, timeout)
 
     args = list(write_args(artifact, tmp_path, fake))
-    args[-1] = race
+    args[-2] = race
     updater.update_runtime(*args)
     assert fake.flash[updater.APP_OFFSET:updater.APP_OFFSET + len(original)] == original
 
@@ -244,7 +270,7 @@ def test_mac_is_rechecked_after_backup_before_any_write(artifact, tmp_path):
         return fake(argv, timeout)
 
     args = list(write_args(artifact, tmp_path, fake))
-    args[-1] = swap
+    args[-2] = swap
     with pytest.raises(updater.ValidationError, match="MAC mismatch"):
         updater.update_runtime(*args)
     assert not any("write-flash" in call for call in fake.calls)
@@ -254,7 +280,7 @@ def test_bulk_flash_commands_allow_packaged_ram_stub_without_reset_or_erase(arti
     fake = FakeFlasher(partition_table())
     updater.update_runtime(*write_args(artifact, tmp_path, fake))
     bulk = [call for call in fake.calls if "read-flash" in call or "write-flash" in call]
-    assert len(bulk) == 3
+    assert len(bulk) == 4
     for call in bulk:
         assert "--no-stub" not in call
         assert call[call.index("--before") + 1] == "no-reset"
@@ -283,3 +309,184 @@ def test_nonprivate_backup_directory_rejected(tmp_path):
     folder.mkdir(mode=0o755)
     with pytest.raises(updater.ValidationError, match="private"):
         updater.private_backup_directory(folder)
+
+
+def test_missing_scoped_approval_refused_before_any_tool_call(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+    args = write_args(artifact, tmp_path, fake)
+    with pytest.raises(updater.ValidationError, match="approval-file"):
+        updater.update_runtime(*args[:-1])
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("approved", False), ("app_sha256", "0" * 64), ("manifest_sha256", "0" * 64),
+    ("expected_mac", "00:11:22:33:44:55"), ("port", "/dev/cu.other"),
+    ("app_offset", 0), ("preserve_outside_app", False), ("no_reset", False),
+    ("flash_size", 0x1000000), ("schema_version", True),
+])
+def test_approval_scope_tampering_refused_without_tool_access(artifact, tmp_path, field, value):
+    fake = FakeFlasher(partition_table())
+    args = write_args(artifact, tmp_path, fake)
+    approval = json.loads(args[-1].read_text())
+    approval[field] = value
+    args[-1].write_text(json.dumps(approval))
+    with pytest.raises(updater.ValidationError, match="approval|Approval"):
+        updater.update_runtime(*args)
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("field,value", [("version", "5.5.0"), ("sha256", "0" * 64),
+                                        ("path", "/different/esptool")])
+def test_reviewed_tool_binding_refused_without_tool_access(artifact, tmp_path, field, value):
+    fake = FakeFlasher(partition_table())
+    args = write_args(artifact, tmp_path, fake)
+    approval = json.loads(args[-1].read_text())
+    approval["esptool"][field] = value
+    args[-1].write_text(json.dumps(approval))
+    with pytest.raises(updater.ValidationError, match="esptool"):
+        updater.update_runtime(*args)
+    assert fake.calls == []
+
+
+def test_approval_must_be_private(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+    args = write_args(artifact, tmp_path, fake)
+    args[-1].chmod(0o644)
+    with pytest.raises(updater.ValidationError, match="private"):
+        updater.update_runtime(*args)
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("version", ["5.5.0", "5.6.1", "unknown"])
+def test_actual_tool_version_rejected_before_device_access(artifact, tmp_path, version):
+    fake = FakeFlasher(partition_table())
+    fake.version = version
+    with pytest.raises(updater.ValidationError, match="version"):
+        updater.update_runtime(*write_args(artifact, tmp_path, fake))
+    assert len(fake.calls) == 1 and fake.calls[0][1:] == ["version"]
+
+
+@pytest.mark.parametrize("security", [
+    "Chip ID: 9\nSecure Boot: Enabled\nFlash Encryption: Disabled\n",
+    "Chip ID: 9\nSecure Boot: Disabled\nFlash Encryption: Enabled\n",
+    "Chip ID: 8\nSecure Boot: Disabled\nFlash Encryption: Disabled\n",
+    "Chip ID: 9\nSecure Boot: Disabled\n",
+    "Chip ID: 9\nSecure Boot: Disabled\nSecure Boot: Enabled\nFlash Encryption: Disabled\n",
+])
+def test_unknown_or_enabled_security_refused_before_flash_read(artifact, tmp_path, security):
+    fake = FakeFlasher(partition_table())
+    fake.security = security
+    with pytest.raises(updater.ValidationError, match="security"):
+        updater.update_runtime(*write_args(artifact, tmp_path, fake))
+    assert not any("read-flash" in call or "write-flash" in call for call in fake.calls)
+
+
+@pytest.mark.parametrize("size", ["4MB", "16MB", "Unknown"])
+def test_physical_flash_size_refused_before_backup(artifact, tmp_path, size):
+    fake = FakeFlasher(partition_table())
+    fake.flash_size = size
+    with pytest.raises(updater.ValidationError, match="8MB"):
+        updater.update_runtime(*write_args(artifact, tmp_path, fake))
+    assert not any("read-flash" in call or "write-flash" in call for call in fake.calls)
+
+
+def test_independent_prewrite_backup_mismatch_never_writes(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+
+    def inconsistent_read(argv, timeout):
+        if "read-flash" in argv and fake.reads == 1:
+            fake.flash[0x500000] ^= 1
+        return fake(argv, timeout)
+
+    args = list(write_args(artifact, tmp_path, fake))
+    args[-2] = inconsistent_read
+    with pytest.raises(updater.ValidationError, match="Independent"):
+        updater.update_runtime(*args)
+    assert fake.reads == 2 and not any("write-flash" in call for call in fake.calls)
+
+
+@pytest.mark.parametrize("change", ["erased", "checksum", "trailing"])
+def test_unvalidated_original_rollback_blocks_write(artifact, tmp_path, change):
+    fake = FakeFlasher(partition_table())
+    if change == "erased":
+        fake.flash[updater.APP_OFFSET:updater.APP_OFFSET + updater.APP_SIZE] = b"\xff" * updater.APP_SIZE
+    elif change == "checksum":
+        fake.flash[updater.APP_OFFSET + 100] ^= 1
+    else:
+        fake.flash[updater.APP_OFFSET + len(app_image()) + 10] = 0
+    with pytest.raises(updater.ValidationError, match="Original|checksum"):
+        updater.update_runtime(*write_args(artifact, tmp_path, fake))
+    assert fake.reads == 2 and not any("write-flash" in call for call in fake.calls)
+
+
+def test_tool_hash_is_rechecked_after_backups(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+    args = list(write_args(artifact, tmp_path, fake))
+
+    def changed_tool(argv, timeout):
+        response = fake(argv, timeout)
+        if "read-flash" in argv and fake.reads == 2:
+            args[1].write_text("executable replaced during backups")
+        return response
+
+    args[-2] = changed_tool
+    with pytest.raises(updater.ValidationError, match="executable changed"):
+        updater.update_runtime(*args)
+    assert not any("write-flash" in call for call in fake.calls)
+
+
+def test_chip_security_rechecked_immediately_before_write(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+
+    def changed_security(argv, timeout):
+        if "get-security-info" in argv and fake.reads:
+            fake.security = "Chip ID: 9\nSecure Boot: Enabled\nFlash Encryption: Disabled\n"
+        return fake(argv, timeout)
+
+    args = list(write_args(artifact, tmp_path, fake))
+    args[-2] = changed_security
+    with pytest.raises(updater.ValidationError, match="security"):
+        updater.update_runtime(*args)
+    assert not any("write-flash" in call for call in fake.calls)
+
+
+def test_write_approval_cannot_be_reused_after_success(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+    args = write_args(artifact, tmp_path, fake)
+    updater.update_runtime(*args)
+    calls = len(fake.calls)
+    with pytest.raises(updater.ValidationError, match="consumed"):
+        updater.update_runtime(*args)
+    assert len(fake.calls) == calls
+    marker = args[-1].with_name(args[-1].name + ".used")
+    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+
+
+def test_write_failure_consumes_approval_without_auto_restore(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+    args = list(write_args(artifact, tmp_path, fake))
+
+    def failed_write(argv, timeout):
+        if "write-flash" in argv:
+            fake.calls.append(argv)
+            raise updater.subprocess.CalledProcessError(1, argv, output="write failed")
+        return fake(argv, timeout)
+
+    args[-2] = failed_write
+    with pytest.raises(updater.ValidationError, match="backup retained"):
+        updater.update_runtime(*args)
+    assert sum("write-flash" in call for call in fake.calls) == 1
+    assert args[-1].with_name(args[-1].name + ".used").is_file()
+    assert not any("erase" in value or "reset" == value for call in fake.calls for value in call)
+
+
+def test_full_original_app_partition_saved_without_padding_reconstruction(artifact, tmp_path):
+    fake = FakeFlasher(partition_table())
+    original = bytes(fake.flash[updater.APP_OFFSET:updater.APP_OFFSET + updater.APP_SIZE])
+    result = updater.update_runtime(*write_args(artifact, tmp_path, fake))
+    folder = Path(result["backup_directory"])
+    report = json.loads((folder / "report.json").read_text())
+    assert (folder / "rollback-app-partition.bin").read_bytes() == original
+    assert report["rollback_app_partition"]["sha256"] == updater.sha256(original)
+    assert report["rollback_app_partition"]["bytes"] == updater.APP_SIZE

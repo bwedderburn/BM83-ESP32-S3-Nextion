@@ -1,6 +1,7 @@
 // On-panel Wi-Fi enrollment, NVS and one-time physical USB
 // transfer to the audio controller. No passwords are sent through ESP-NOW.
 #include "network_setup.h"
+#include "network_recovery_policy.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -17,7 +18,6 @@ namespace {
 constexpr uint32_t EXPORT_WINDOW_MS = 300000;
 constexpr uint32_t CONNECT_TIMEOUT_MS = 20000;
 constexpr uint32_t RETRY_WAIT_MS = 1500;
-constexpr uint32_t PEER_MISSING_MS = 10000;
 constexpr uint32_t TRIAL_TIMEOUT_MS = 60000;
 constexpr size_t MAX_NETWORKS = 20;
 constexpr size_t MAX_PROFILE_JSON = 512;
@@ -47,10 +47,11 @@ bool g_scanning = false, g_scan_was_connected = false;
 uint8_t g_scan_home_channel = 1, g_join_home_channel = 1;
 bool g_connecting = false, g_applying = false, g_retry_pending = false;
 uint32_t g_connect_started = 0, g_retry_at = 0;
-bool g_network_enabled = false, g_peer_known = false, g_peer_fresh = false;
+bool g_network_enabled = false;
+network_recovery::Policy g_recovery;
+network_recovery::CommittedTargetCheck g_target_check;
 bool g_suspended = false, g_resume_network = false;
 bool g_rescan_requested = false;
-uint32_t g_peer_missing_since = 0;
 void (*g_retry_callback)() = nullptr;
 bool (*g_export_prepare)() = nullptr;
 void (*g_export_resume)() = nullptr;
@@ -192,20 +193,40 @@ bool target_connected() {
            memcmp(WiFi.BSSID(), g_target.bssid, 6) == 0;
 }
 
+bool committed_target_connected(uint32_t now) {
+    if (!g_network_enabled || g_connecting || g_trial || g_applying ||
+        !g_active.valid || !g_target.valid || g_target.ssid != g_active.ssid ||
+        memcmp(g_target.bssid, g_active.bssid, 6) != 0) {
+        g_target_check.clear();
+        return false;
+    }
+    const bool associated = WiFi.status() == WL_CONNECTED;
+    const uint32_t generation = g_ip_generation.load(std::memory_order_relaxed);
+    if (g_target_check.due(associated, generation, now)) {
+        g_target_check.record(target_connected(), generation, now);
+    }
+    return g_target_check.confirmed(associated, generation);
+}
+
 void restore_channel(uint8_t channel) {
     if (WiFi.status() != WL_CONNECTED && channel >= 1 && channel <= 13) {
+        g_target_check.clear();
         esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
     }
 }
 
-void begin_join(const Profile &profile, bool applying) {
+enum class JoinOrigin : uint8_t { Explicit, Automatic, Resume };
+
+void begin_join(const Profile &profile, bool applying, JoinOrigin origin = JoinOrigin::Explicit) {
+    g_target_check.clear();
     g_target = profile;
     g_applying = applying;
     g_retry_pending = false;
     g_network_enabled = true;
     g_connecting = true;
     g_connect_started = millis();
-    if (!g_peer_fresh) g_peer_missing_since = g_connect_started;
+    if (applying) g_recovery.disable();  // Never auto-join an uncommitted trial.
+    else if (origin == JoinOrigin::Explicit) g_recovery.enable(g_connect_started);
     wifi_second_chan_t secondary;
     esp_wifi_get_channel(&g_join_home_channel, &secondary);
     g_join_ip_generation = g_ip_generation.load(std::memory_order_relaxed);
@@ -294,9 +315,11 @@ void handle_request(const network_setup_protocol::Request &request) {
             return;
         }
         g_active = g_target;
+        g_target_check.clear();
         g_preferences.remove("pending");
         g_pending = Profile();
         g_trial = g_trial_connected = false;
+        g_recovery.enable(now);  // The USB transaction committed this profile.
         snprintf(g_commit_nonce, sizeof(g_commit_nonce), "%s", request.nonce);
         snprintf(g_apply_result, sizeof(g_apply_result), "COMMITTED");
         queue_line("BMWIFI_ACK", request.nonce, "COMMITTED");
@@ -505,6 +528,7 @@ void retry_both(lv_event_t *) {
     WiFi.setAutoReconnect(false);
     WiFi.disconnect(false, false);
     g_network_enabled = false;
+    g_recovery.disable();  // Only the explicit delayed join re-enables recovery.
     g_retry_callback();  // Explicit user gesture; root sends only NET_RETRY.
     g_retry_pending = true;
     g_retry_at = millis() + RETRY_WAIT_MS;
@@ -569,14 +593,20 @@ void network_setup_tick() {
                 set_status("Could not connect. Check the selected access point and password, then Save again.");
                 snprintf(g_apply_result, sizeof(g_apply_result), "FAILED_CONNECTION");
                 g_completion_pending = true;
-            } else set_status("Saved network unavailable. Using cached art and local controls. Use Retry both to reconnect.");
+            } else {
+                g_recovery.pause(network_recovery::Policy::PauseReason::ApUnavailable, now);
+                set_status(g_recovery.exhausted()
+                    ? "Saved network unavailable. Automatic retries paused; local controls remain usable. Use Retry both to try again."
+                    : "Saved network unavailable. Local controls remain usable; Wi-Fi will retry after the audio link returns.");
+            }
         }
     }
-    if (g_network_enabled && !g_connecting && !g_scanning && g_peer_known && !g_peer_fresh &&
-        static_cast<uint32_t>(now - g_peer_missing_since) >= PEER_MISSING_MS) {
+    g_recovery.connected(committed_target_connected(now), now);
+    if (g_network_enabled && !g_connecting && !g_scanning && g_recovery.peer_missing(now)) {
         // Controls take priority over a unilateral AP connection. Do not keep
         // reconnecting on a channel the audio peer may no longer be using.
         g_network_enabled = false;
+        g_recovery.pause(network_recovery::Policy::PauseReason::PeerMissing, now);
         WiFi.setAutoReconnect(false);
         WiFi.disconnect(false, false);
         g_rescan_requested = true;
@@ -585,7 +615,17 @@ void network_setup_tick() {
             snprintf(g_apply_result, sizeof(g_apply_result), "FAILED_PEER_LINK");
             g_completion_pending = true;
         }
-        set_status("Wi-Fi paused to restore the audio-unit link. Use Retry both after controls reconnect.");
+        set_status(g_trial ? "USB trial lost the audio-unit link. Check setup before committing."
+            : g_recovery.exhausted()
+                ? "Wi-Fi paused for local controls. Automatic retries exhausted; use Retry both to try again."
+                : "Wi-Fi paused to restore local controls. It will retry when the audio-unit link is stable.");
+    }
+    if (!g_network_enabled && !g_connecting && !g_scanning && !g_retry_pending && !g_trial &&
+        !g_export_open && !network_setup_serial_busy() && g_active.valid &&
+        g_recovery.begin_local_join(now)) {
+        // Local AP association only: never NET_RETRY or a controller restart.
+        begin_join(g_active, false, JoinOrigin::Automatic);
+        set_status("Audio-unit link restored. Reconnecting this panel to its saved network...");
     }
 }
 
@@ -640,11 +680,9 @@ bool network_setup_radio_busy() {
     return !g_suspended && (g_connecting || g_scanning || g_retry_pending);
 }
 
-void network_setup_peer_fresh(bool fresh) {
+void network_setup_peer_fresh(bool playback_fresh, bool status_fresh) {
     if (g_suspended) return;
-    if (!g_peer_known || (g_peer_fresh && !fresh)) g_peer_missing_since = millis();
-    g_peer_known = true;
-    g_peer_fresh = fresh;
+    g_recovery.peer(playback_fresh, status_fresh, millis());
 }
 
 bool network_setup_take_rescan_request() {
@@ -671,6 +709,8 @@ bool network_setup_prepare_sleep() {
     g_resume_network = g_active.valid && g_network_enabled;
     revoke_export();
     g_suspended = true;
+    g_target_check.clear();
+    g_recovery.suspend();
     g_network_enabled = false;
     g_rescan_requested = false;
     WiFi.setAutoReconnect(false);
@@ -683,13 +723,17 @@ void network_setup_resume_after_sleep() {
     const bool rejoin = g_resume_network && g_active.valid;
     g_resume_network = false;
     g_suspended = false;
-    g_peer_known = g_peer_fresh = false;
-    g_peer_missing_since = millis();
+    g_target_check.clear();
+    g_recovery.resume(millis());
     // Caller has already rebuilt STA/ESP-NOW after its WiFi.mode(WIFI_OFF).
-    if (rejoin) begin_join(g_active, false);
+    if (rejoin) begin_join(g_active, false, JoinOrigin::Resume);
     else {
         g_network_enabled = false;
         g_rescan_requested = true;
-        set_status("Awake in local control mode. Use Retry both to reconnect Wi-Fi.");
+        set_status(g_recovery.exhausted()
+            ? "Awake in local control mode. Automatic retries exhausted; use Retry both to reconnect Wi-Fi."
+            : g_recovery.auto_paused()
+                ? "Awake in local control mode. Wi-Fi will retry after the audio-unit link returns."
+                : "Awake in local control mode. Use Retry both to reconnect Wi-Fi.");
     }
 }

@@ -18,6 +18,11 @@ RECIPE = Path('/opt/recipe')
 OUTPUT = Path('/output')
 BUILD = ROOT / 'ports/espressif/build-espressif_esp32s3_devkitc_1_n8r8'
 IDF = ROOT / 'ports/espressif/esp-idf'
+HASHLIB_FILES = {
+    'shared-bindings/hashlib/Hash.c', 'shared-bindings/hashlib/Hash.h',
+    'shared-bindings/hashlib/__init__.c', 'shared-module/hashlib/Hash.c',
+    'shared-module/hashlib/Hash.h', 'shared-module/hashlib/__init__.c',
+}
 
 
 def command(*args):
@@ -67,8 +72,18 @@ def check_sources():
                                         'gzip.compress(uncompressed, mtime=0)')
     if (ROOT / web_tool).read_text() != expected_web:
         raise ValueError('Unexpected web asset reproducibility patch')
+    runtime = pins.get('runtime_patches', {})
+    if set(runtime) != {'hashlib_close'}:
+        raise ValueError('Missing or unexpected reviewed native runtime patch')
+    native = runtime['hashlib_close']
+    if (set(native) != {'sha256', 'files'} or set(native['files']) != HASHLIB_FILES
+            or sha(RECIPE / 'hashlib-close.patch') != native['sha256']):
+        raise ValueError('Unexpected native hash lifetime patch provenance')
+    for filename, expected_hash in native['files'].items():
+        if sha(ROOT / filename) != expected_hash:
+            raise ValueError('Unexpected native hash lifetime source: ' + filename)
     dirty = command('git', '-C', str(ROOT), 'diff', 'HEAD', '--name-only', '--ignore-submodules=none')
-    if set(dirty.splitlines()) != {board, web_tool}:
+    if set(dirty.splitlines()) != {board, web_tool} | HASHLIB_FILES:
         raise ValueError('Unexpected modified source beyond the reviewed build patches')
     if command('git', '-C', str(ROOT), 'ls-files', '--others', '--exclude-standard'):
         raise ValueError('Unexpected untracked source')
@@ -159,6 +174,7 @@ def record():
                    'requirements_sha256': sha(RECIPE / 'requirements-build.txt'),
                    'patch_sha256': sha(RECIPE / 'bonds8-cccd24.patch'),
                    'web_assets_patch_sha256': sha(RECIPE / 'reproducible-web-assets.patch'),
+                   'hashlib_close_patch_sha256': sha(RECIPE / 'hashlib-close.patch'),
                    'idf_tools_json_sha256': sha(IDF / 'tools/tools.json')},
         'artifacts': artifacts,
     }
