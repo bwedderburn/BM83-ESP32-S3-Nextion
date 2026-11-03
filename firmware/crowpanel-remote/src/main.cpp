@@ -931,7 +931,9 @@ void loop() {
     }
 
     const uint32_t now = millis();
-    network_setup_peer_fresh(g_now_playing.fresh(now));
+    // Validated transport health is separate from playback-data freshness.
+    // Fresh BLE status proves the peer is present even if BMS2 is delayed.
+    network_setup_peer_fresh(g_now_playing.fresh(now), g_ble_control.status.fresh(now));
     network_setup_tick();
     if (network_setup_take_rescan_request()) {
         g_now_playing.reset();

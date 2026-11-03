@@ -1,0 +1,8 @@
+# A unified patch's blank context lines contain a structural single space.
+# Preserve the reviewed patch bytes on every host and allow only that format.
+tools/circuitpython-runtime/hashlib-close.patch text eol=lf whitespace=-blank-at-eol
+
+# Vendor firmware packages are opaque artifacts: preserve their exact bytes
+# and keep generated HEX records out of text diffs and Copilot summaries.
+/Bluetooth_Basic_Demo_BM83_EVB.X.MSPK2v1.3.4.hex binary
+/IS208x_UI_1.3.25_Demo_Package_MCU_Mode_SPP_Rehex_0F19.HEX binary

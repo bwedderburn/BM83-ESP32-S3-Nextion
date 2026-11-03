@@ -13,6 +13,7 @@ import binascii
 import hashlib
 import json
 import os
+import sys
 
 from utils.ticks import ticks_ms, ticks_recent
 
@@ -92,11 +93,27 @@ def load_profile(path=PROFILE_PATH):
     return validate_profile(json.loads(raw))
 
 
+def _hash_runtime_safe():
+    """Refuse unpatched embedded PSA without allocating a probe context."""
+    name = getattr(getattr(sys, "implementation", None), "name", "")
+    return (name in ("cpython", "pypy")
+            or getattr(hashlib, "_deinit_supported", False) is True)
+
+
 def _sha256(data):
-    # CircuitPython exposes only hashlib.new(); CPython supports it too.
+    if not _hash_runtime_safe():
+        raise RuntimeError("Native hash cleanup requires the reviewed runtime")
     digest = hashlib.new("sha256")
-    digest.update(data)
-    return digest.digest()
+    deinit = getattr(digest, "deinit", None)
+    try:
+        if (getattr(getattr(sys, "implementation", None), "name", "") not in ("cpython", "pypy")
+                and not callable(deinit)):
+            raise RuntimeError("Native hash cleanup API unavailable")
+        digest.update(data)
+        return digest.digest()
+    finally:
+        if callable(deinit):
+            deinit()
 
 
 def tag(key, payload):
@@ -303,6 +320,9 @@ class BadgeRemote:
             self._log("[BADGE] invalid private profile; badge remote disabled")
             return False
         if self._profile is None:
+            return False
+        if not _hash_runtime_safe():
+            self._log("[BADGE] native hash cleanup unavailable; reviewed runtime required")
             return False
         try:
             if not self._open_socket():

@@ -94,9 +94,22 @@ heartbeat shows `espnow=<delivered>/<sent> rt=<retries> ch=<channel>`
 
 With artwork Wi-Fi enabled, both boards join the same 2.4 GHz access-point
 BSSID and ESP-NOW follows that AP's channel. The remote does not hop channels
-while associated, scanning or joining. A lost audio-unit link causes Wi-Fi
-to pause so local ESP-NOW discovery can recover controls; use **Retry both**
-in Wi-Fi setup after the link returns.
+while associated, scanning or joining. A lost audio-unit link causes Wi-Fi to
+pause so local ESP-NOW discovery can recover controls. Transport health comes
+from fresh, validated BMS2 playback or BLS2 BLE-status messages; radio ACKs
+alone are insufficient. Playback text and time still expire independently
+when BMS2 is stale.
+
+After an automatic pause, three seconds of continuously fresh transport allow
+this panel to rejoin its existing committed AP profile. The local attempts
+have a five-second initial cooldown, then 30/60-second backoff, and stop after
+three unsuccessful or unstable joins. Thirty seconds of connected Wi-Fi and
+fresh transport rearm that budget. Recovery never sends `NET_RETRY` or resets
+the controller. Pending USB enrollment and explicit disabled states do not
+gain automatic permission; sleep preserves the reason and attempt budget.
+Use **Retry both** to start another episode after the budget is exhausted.
+That explicit action requests controller retry, which the controller refuses
+while USB is connected; the panel still retries its own association.
 
 - token frame, remote → unit: `BMR1:<seq>:<token>`
 - state frame, unit → remote: binary `BMS2` snapshot fragments (see below)
@@ -284,9 +297,11 @@ the complete two-board enrollment with a new private output directory if
 needed. Loss of power between the two devices' writes cannot be made atomic.
 
 Wi-Fi association and scans share radio time with ESP-NOW. The firmware
-prioritizes the audio-unit link, so a failed connection can leave artwork
-offline until **Retry both** is selected. Cached art remains useful in
-that state; the text/time link still depends on fresh BM83 source data.
+prioritizes the audio-unit link, so a failed connection can temporarily leave
+artwork offline while local discovery restores controls. A returning validated
+peer allows the bounded local recovery described above; **Retry both** remains
+the manual option after those attempts are exhausted. Cached art remains useful
+offline; the text/time link still depends on fresh BM83 source data.
 
 ### Verification status
 
@@ -390,7 +405,9 @@ The detected supply picks the sleep policy:
   then stops ESP-NOW and Wi-Fi. Manual light sleep does not preserve AP
   association. On wake the remote rebuilds the radio, awaits fresh track
   state and rejoins a previously enabled committed network; an offline
-  profile remains in local control mode until **Retry both**. This new
+  profile remains in local control mode; an automatically paused committed
+  profile retains its recovery budget and awaits new validated peer traffic
+  after wake. Explicitly disabled networking stays disabled. This new
   artwork sleep/wake path still needs a battery hardware check.
   Plugging USB into a sleeping remote doesn't wake it; after BOOT it
   switches to USB timings from the voltage step.

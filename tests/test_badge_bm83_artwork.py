@@ -64,6 +64,12 @@ class ArtworkBoundsTests(unittest.TestCase):
         self.fetch_patch = patch.object(artwork, "fetch", SimpleNamespace(AsyncFetch=FakeCore))
         self.fetch_patch.start()
         self.addCleanup(self.fetch_patch.stop)
+        # Explicit host-only seam: never instantiate badge TLS or real sockets.
+        factory_patch = patch.object(
+            artwork, "verified_factory",
+            lambda *args, **kwargs: artwork.fetch.AsyncFetch(*args, **kwargs))
+        factory_patch.start()
+        self.addCleanup(factory_patch.stop)
 
     def request(self, limit=16):
         return artwork.BoundedRequest("https://musicbrainz.org/path?q=1", {},
@@ -87,6 +93,66 @@ class ArtworkBoundsTests(unittest.TestCase):
         self.assertIsNone(app.temp)
         self.assertEqual(app.stage, "")
         self.assertIn("bounded fetch", app.message)
+
+    def test_clock_wait_defers_https_and_ntp_does_not_share_a_fetch_turn(self):
+        clock_ok = [False]
+        recovery = SimpleNamespace(message="Artwork needs a valid UTC clock",
+                                   step=Mock(return_value=False), rearm=Mock())
+        with patch.object(artwork, "ClockRecovery", return_value=recovery), \
+                patch.object(artwork, "clock_ready", side_effect=lambda: clock_ok[0]):
+            app = artwork.Artwork(self.directory.name)
+            app.start("Artist", "Album", 0)
+            self.assertEqual(app.stage, "clock-wait")
+            self.assertEqual(FakeCore.instances, [])
+            recovery.step.assert_not_called()
+            app.step(1, True)
+            recovery.step.assert_called_once_with(1)
+            self.assertEqual(FakeCore.instances, [])
+            # A later frame sees the now-valid UTC clock and only configures I/O.
+            clock_ok[0] = True
+            recovery.step.return_value = True
+            app.step(2, True)
+            self.assertEqual(app.stage, "mb")
+            self.assertEqual(len(FakeCore.instances), 1)
+            self.assertEqual(FakeCore.instances[0].updates, 0)
+
+    def test_clock_wait_cancel_rearm_and_cached_cover_preserve_no_io(self):
+        recovery = SimpleNamespace(message="Artwork needs a valid UTC clock",
+                                   step=Mock(return_value=False), rearm=Mock())
+        with patch.object(artwork, "ClockRecovery", return_value=recovery), \
+                patch.object(artwork, "clock_ready", return_value=False):
+            app = artwork.Artwork(self.directory.name)
+            app.start("Artist", "Album", 0)
+            app.step(1, False)
+            self.assertIsNone(app.clock_request)
+            recovery.step.assert_not_called()
+
+            app.rearm_clock()
+            recovery.rearm.assert_called_once_with()
+            recovery.step.assert_not_called()
+            app.step(2, True)
+            self.assertEqual(app.stage, "clock-wait")
+            recovery.step.assert_not_called()
+            # Cached artwork remains useful even if the clock cannot sync.
+            app.cancel()
+            key = app._cache_key("Artist", "Album")
+            Path(app._path(key, ".jpg")).write_bytes(b"cache")
+            decoded = object()
+            with patch.object(app, "_decode", return_value=decoded):
+                app.start("Artist", "Album", 3)
+            self.assertIs(app.image, decoded)
+            self.assertEqual(app.stage, "")
+            self.assertEqual(FakeCore.instances, [])
+            recovery.step.assert_not_called()
+
+    def test_app_exit_closes_request_before_releasing_cached_tls_context(self):
+        app, core = self.active_lookup()
+        def release():
+            self.assertIsNone(app.request)
+            self.assertEqual(core.resets, 1)
+        with patch.object(artwork, "release_context", side_effect=release) as drop:
+            app.close()
+        drop.assert_called_once_with()
 
     def test_constructor_without_size_controls_is_rejected_before_fetch(self):
         class LegacyCore:

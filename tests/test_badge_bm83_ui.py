@@ -38,6 +38,8 @@ with patch.dict(sys.modules, {"protocol": protocol}):
 
 def method_class(names=("_wifi", "input"), **globals_):
     """Compile only selected methods, excluding imports, setup and run(update)."""
+    if "step" in names:
+        names = (*names, "_artwork_idle")
     tree = ast.parse((APP / "__init__.py").read_text())
     original = next(node for node in tree.body
                     if isinstance(node, ast.ClassDef) and node.name == "BM83Remote")
@@ -342,6 +344,8 @@ class HeaderStatusTests(unittest.TestCase):
     def remote(self, unit):
         return SimpleNamespace(step=Mock(), unit=unit, playback=models.Playback(),
                                ble=models.BleControl(), held_volume=None,
+                               client=7 if unit else None, pending=None,
+                               queue=[], volume_queue=[],
                                feedback="Audio unit authenticated")
 
     def test_header_statuses_are_short_and_wifi_detail_moves_to_feedback(self):
@@ -460,13 +464,14 @@ class LocalRetryTests(unittest.TestCase):
         badge.frame(pressed=("select",))
         app.input(10)
         app.remote.queue_command.assert_not_called()
-        app.artwork.retry.assert_called_once_with(10)
+        app.artwork.retry.assert_not_called()
+        self.assertTrue(app.artwork_retry_pending)
         self.assertFalse(app.wifi_ready)
         self.assertEqual(app.next_wifi, 10)
         self.assertEqual(app.feedback, message)
         self.assertEqual(app.remote.feedback, message)
 
-    def test_local_retry_without_remote_still_retries_badge_side(self):
+    def test_local_retry_without_remote_arms_wifi_and_defers_artwork(self):
         badge = FakeBadge()
         app = method_class(names=("input", "_settings"), badge=badge,
                            clamp_setting_index=models.clamp_setting_index,
@@ -477,7 +482,8 @@ class LocalRetryTests(unittest.TestCase):
         app.erase_confirm, app.wifi_ready, app.next_wifi = False, True, 0
         badge.frame(pressed=("select",))
         app.input(7)
-        app.artwork.retry.assert_called_once_with(7)
+        app.artwork.retry.assert_not_called()
+        self.assertTrue(app.artwork_retry_pending)
         self.assertEqual(app.feedback, self.constant())
 
 

@@ -14,6 +14,7 @@ import zlib
 
 
 BOARD = "espressif_esp32s3_devkitc_1_n8r8"
+ESPTOOL_VERSION = "5.6.0"
 FLASH_SIZE = 0x800000
 APP_OFFSET, APP_SIZE = 0x10000, 0x200000
 TABLE_OFFSET = 0x8000
@@ -207,39 +208,149 @@ def check_device_mac(base, run, expected_mac):
     require({value.upper() for value in matches} == {expected_mac}, "Connected chip base MAC mismatch")
 
 
-def update_runtime(manifest_path, esptool, port, expected_mac, backup_parent, runner=None):
+def approval_record(path, manifest_path, image, tool, port, expected_mac):
+    """Bind a private, explicit approval to these exact bytes and target/tool."""
+    require(path is not None, "An explicit private --approval-file is required")
+    path = Path(path).expanduser()
+    require(path.is_file() and not path.is_symlink(), "Approval must be a regular local file")
+    require(stat.S_IMODE(path.stat().st_mode) & 0o077 == 0,
+            "Approval file must be private (0600)")
+    require(not hasattr(os, "getuid") or path.stat().st_uid == os.getuid(),
+            "Approval file must belong to the current user")
+    require(not path.with_name(path.name + ".used").exists(), "Approval already consumed by a write attempt")
+    approval = json.loads(path.read_text(encoding="utf-8"))
+    require(isinstance(approval, dict) and type(approval.get("schema_version")) is int
+            and approval["schema_version"] == 1
+            and approval.get("kind") == "bm83-runtime-app-only-approval"
+            and approval.get("approved") is True, "Explicit scoped approval missing")
+    expected = {"board": BOARD, "manifest_sha256": sha256(Path(manifest_path).read_bytes()),
+                "app_sha256": sha256(image), "port": port, "expected_mac": expected_mac,
+                "flash_size": FLASH_SIZE, "app_offset": APP_OFFSET, "app_partition_size": APP_SIZE,
+                "preserve_outside_app": True, "no_reset": True}
+    require(all(approval.get(name) == value and type(approval.get(name)) is type(value)
+                for name, value in expected.items()), "Approval scope/target/artifact mismatch")
+    tool_approval = approval.get("esptool")
+    require(isinstance(tool_approval, dict) and tool_approval.get("path") == str(tool)
+            and tool_approval.get("version") == ESPTOOL_VERSION
+            and tool_approval.get("sha256") == sha256(tool.read_bytes()),
+            "Approval esptool path/version/SHA256 mismatch")
+    return approval
+
+
+def check_tool(tool, run, expected_hash):
+    require(not tool.is_symlink() and sha256(tool.read_bytes()) == expected_hash,
+            "Reviewed esptool executable changed")
+    version = run([str(tool), "version"], timeout=15)
+    versions = re.findall(r"(?mi)^\s*(?:esptool(?:\.py)?\s+v)?(\d+\.\d+\.\d+)\s*$", version)
+    require(bool(versions) and set(versions) == {ESPTOOL_VERSION},
+            "Actual esptool version must be exactly 5.6.0")
+
+
+def check_chip_security(base, run):
+    """Read-only checks; absent/ambiguous security information fails closed."""
+    flash = run(base + ["flash-id"], timeout=30)
+    sizes = re.findall(r"(?mi)^\s*Detected flash size:\s*(\S+)\s*$", flash)
+    require(sizes == ["8MB"], "Connected chip must report exactly 8MB flash")
+    security = run(base + ["get-security-info"], timeout=30)
+    for label, expected in (("Chip ID", "9"), ("Secure Boot", "Disabled"),
+                            ("Flash Encryption", "Disabled")):
+        values = re.findall(r"(?mi)^\s*" + re.escape(label) + r":\s*(\S+)\s*$", security)
+        require(values == [expected], "Unsupported/unknown chip security state: " + label)
+    return {"chip_id": 9, "flash_size": FLASH_SIZE, "secure_boot": False, "flash_encryption": False}
+
+
+def extract_original_app(partition):
+    """Extract an exact validated unsigned rollback image from its partition."""
+    require(len(partition) == APP_SIZE, "Original app partition incomplete")
+    require(partition[0] == 0xE9 and 1 <= partition[1] <= 16,
+            "Original app header invalid; rollback unavailable")
+    position = 24
+    for _ in range(partition[1]):
+        require(position + 8 <= APP_SIZE, "Original app segment header truncated")
+        size = struct.unpack_from("<I", partition, position + 4)[0]
+        position += 8 + size
+        require(size > 0 and position <= APP_SIZE, "Original app segment exceeds partition")
+    end = ((position + 16) // 16) * 16 - 1 + 33
+    require(end <= APP_SIZE, "Original app digest exceeds partition")
+    image = partition[:end]
+    validate_app_image(image)
+    require(partition[end:] == b"\xff" * (APP_SIZE - end),
+            "Original app has unsupported trailing data; rollback refused")
+    return image
+
+
+def update_runtime(manifest_path, esptool, port, expected_mac, backup_parent, runner=None, approval_path=None):
     _, _, image, table = validate_manifest(manifest_path)
     expected_mac = normalize_mac(expected_mac)
     tool = Path(esptool).expanduser()
-    require(tool.is_absolute() and tool.is_file() and os.access(str(tool), os.X_OK),
+    require(tool.is_absolute() and tool.is_file() and not tool.is_symlink() and os.access(str(tool), os.X_OK),
             "An explicitly reviewed absolute esptool executable is required")
     require(isinstance(port, str) and port and not port.startswith("-") and
             not any(char.isspace() or ord(char) < 32 for char in port), "Invalid explicit serial port")
     run = runner or execute
+    approval = approval_record(approval_path, manifest_path, image, tool, port, expected_mac)
+    tool_hash = approval["esptool"]["sha256"]
+    check_tool(tool, run, tool_hash)
     base = [str(tool), "--chip", "esp32s3", "--port", port, "--baud", "921600",
             "--before", "no-reset", "--after", "no-reset"]
     check_device_mac(base, run, expected_mac)
+    security = check_chip_security(base, run)
     folder = private_backup_directory(backup_parent)
     before_path = private_file(folder, "flash-before.bin")
+    confirm_path = private_file(folder, "flash-before-confirm.bin")
     after_path = private_file(folder, "flash-after.bin")
     report_path = private_file(folder, "report.json")
     report = {"board": BOARD, "expected_mac": expected_mac, "app_sha256": sha256(image),
-              "write_attempted": False, "verified": False}
+              "write_attempted": False, "verified": False, "chip_security": security,
+              "esptool_version": ESPTOOL_VERSION, "esptool_sha256": tool_hash,
+              "approval_sha256": sha256(Path(approval_path).read_bytes())}
     try:
         run(base + ["read-flash", "0x0", "0x800000", str(before_path),
                     "--flash-size", "8MB"], timeout=240)
         before_path.chmod(0o600)
         before = before_path.read_bytes()
         require(len(before) == FLASH_SIZE, "Full 8MiB backup incomplete")
+        run(base + ["read-flash", "0x0", "0x800000", str(confirm_path),
+                    "--flash-size", "8MB"], timeout=240)
+        confirm_path.chmod(0o600)
+        confirmed = confirm_path.read_bytes()
+        require(len(confirmed) == FLASH_SIZE and confirmed == before,
+                "Independent full pre-write backups differ/incomplete; no write performed")
+        report["independent_backups_identical"] = True
         require(before[TABLE_OFFSET:TABLE_OFFSET + len(table)] == table,
                 "Device partition-table prefix differs from candidate; no write performed")
         report["ota_guard"] = validate_ota_metadata(before[OTA_OFFSET:OTA_OFFSET + OTA_SIZE])
         report["before_sha256"] = sha256(before)
+        rollback = extract_original_app(before[APP_OFFSET:APP_OFFSET + APP_SIZE])
+        rollback_path = private_file(folder, "rollback-app-validated.bin")
+        rollback_path.write_bytes(rollback)
+        require(rollback_path.read_bytes() == rollback, "Original app rollback copy verification failed")
+        report["rollback_app"] = {"file": rollback_path.name, "sha256": sha256(rollback),
+                                  "bytes": len(rollback), "offset": APP_OFFSET,
+                                  "offline_validated": True}
+        original_partition = before[APP_OFFSET:APP_OFFSET + APP_SIZE]
+        rollback_partition_path = private_file(folder, "rollback-app-partition.bin")
+        rollback_partition_path.write_bytes(original_partition)
+        require(rollback_partition_path.read_bytes() == original_partition,
+                "Original full app partition copy verification failed")
+        report["rollback_app_partition"] = {"file": rollback_partition_path.name, "bytes": APP_SIZE,
+                                            "sha256": sha256(original_partition), "offset": APP_OFFSET}
         # Flash the bytes validated above, not an artifact that another build
         # could replace between validation and this write.
         app_copy = private_file(folder, "app-validated.bin")
         app_copy.write_bytes(image)
+        require(app_copy.read_bytes() == image, "Private candidate copy verification failed")
+        check_tool(tool, run, tool_hash)
         check_device_mac(base, run, expected_mac)
+        require(check_chip_security(base, run) == security, "Chip security changed before write")
+        # A failed write/readback still needs review and a fresh scoped approval.
+        approval_marker = Path(approval_path).with_name(Path(approval_path).name + ".used")
+        marker_fd = os.open(str(approval_marker), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(marker_fd, "w", encoding="utf-8") as handle:
+            json.dump({"approval_sha256": report["approval_sha256"], "backup_directory": str(folder),
+                       "app_sha256": sha256(image)}, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         report["write_attempted"] = True
         run(base + ["write-flash", "--flash-size", "8MB", "0x10000", str(app_copy)], timeout=180)
         run(base + ["read-flash", "0x0", "0x800000", str(after_path),
@@ -269,15 +380,16 @@ def main(argv=None):
     parser.add_argument("--esptool", help="Reviewed absolute executable path; required with --write")
     parser.add_argument("--port", help="Explicit ROM-loader serial port; required with --write")
     parser.add_argument("--expected-mac", help="Expected chip BASE MAC, not its BLE-derived address")
+    parser.add_argument("--approval-file", type=Path, help="Private approval binding exact artifact, tool and target")
     parser.add_argument("--backup-dir", type=Path, default=Path.home() / ".bm83-runtime-backups")
     args = parser.parse_args(argv)
     try:
         manifest, _, image, _ = validate_manifest(args.manifest)
         if args.write:
-            require(args.esptool and args.port and args.expected_mac,
-                    "--write requires --esptool, --port and --expected-mac")
+            require(args.esptool and args.port and args.expected_mac and args.approval_file,
+                    "--write requires --esptool, --port, --expected-mac and --approval-file")
             result = update_runtime(args.manifest, args.esptool, args.port,
-                                    args.expected_mac, args.backup_dir)
+                                    args.expected_mac, args.backup_dir, approval_path=args.approval_file)
         else:
             result = {"mode": "offline-validation", "board": manifest["board"],
                       "app_bytes": len(image), "app_sha256": sha256(image), "write_performed": False}
