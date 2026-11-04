@@ -115,13 +115,13 @@ Check at minimum:
   latest 10.x release (`gh api repos/adafruit/circuitpython/releases/latest`); summarize changelog
   items relevant to ESP32-S3, UART, BLE/NimBLE, and `supervisor`.
 - **Adafruit bundle libraries** expected on-device (e.g. `adafruit_ble`, `adafruit_hid`): confirm
-  which versions `DEPLOYMENT.md`/docs assume, and whether the current bundle changed APIs.
-- **mpy-cross** in `build-circuitpython-dist.yml`: it grabs "latest" from S3 at build time —
-  reproducibility risk; recommend a pinning + refresh strategy.
-- **Python CI matrix** (3.9/3.10/3.11): 3.9 is past end-of-life (Oct 2025). Recommend the new
-  matrix (drop 3.9, add 3.12/3.13) with any compat caveats found in the codebase.
-- **Dev tools** (flake8, pytest, bandit — currently unpinned at install time): report what resolves
-  today, whether a constraints file is warranted, and any new-major breaking notes.
+  which versions `docs/guides/deployment.md`/docs assume, and whether the current bundle changed APIs.
+- **mpy-cross** in `build-circuitpython-dist.yml`: verify the selected compiler against
+  the version and checksum in `tools/mpy_cross_pin.env` and the generated build record.
+- **Python CI matrix** (3.11/3.12/3.13): verify the workflow and required-check names agree;
+  report compatibility caveats found in the codebase.
+- **Dev tools** (flake8, pytest, Bandit and pip-audit): verify the pins in
+  `requirements-reliability.txt` and report relevant advisories or major-version changes.
 - **GitHub Actions** versions across workflows (Dependabot covers bumps; you flag majors with
   behavioral changes) and the SHA-pinned Codacy action.
 - Run the advisory check (`gh-advisory-database` tool if available in your environment) on
@@ -146,15 +146,15 @@ Check at minimum:
 
 ## Phase 6 — Documentation drift
 
-Check `README.md`, `DEPLOYMENT.md`, `NEXTION_SETUP.md`, `CODE_REFERENCE.md`, and
+Check `README.md`, `docs/guides/deployment.md`, `docs/guides/nextion-setup.md`, `docs/reference/code-reference.md`, and
 `.github/copilot-instructions.md` against current code reality. Flag stale pin maps, commands,
 or module descriptions. Propose a `docs/power-contract.md` if the power-evidence rules are not
 yet documented outside code/tests.
 
 ## Deliverables (exact)
 
-1. **`docs/code-review-<YYYY-MM-DD>.md`** (match the style of the existing
-   `docs/code-review-*.md` files): executive summary; findings table
+1. **`docs/reviews/code-review-<YYYY-MM-DD>.md`** (match the style of the existing
+   `docs/reviews/code-review-*.md` files): executive summary; findings table
    (ID | Severity | Effort | Confidence | Location | Summary); the Phase 3 upgrade matrix;
    detailed findings with evidence; phased plan:
    - **Phase A — safe now** (implemented in this session)

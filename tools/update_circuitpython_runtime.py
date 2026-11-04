@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import stat
 import struct
-import subprocess
+import subprocess  # nosec B404 # guarded esptool argv; explicit approval required for device writes
 import tempfile
 import zlib
 

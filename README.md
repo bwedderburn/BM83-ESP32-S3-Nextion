@@ -1,312 +1,115 @@
-# ESP32-S3 Audio Remote Control (BM83 + Nextion + BLE HID)
+# BM83 Remote — ESP32-S3, Nextion and CrowPanel
 
-This project implements a CircuitPython-based remote control system for audio devices using:
+An audio controller and touchscreen remote built around the Microchip BM83.
+The BM83 carries Bluetooth audio; an ESP32-S3 running CircuitPython sends UART
+control commands, reads playback metadata and drives a Nextion display. An
+optional CrowPanel adds a wireless Now Playing screen, playback controls and
+album artwork.
 
-- **ESP32-S3 DevKitC-1**
-- **BM83 Bluetooth module** (A2DP, AVRCP, HID)
-- **Nextion NX3224F028** UART touchscreen
-- **BLE HID** consumer-control-only volume/mute support (Mac, Windows, Linux and iPhone)
+## Hardware and connections
 
-## 📦 Features
+| Component | Role |
+| --- | --- |
+| ESP32-S3 DevKitC-1 | CircuitPython controller, UART interfaces and BLE HID Consumer Control |
+| Microchip BM83 module / breakout | Bluetooth audio and AVRCP transport/metadata |
+| Nextion NX3224F028 | Local UART touchscreen |
+| Elecrow CrowPanel 7-inch ESP32-S3 | Optional 800×480 ESP-NOW remote and Wi-Fi artwork display |
+| UDA1334A I²S DAC and Adafruit PCM5100 I²S DAC | External audio-output hardware used in the project; select the wiring and configuration for the actual board |
 
-- AVRCP metadata polling and playback control
-- AUX input detection (inferred via AVRCP silence)
-- BLE HID consumer control (volume, mute)
-- Nextion UI for metadata, EQ, AUX indication
-- Robust BLE bond recovery and advertising
-- CrowPanel Pause/Enable for BLE volume-remote handoff while keeping saved bonds
+The BM83 audio connection and the ESP32's **B's Groovy BT CTRL** BLE volume
+connection are separate. Audio can continue even if the controller or metadata
+path fails. Pin assignments in
+[`firmware/circuitpython/main.py`](firmware/circuitpython/main.py) are the source
+of truth for the controller wiring. Both DAC boards are part of the project's
+hardware inventory; match each board's wiring to the actual audio configuration.
+See the [hardware reference](docs/reference/hardware.md).
 
-## Optional GitHub Universe badge add-on
+## Current functionality
 
-[BM83 Remote](addons/universe-badge/README.md) contains the user's Universe badge
-client, icon, setup notes, and host tests. It lives outside `firmware/` and is
-not included in `deploy.sh` or the CircuitPython distribution. A matching BMW1
-authenticated UDP receiver is required for live control; the current `main`
-snapshot (`d2e773d`) does not contain that receiver. The import does not establish
-hardware interoperability. The [Universe workshop repository](https://github.com/bwedderburn/github-universe-2026)
-also keeps a matching client snapshot beside World Capitals.
+- BM83 UART power, playback, track and EQ control, plus AVRCP metadata/timing.
+- Nextion metadata, playback clock, EQ and AUX indication.
+- BLE HID relative volume up/down controls on the connected source.
+- CrowPanel Now Playing, compact transport/volume buttons, Settings and battery
+  indication; its progress bar displays playback position and does not seek.
+- Optional Wi-Fi album artwork lookup on CrowPanel using track metadata.
+- Bond-preserving Pause/Enable controls for handing the volume remote between
+  saved hosts, with confirmed state rather than radio-delivery inference.
+- An optional [Mac metadata bridge](docs/guides/mac-metadata-bridge.md) for sources
+  that omit native AVRCP track text. Bluetooth continues to carry the audio.
 
-## 📁 Project Structure
+**Mute synchronization has not been pursued and is not a supported feature.**
+The code contains a source-native HID mute command, but there is no reported
+source mute state to synchronize. There is also no verified absolute-volume
+feedback: counting HID requests cannot produce a trustworthy volume percentage.
 
-```
-firmware/circuitpython/
-├── boot.py                  # Disable maintenance BLE advertising before startup
-├── main.py                  # Main control loop (entry point)
-└── lib/
-    ├── blehid/
-    │   └── ble.py           # BLE HID (volume/mute) logic
-    ├── bm83/
-    │   └── bm83.py          # BM83 Bluetooth AVRCP/A2DP interface
-    ├── nextion/
-    │   └── display.py       # Nextion screen interface
-    └── utils/
-        ├── common.py        # Shared helpers (dprint, formatting)
-        ├── compat.py        # Compatibility helpers
-        └── ticks.py         # Wrap-safe ms ticks for sub-second timers
+The optional [Universe badge add-on](addons/universe-badge/README.md) and matching
+authenticated receiver source are included. Their integration and reliability
+work remain subject to the [physical acceptance gates](docs/reliability/README.md).
+Host tests do not establish stable radio, audio or screen behavior.
 
-dist/circuitpython/
-├── boot.py                  # Early runtime configuration (.py)
-├── main.py                  # Optimized deployment entry point (.py)
-└── lib/                     # Compiled project modules (.mpy)
-```
+## Start here
 
-**Source of truth:** Pin assignments are defined in `firmware/circuitpython/main.py`.
+1. Read the [documentation index](docs/README.md) and
+   [Nextion setup](docs/guides/nextion-setup.md).
+2. Use the [deployment guide](docs/guides/deployment.md) for baseline `.py` setup,
+   backups and rollback. It includes the installed-controller recovery exception.
+3. Read the [CrowPanel guide](firmware/crowpanel-remote/README.md) for its separate
+   firmware, ESP-NOW pairing and one-time USB Wi-Fi/artwork setup.
+4. Use the [BLE handoff guide](docs/guides/ble-volume-handoff.md) to switch saved
+   hosts without erasing bonds. A competing host can reconnect first.
 
-## 🚀 Deployment Instructions
+For compiled project libraries, follow the
+[pinned CircuitPython build guide](docs/guides/building.md). Keep `boot.py` and
+`main.py` as source, and regenerate `dist/` from canonical firmware rather than
+editing generated files.
 
-Deployment is intentionally split into two explicit modes:
-
-### 1) Baseline Mode (.py, recommended first)
-
-Use this mode while bringing up new hardware, debugging regressions, or reproducing bugs.
-
-1. Install CircuitPython matching `tools/mpy_cross_pin.env`. For four or more saved BLE hosts and bond-preserving runtime updates, see [BLE runtime updates](docs/ble-runtime-update.md).
-2. Copy `firmware/circuitpython/boot.py` and `main.py` to `CIRCUITPY/`, and copy `firmware/circuitpython/lib/*` to `CIRCUITPY/lib/`.
-3. Install required libraries:
-   - `adafruit_ble`
-   - `adafruit_hid`
-4. Connect:
-   - **BM83** via UART (`IO17` / `IO18`)
-   - **Nextion** via UART (`IO15` / `IO16`)
-5. **Configure Nextion HMI buttons** - See [NEXTION_SETUP.md](NEXTION_SETUP.md) for press/release event configuration.
-6. Reset the board. `main.py` will execute and start all services.
-
-### 2) Optimized Mode (.mpy, production)
-
-Switch to this mode only after baseline `.py` deployment is validated on-device.
-
-1. Build optimized output with `./build_mpy.sh`.
-2. Copy all contents of `dist/circuitpython/` to the root of `CIRCUITPY` (includes `boot.py`, `main.py`, compiled `.mpy` modules in `lib/`, and configuration/assets if present).
-3. Ensure required Adafruit libraries are still present in `CIRCUITPY/lib/`:
-   - `adafruit_ble/`
-   - `adafruit_hid/`
-4. Reset and validate runtime behavior.
-
-**For deployment workflows, rollbacks, and troubleshooting, see [DEPLOYMENT.md](DEPLOYMENT.md).**
-
-### 📦 Building Optimized .mpy Files
-
-The repository includes a `build_mpy.sh` script to compile Python modules into bytecode (`.mpy` files) for improved performance and reduced memory usage on CircuitPython devices.
-
-#### Prerequisites
-
-The build uses **CircuitPython 10.3.1's `mpy-cross`**. The required version and
-the Linux x86_64 download's SHA-256 are recorded in
-[`tools/mpy_cross_pin.env`](tools/mpy_cross_pin.env). `build_mpy.sh` checks the
-version on every host and records the selected compiler in `dist/BUILD_INFO.txt`.
-It refuses other versions (set `MPY_CROSS_ALLOW_UNPINNED=1` only for experiments).
-
-The automatic fetcher supports **Linux x86_64 and x86_64 WSL only**:
-
-```bash
-# Linux x86_64 / x86_64 WSL: download and verify into tools/mpy-cross/
-./scripts/fetch_mpy_cross.sh
-```
-
-On **macOS, Linux ARM or Windows Git Bash**, install or build a native compiler
-for that host from [Adafruit's CircuitPython 10.3.1 source](https://github.com/adafruit/circuitpython/tree/10.3.1/mpy-cross),
-then select it with `MPY_CROSS` as shown below. The fetcher's Linux executable
-cannot run directly on macOS or Windows. Git Bash requires a native Windows
-compiler; alternatively, use the Linux fetcher inside x86_64 WSL.
-
-Do not use `pip install mpy-cross`: that installs MicroPython's compiler, which
-is a different compiler. Check that `--version` starts with `CircuitPython 10.3.1`.
-
-#### Building with bash
-
-```bash
-# Linux x86_64 / WSL, after the fetch above:
-bm83_mpy_cross="$PWD/tools/mpy-cross/mpy-cross"
-"$bm83_mpy_cross" --version
-MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
-```
-
-For macOS or another host, replace the example path with your installed native
-CircuitPython 10.3.1 compiler. Quote the path so spaces work:
-
-```bash
-# Example native macOS path; replace with your actual installed compiler.
-bm83_mpy_cross="$HOME/Tools/CircuitPython 10.3.1/mpy-cross"
-# Git Bash example instead: bm83_mpy_cross="/c/Tools/CircuitPython 10.3.1/mpy-cross.exe"
-"$bm83_mpy_cross" --version
-MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
-```
-
-Both commands produce the same output layout:
+## Repository layout
 
 ```text
-# Output will be in dist/circuitpython/
-# ├── boot.py           (early runtime configuration, kept as .py)
-# ├── main.py           (kept as .py - entry point must not be compiled)
-# ├── settings.toml     (config file, if present)
-# └── lib/              (compiled modules)
-#     ├── bm83/
-#     │   ├── __init__.mpy
-#     │   └── bm83.mpy
-#     ├── nextion/
-#     │   ├── __init__.mpy
-#     │   └── display.mpy
-#     ├── blehid/
-#     │   ├── __init__.mpy
-#     │   └── ble.mpy
-#     └── utils/
-#         ├── __init__.mpy
-#         └── common.mpy
+firmware/circuitpython/    Canonical audio-controller source
+firmware/crowpanel-remote/ CrowPanel Arduino/LVGL source and build configuration
+addons/universe-badge/     Optional badge client, assets and host tests
+dist/                     Generated CircuitPython deployment artifacts
+docs/                     Guides, reviews, validation, troubleshooting and references
+scripts/                  Host checks and build/support scripts
+tests/                    Host regression tests
+tools/                    Provisioning, diagnostics and pinned native-build recipes
+recovered_src/            Historical reference; not built or deployed
 ```
 
-#### Building with WSL (Windows Subsystem for Linux)
+Vendor manuals, firmware packages and utilities are consolidated under
+[`docs/reference/vendor/bm83/`](docs/reference/vendor/bm83/README.md), with a
+byte-hash inventory. They retain their upstream terms and are not project
+release assets.
 
-```bash
-# Open WSL terminal (Ubuntu, Debian, etc.)
-cd /mnt/c/path/to/BM83-ESP32-S3-Nextion
+## Development and validation
 
-# Fetch the pinned mpy-cross if not already present
-./scripts/fetch_mpy_cross.sh
-
-# Check the compiler, then run the build script
-bm83_mpy_cross="$PWD/tools/mpy-cross/mpy-cross"
-"$bm83_mpy_cross" --version
-MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
-
-# The output in dist/circuitpython/ can be copied to your CIRCUITPY drive
-# from Windows Explorer at the WSL path shown after build completes
+```sh
+python -m pip install -r requirements-reliability.txt
+python -m pytest -q
+python scripts/check_reliability_setup.py
 ```
 
-#### Deployment After Build
+The complete host suite targets Linux; some fixtures depend on POSIX permissions
+and native build tools. See [testing](docs/guides/testing.md) for optional compiler
+gates, and [scan status](docs/security/SCAN-STATUS.md) for security-scan coverage.
+Host tests, native compilation and physical acceptance are separate evidence.
 
-1. Copy the entire contents of `dist/circuitpython/` to your `CIRCUITPY` drive.
-2. A library-only update does not install changed startup behavior. When updating BLE handoff support, include both `boot.py` and `main.py` as well as the compiled libraries.
-3. Make sure the required Adafruit libraries are present in `CIRCUITPY/lib/`:
-   - `adafruit_ble/`
-   - `adafruit_hid/`
-4. Reset the board.
+## Known limits and release status
 
-**Recommended flow**: Validate first with plain `.py` files from `firmware/circuitpython/` (`boot.py`, `main.py` and project libraries), then switch to compiled library artifacts from `dist/circuitpython/` for production.
+- Windows Apple Music can retain a stalled audio session after BM83 power cycling.
+  The successful recovery used a source-side Bluetooth audio disconnect/reconnect;
+  unit-side retries did not establish automatic recovery. See the
+  [hardware test record](docs/validation/hardware-test-limitations.md).
+- BLE/AVRCP contention, native runtime teardown and receiver reliability still have
+  explicit investigation and acceptance gates in the
+  [reliability runbook](docs/reliability/README.md).
+- Metadata availability, including genre and playback timing, depends on the source.
+  Online artwork is a lookup result, not artwork retrieved from BM83 UART.
+- The [first-release draft](docs/releases/v0.1.0.md) describes the candidate scope,
+  proposed assets and remaining gates. Drafting a release does not qualify it for
+  unattended deployment.
 
-**Note**: The build script preserves `boot.py` and `main.py` as source. Project library modules are compiled to `.mpy` and placed in `dist/circuitpython/lib/`.
-
-**Important compatibility warning**: The `mpy-cross` version used for compilation must match the CircuitPython firmware version on your device. The pin in `tools/mpy_cross_pin.env` records which version that is; when the device's CircuitPython is upgraded, bump the pin in the same change. If you encounter `ValueError: incompatible .mpy file` errors, check the device version against the pin.
-
-**Quick rollback (.mpy → .py)**:
-1. Delete deployed project folders/files from `CIRCUITPY` (`lib/bm83`, `lib/nextion`, `lib/blehid`, `lib/utils`, and project `main.py` if needed).
-2. Re-copy `firmware/circuitpython/*` to `CIRCUITPY`.
-3. Reset the board and re-test in baseline `.py` mode.
-
-## 🧪 Testing
-
-Host tests live under `tests/` and can be run with `pytest` on compatible platforms.
-
-### Test categories
-
-| Category | Scope | File(s) |
-| --- | --- | --- |
-| Core unit tests | Core host-simulatable logic and regressions | `tests/test_*.py` (excluding specialized suites below) |
-| Parser stress tests | Noisy/fragmented parser burst behavior | `tests/test_parser_stress.py` |
-| Host artifact parity | Verifies generated host artifacts match expected outputs | `tests/test_host_artifact_parity.py` |
-| Optional `.mpy` build checks | Verifies `.mpy` build flow when explicitly enabled | `tests/test_mpy_build.py` with `RUN_MPY_TESTS=1` |
-
-### Example commands
-
-```bash
-# Normal CI-like host run
-pytest -q
-
-# Optional .mpy verification run (requires mpy-cross)
-RUN_MPY_TESTS=1 pytest -q tests/test_mpy_build.py
-
-# Full run including optional .mpy checks
-RUN_MPY_TESTS=1 pytest -q
-```
-
-Hardware behavior is only partially covered by host tests; see [docs/hardware-test-limitations.md](docs/hardware-test-limitations.md) for details.
-
-## 📚 Documentation
-
-- **[NEXTION_SETUP.md](NEXTION_SETUP.md)** - Complete guide for configuring Nextion HMI button press/release events
-- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Firmware deployment and update instructions
-- **[CODE_REFERENCE.md](CODE_REFERENCE.md)** - Detailed code reference and API documentation
-- **[BLE volume-remote handoff](docs/ble-volume-handoff.md)** - Pause/Enable, stable naming and switching saved hosts without erasing bonds
-- **[BLE runtime updates](docs/ble-runtime-update.md)** - Eight-host capacity and verified app-only updates that preserve the bond store
-
-## 🆘 Troubleshooting
-
-- On Macs whose Bluetooth stack omits track metadata, the optional
-  [Mac Wi-Fi metadata bridge](docs/mac-metadata-bridge.md) supplies title,
-  artist and album while audio continues over Bluetooth.
-- The volume remote exposes only Consumer Control HID reports, with keyboard,
-  mouse and boot-keyboard interfaces omitted. It should not make an iPhone
-  treat the unit as a typing keyboard. After updating from the old composite
-  HID profile, the phone may need to forget and re-pair the BLE control device
-  to discard its cached profile. This is a one-time profile migration, not a
-  normal host-switching step. Verify volume up/down, mute and the onscreen
-  keyboard together; normal audio/metadata still use BM83 Bluetooth.
-- CrowPanel's Now Playing `Mute` button sends `BT_MUTE` through the same
-  paired remote path as its other controls. It sends the source's native
-  Consumer Control mute command; it does not claim a mute state that the
-  source has not reported. It is ignored during AUX playback. A later
-  Nextion HMI button can send `print "BT_MUTE"` using the existing terminator
-  convention; this firmware update does not modify the Nextion HMI project.
-- To switch a saved BLE host, use CrowPanel **Pause volume remote / Enable
-  volume remote**; follow the [handoff guide](docs/ble-volume-handoff.md).
-  Forget/Remove and `BT_EBIND` erase pairing information and are not handoff steps.
-- If metadata stops updating, ensure AVRCP is supported by the source device.
-- If CircuitPython auto-reloads on file save, it's disabled in code.
-
-### 🔄 Recovery Helper for Lost Branches
-
-If you lose feature branches but still have a local clone, use `scripts/recover_git_candidates.sh` to scan reflog and dangling objects for recoverable commit SHAs and optionally create rescue branches.
-
-```bash
-# Show likely candidates
-./scripts/recover_git_candidates.sh
-
-# Create rescue/auto-* branches for candidates (default prefix)
-./scripts/recover_git_candidates.sh --create-branches
-
-# Or use a custom prefix, e.g. rescue/* instead of rescue/auto-*
-./scripts/recover_git_candidates.sh --create-branches --branch-prefix rescue/
-```
-
-This is especially useful when your board still runs (`main.py` + `lib/*.mpy`) but you've deleted your local feature branches.
-
-## 🐛 Known Issues & Current Investigations
-
-### Implemented safeguards
-
-The mitigations below are already in code and should be treated as current protections (not open work items):
-
-- **BLE operation gating + retry/backoff hardening** in `firmware/circuitpython/lib/blehid/ble.py`.
-  - Critical-section windows gate overlapping heavy BLE operations.
-  - Pairing/advertising/erase paths use retry accounting and bounded backoff.
-  - E-BIND handling is deferred/throttled (`request_erase_bonds`) to avoid re-entrant erase flow.
-  - The erase itself is staged across `tick()` calls (>= 50 ms settle per step) instead of
-    sleeping inside the main loop, so the UARTs keep being serviced during a bond wipe.
-
-- **Metadata scheduling guard during BLE-critical windows** in `firmware/circuitpython/main.py`.
-  - `schedule_attrs_with_ble_guard(...)` delays AVRCP attribute requests when BLE is in a critical section.
-  - Main loop also reduces AVRCP polling aggressiveness while BLE critical activity is active.
-
-- **Parser/queue protection against burst/noise traffic** in:
-  - `firmware/circuitpython/lib/nextion/display.py` (queue cap, token dedupe/throttle, burst limits), and
-  - `firmware/circuitpython/lib/bm83/bm83.py` (RX buffer ceiling/overflow reset, poll burst limiting, request throttles).
-
-### Active Issues
-
-- **#37 Residual instability under worst-case BLE + AVRCP contention**
-  - Status: **Open** (risk reduced by current safeguards, but not fully eliminated under all hardware/load combinations).
-  - Scope: freeze/crash risk when BLE bond-management/pairing work overlaps sustained BM83 traffic and rapid UI events.
-
-  **How to reproduce/observe**:
-  - Start with BM83 connected and metadata actively updating.
-  - Generate high event load (rapid Nextion presses including repeated `BT_EBIND` while BLE pairing/reconnect is active).
-  - Observe serial logs for repeated BLE retry/backoff activity followed by stalled UI updates or watchdog-like freeze symptoms.
-  - Mark pass/fail by run length (e.g., no freeze over a defined soak window such as 15-30 minutes under repeated stress).
-
-### Previously Resolved (Monitoring for Regression)
-
-- **#35 Hard crash after EQ/power interactions** – Mitigated in current firmware; retained here only for regression watch.
-
-  **How to reproduce/observe**:
-  - Repeatedly cycle EQ and power actions from Nextion while connected/disconnected transitions occur.
-  - Confirm no hard crash, no interpreter disconnect, and continued responsiveness of metadata + controls.
-  - Treat any recurrence as regression and reopen with captured logs.
+Project code is provided under [LICENSE](LICENSE); bundled third-party material
+retains its own terms. See [security reporting](SECURITY.md) and the
+[code of conduct](CODE_OF_CONDUCT.md).

@@ -1,17 +1,17 @@
 # GitHub Copilot Instructions for BM83-ESP32-S3-Nextion
 
 ## Project Overview
-This repository contains CircuitPython firmware for an **ESP32-S3** board that host-controls a **Microchip BM83 Bluetooth audio module** over UART, integrates a **Nextion HMI display** over UART, and optionally provides **BLE HID ConsumerControl** for volume/mute.
+This repository contains CircuitPython firmware for an **ESP32-S3** board that host-controls a **Microchip BM83 Bluetooth audio module** over UART, integrates a **Nextion HMI display** over UART, and optionally provides **BLE HID ConsumerControl** for relative volume control. A HID mute command exists, but source mute-state synchronization has not been pursued.
 
 The main entrypoint is:
 - `firmware/circuitpython/main.py`
 
 Supporting modules live under `firmware/circuitpython/` as packages:
 - `main.py`: main runtime / event loop / orchestration
-- `bm83/bm83.py`: BM83 UART framing, parsing, AVRCP helpers, EQ syncing
-- `nextion/display.py`: Nextion protocol, token parsing, command queue, polling (`sendme`)
-- `blehid/ble.py`: optional BLE HID ConsumerControl helper
-- `utils/common.py`: shared helpers like `_sanitize_text()` and `_fmt_ms()`
+- `lib/bm83/bm83.py`: BM83 UART framing, parsing, AVRCP helpers, EQ syncing
+- `lib/nextion/display.py`: Nextion protocol, token parsing, command queue, polling (`sendme`)
+- `lib/blehid/ble.py`: optional BLE HID ConsumerControl helper
+- `lib/utils/common.py`: shared helpers like `_sanitize_text()` and `_fmt_ms()`
 
 ## Technology Stack
 - **Language**: Python (CircuitPython style; runs on-device)
@@ -19,16 +19,16 @@ Supporting modules live under `firmware/circuitpython/` as packages:
 - **Hardware/Protocols**:
   - BM83 UART framing + parsing (binary protocol, checksum)
   - Nextion UART token parsing + command sending (`0xFF 0xFF 0xFF` terminator)
-  - Optional BLE HID ConsumerControl (volume/mute)
-  - Optional I²S DAC integration (e.g., UDA1334A), depending on firmware usage
+  - Optional BLE HID ConsumerControl (relative volume; no mute-state feedback)
+  - Optional I²S DAC hardware: UDA1334A or Adafruit PCM5100, with wiring/configuration matched to the actual board
 
 ## Code Structure (authoritative)
 All modules below are located in `firmware/circuitpython/`:
 - `main.py`: main runtime / event loop / orchestration
-- `bm83/bm83.py`: BM83 UART framing, parsing, AVRCP helpers, EQ syncing
-- `nextion/display.py`: Nextion protocol, token parsing, command queue, polling (`sendme`)
-- `blehid/ble.py`: optional BLE HID ConsumerControl helper
-- `utils/common.py`: shared helpers like `_sanitize_text()` and `_fmt_ms()`
+- `lib/bm83/bm83.py`: BM83 UART framing, parsing, AVRCP helpers, EQ syncing
+- `lib/nextion/display.py`: Nextion protocol, token parsing, command queue, polling (`sendme`)
+- `lib/blehid/ble.py`: optional BLE HID ConsumerControl helper
+- `lib/utils/common.py`: shared helpers like `_sanitize_text()` and `_fmt_ms()`
 
 Tests:
 - `tests/`: unit tests run in CI (host Python)
@@ -90,10 +90,10 @@ pytest -v
   - keep state machines explicit (especially play/pause timing and metadata updates)
 
 ## Common Operations (preferred entry points)
-- Sending BM83 commands: use the canonical send helper in `bm83/bm83.py` (don’t duplicate framing logic)
-- Updating Nextion UI: use the helper methods in `nextion/display.py` (don’t hand-roll terminators everywhere)
-- Formatting/sanitizing UI text: use `utils/common.py` helpers (`_sanitize_text()`, etc.)
-- BLE HID volume/mute: use `blehid/ble.py` helper rather than inlining HID reports
+- Sending BM83 commands: use the canonical send helper in `lib/bm83/bm83.py` (don’t duplicate framing logic)
+- Updating Nextion UI: use the helper methods in `lib/nextion/display.py` (don’t hand-roll terminators everywhere)
+- Formatting/sanitizing UI text: use `lib/utils/common.py` helpers (`_sanitize_text()`, etc.)
+- BLE HID volume/mute: use `lib/blehid/ble.py` helper rather than inlining HID reports
 
 ## Common Pitfalls to Avoid
 1. Don’t declare `global` for read-only globals (flake8 will complain; also harms clarity).
@@ -203,11 +203,11 @@ any change that touches one.
    `0x08` caused AUX flapping and audible Line-In gain runaway.
 4. **AUX gating**: `should_show_aux()`'s "not connected ⇒ AUX" fallback is a boot-window-only
    heuristic guarded by `_source_ever_seen`. Removing the guard reproduces
-   `docs/incident-2026-08-26-phantom-aux.md` (phantom AUX mid-playback wipes metadata and
+   `docs/troubleshooting/incident-2026-08-26-phantom-aux.md` (phantom AUX mid-playback wipes metadata and
    disables transport controls).
 5. **AVRCP register-notifications stay staggered** — back-to-back bursts kill A2DP on some
    BM83 firmware revisions.
-6. **Muted-path wedge recovery is source-side only** (`docs/muted-path-wedge.md`). A
+6. **Muted-path wedge recovery is source-side only** (`docs/troubleshooting/muted-path-wedge.md`). A
    sink-initiated AVRCP pause/play does not fix it; that path shipped disabled as
    `STREAM_KICK_ENABLED`.
 7. **MMI power timing**: ON needs a ~2.2 s held press (a 0.2 s tap does nothing); OFF is held

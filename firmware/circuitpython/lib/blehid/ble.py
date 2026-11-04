@@ -722,7 +722,7 @@ class BleHid:
                         if obj is not None:
                             addr = obj
                             break
-                    except Exception:
+                    except Exception:  # nosec B110 # optional peer-address diagnostic; pairing/auth failures handled separately
                         pass
                 if addr is not None:
                     print("[BLE] peer:", addr)

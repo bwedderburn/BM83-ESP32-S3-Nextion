@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "description": "Previously tracked BM83 vendor references consolidated without changing content; duplicate root/Documents copies were byte-identical. Upstream origin and redistribution terms have not been independently revalidated.",
+  "files": [
+    {
+      "file": "datasheets/AN3118-IS2083-BM83-Bluetooth-Applications-Design-Guide-DS00003118.pdf",
+      "bytes": 17849177,
+      "sha256": "56d6e1f48f95fba38b3198d5dee7a6212d1da1ff331ba54aed14f923a6c1eb71",
+      "previous_paths": [
+        "AN3118-IS2083-BM83-Bluetooth-Applications-Design-Guide-DS00003118.pdf",
+        "Documents/AN3118-IS2083-BM83-Bluetooth-Applications-Design-Guide-DS00003118.pdf"
+      ]
+    },
+    {
+      "file": "datasheets/AudioUARTCommandSet_Summary_table_V2.09.xlsx",
+      "bytes": 52337,
+      "sha256": "5bbd5f8e90f7f4fac2a4955a77a67e30533c665cd146e7d7c85d5313791dc479",
+      "previous_paths": [
+        "AudioUARTCommandSet_Summary_table_V2.09.xlsx",
+        "Documents/AudioUARTCommandSet_Summary_table_V2.09.xlsx"
+      ]
+    },
+    {
+      "file": "datasheets/AudioUARTCommandSet_v2.09.pdf",
+      "bytes": 3789289,
+      "sha256": "985044c592f9af47c8e15ce9e3409711d6fe45df1390b06ac3774649395c2643",
+      "previous_paths": [
+        "AudioUARTCommandSet_v2.09.pdf",
+        "Documents/AudioUARTCommandSet_v2.09.pdf"
+      ]
+    },
+    {
+      "file": "firmware/Bluetooth_Basic_Demo_BM83_EVB.X.MSPK2v1.3.4.hex",
+      "bytes": 123922,
+      "sha256": "79b83b0450a436c1c95d09c0987a0c822423071dfc214c0831bb36ef9218b0f7",
+      "previous_paths": [
+        "Bluetooth_Basic_Demo_BM83_EVB.X.MSPK2v1.3.4.hex",
+        "Documents/Bluetooth_Basic_Demo_BM83_EVB.X.MSPK2v1.3.4.hex"
+      ]
+    },
+    {
+      "file": "datasheets/BM83 Getting Started Guide.pdf",
+      "bytes": 546054,
+      "sha256": "3a8b5a7341344173b191e012fb84393d4081c3d58bee9386692067c565331b48",
+      "previous_paths": [
+        "BM83 Getting Started Guide.pdf",
+        "Documents/BM83 Getting Started Guide.pdf"
+      ]
+    },
+    {
+      "file": "datasheets/BM83 MSPK2 Design Limitation v1.0.pdf",
+      "bytes": 509100,
+      "sha256": "f463d684b1109f5af23d0417ff190e798897b4f967f6a6fa3c3bb9d7a40806aa",
+      "previous_paths": [
+        "BM83 MSPK2 Design Limitation v1.0.pdf",
+        "Documents/BM83 MSPK2 Design Limitation v1.0.pdf"
+      ]
+    },
+    {
+      "file": "datasheets/BM83_Host_MCU_Firmware_Development_Guide_DS50002896A.pdf",
+      "bytes": 1808907,
+      "sha256": "3f88ef4a4758cf117a39d63df5108e25c8d80576582dbf70e5e24de1f737c755",
+      "previous_paths": [
+        "BM83_Host_MCU_Firmware_Development_Guide_DS50002896A.pdf",
+        "Documents/BM83_Host_MCU_Firmware_Development_Guide_DS50002896A.pdf"
+      ]
+    },
+    {
+      "file": "firmware/IS208x_UI_1.3.25_Demo_Package_MCU_Mode_SPP_Rehex_0F19.HEX",
+      "bytes": 5877963,
+      "sha256": "c06dc2f205d707928d171e4d0d23927093d5307a3dcd09c98779d943a625eebf",
+      "previous_paths": [
+        "IS208x_UI_1.3.25_Demo_Package_MCU_Mode_SPP_Rehex_0F19.HEX",
+        "Documents/IS208x_UI_1.3.25_Demo_Package_MCU_Mode_SPP_Rehex_0F19.HEX"
+      ]
+    },
+    {
+      "file": "tools/MBA_Android_v4.40.106458_062321_windows.exe",
+      "bytes": 2582516,
+      "sha256": "a1f3022f672223fe6204f0e1b828ce033093651a86ec751c2bbe82378742eee6",
+      "previous_paths": [
+        "MBA_Android_v4.40.106458_062321_windows.exe",
+        "Documents/MBA_Android_v4.40.106458_062321_windows.exe"
+      ]
+    },
+    {
+      "file": "datasheets/MSPK2v1.3.5 Release Notes.pdf",
+      "bytes": 447977,
+      "sha256": "546030f3333cae946f3ee6d3e807890a9b0466178c32c3509c41eae29e461fa4",
+      "previous_paths": [
+        "MSPK2v1.3.5 Release Notes.pdf",
+        "Documents/MSPK2v1.3.5 Release Notes.pdf"
+      ]
+    }
+  ]
+}

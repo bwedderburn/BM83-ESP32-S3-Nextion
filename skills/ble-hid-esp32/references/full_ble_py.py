@@ -419,7 +419,7 @@ class BleHid:
                     addr = getattr(c, "peer_address", None)
                     if addr is not None:
                         print("[BLE] peer:", addr)
-                except Exception:
+                except Exception:  # nosec B110 # optional peer-address diagnostic, not authentication or control
                     pass
             self._peer_logged = True
         for c in conns:

@@ -16,16 +16,17 @@ app files and all three host test files (`test_badge_bm83_remote.py`,
 ## Compatibility
 
 The app speaks BMW1 authenticated UDP to a configured IPv4 address, normally
-on port 8767. This repository's `main` snapshot at `d2e773d` has no matching
-BMW1 receiver. Its existing ESP-NOW receiver and artwork Wi-Fi support are not
-substitutes. The client is included as source for further integration; no
-live badge-to-unit control or receiver interoperability has been verified.
-The included tests use fake sockets and sample data only.
+on port 8767. The matching opt-in receiver is included at
+[`firmware/circuitpython/lib/remote/badge_remote.py`](../../firmware/circuitpython/lib/remote/badge_remote.py).
+It is inert without a separate private profile; ESP-NOW and artwork Wi-Fi alone
+are not substitutes. See the [receiver setup and runtime safeguards](../../docs/guides/deployment.md#optional-universe-badge-receiver).
 
-A receiver implementation, configured credentials, and separately authorized
-physical-device checks are prerequisites for a working live remote. This add-on
-does not change the receiver, the audio firmware, generated artifacts, or
-existing deployment scripts.
+Host tests use fake sockets and sample data. Dated component and physical
+observations are recorded in the [validation notes](../../docs/validation/bm83-startup-artwork-validation-2026-11-01.md),
+but the complete receiver-bearing system has not passed the
+[reliability acceptance gates](../../docs/reliability/README.md). Configured private
+credentials, a reviewed runtime and separately authorized physical checks remain
+prerequisites for live use. Including this add-on does not install or activate it.
 
 ## Files and manual installation
 

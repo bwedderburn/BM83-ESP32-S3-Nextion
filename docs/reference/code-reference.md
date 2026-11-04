@@ -45,12 +45,16 @@ BM83-ESP32-S3-Nextion/
 │   ├── test_nextion.py             # Nextion display tests
 │   ├── test_parser_stress.py       # Fragmented/noisy parser tests
 │   └── test_utils.py               # Utility function tests
-├── Documents/                      # Vendor datasheets & reference PDFs
+├── docs/reference/vendor/bm83/     # Vendor datasheets and reference packages
 │   ├── AudioUARTCommandSet_v2.09.pdf
 │   ├── BM83_Host_MCU_Firmware_Development_Guide_DS50002896A.pdf
 │   └── ... (other BM83/Bluetooth references)
 ├── docs/                           # Project documentation
-│   └── index.html                  # Documentation homepage
+│   ├── README.md                   # Documentation index
+│   ├── guides/                     # Setup, builds, deployment and host handoff
+│   ├── reviews/                    # Dated review archive
+│   ├── validation/                 # Evidence and acceptance limits
+│   └── reference/                  # Code reference and vendor archive
 ├── .github/                        # GitHub configuration
 │   ├── copilot-instructions.md     # GitHub Copilot instructions
 │   └── workflows/                  # CI/CD workflows
@@ -364,7 +368,7 @@ setup(
 
 ### `.github/workflows/python-package.yml`
 CI/CD workflow for automated testing:
-- Runs on Python 3.9, 3.10, 3.11
+- Runs on Python 3.11, 3.12, 3.13
 - Executes flake8 linting (syntax check + style check)
 - Runs pytest test suite
 
@@ -372,7 +376,12 @@ CI/CD workflow for automated testing:
 
 ## Documentation & References
 
-### Datasheets (`Documents/`)
+The [documentation index](../README.md) links current guides. The
+[vendor archive](vendor/bm83/README.md) records the retained files, provenance
+limits and byte hashes. Vendor HEX packages are reference material, not project
+firmware release assets.
+
+### Vendor references (`docs/reference/vendor/bm83/`)
 
 **BM83 Module References**:
 - `AudioUARTCommandSet_v2.09.pdf`: Complete UART command reference
@@ -388,7 +397,7 @@ CI/CD workflow for automated testing:
 ### Project Documentation
 
 - **`README.md`**: Project overview, features, setup instructions, deployment
-- **`NEXTION_SETUP.md`**: Complete guide for configuring Nextion HMI press/release events
+- **`docs/guides/nextion-setup.md`**: Complete guide for configuring Nextion HMI press/release events
 - **`SECURITY.md`**: Security policy and vulnerability reporting
 - **`LICENSE`**: MIT License
 - **`docs/index.html`**: Project documentation homepage

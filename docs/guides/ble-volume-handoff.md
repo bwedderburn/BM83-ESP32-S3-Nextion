@@ -73,7 +73,7 @@ a host separately rather than using a bond wipe as a handoff step.
 
 ## Keep the startup name stable
 
-[settings.example.toml](../firmware/circuitpython/settings.example.toml) is an
+[settings.example.toml](../../firmware/circuitpython/settings.example.toml) is an
 inactive example. Merge its settings into `CIRCUITPY/settings.toml`; preserve
 existing device-local values and never replace private settings wholesale.
 The example matches the default `BLE_NAME` in `main.py`. If this installation

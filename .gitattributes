@@ -8,5 +8,5 @@ tools/circuitpython-runtime/espidf.constraints.v6.0.txt text eol=lf
 
 # Vendor firmware packages are opaque artifacts: preserve their exact bytes
 # and keep generated HEX records out of text diffs and Copilot summaries.
-/Bluetooth_Basic_Demo_BM83_EVB.X.MSPK2v1.3.4.hex binary
-/IS208x_UI_1.3.25_Demo_Package_MCU_Mode_SPP_Rehex_0F19.HEX binary
+/docs/reference/vendor/bm83/firmware/*.hex binary
+/docs/reference/vendor/bm83/firmware/*.HEX binary

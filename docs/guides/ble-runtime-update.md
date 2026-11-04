@@ -14,7 +14,7 @@ normal, target-specific repair. Do not erase every host's bonds or increment
 the BLE name for ordinary disconnect/reconnect.
 
 The pinned source/configuration recipe, constraints snapshot and reference
-package versions are in [tools/circuitpython-runtime](../tools/circuitpython-runtime/README.md).
+package versions are in [tools/circuitpython-runtime](../../tools/circuitpython-runtime/README.md).
 The recipe reproduces the reviewed configuration; it does not promise identical
 image bytes across build hosts or timestamps.
 

@@ -26,7 +26,7 @@ Run these checks in order before any production update:
 2. **Deploy and validate the device using baseline `.py` files** (Mode A) so behavior is observable and debuggable on hardware.
 3. **Roll out optimized `.mpy` artifacts only after baseline validation succeeds** (Mode B).
 
-> Host tests do **not** fully validate hardware behavior (UART timing, RF behavior, target-runtime constraints). See [docs/hardware-test-limitations.md](docs/hardware-test-limitations.md) for scope and limitations.
+> Host tests do **not** fully validate hardware behavior (UART timing, RF behavior, target-runtime constraints). See [docs/hardware-test-limitations.md](../validation/hardware-test-limitations.md) for scope and limitations.
 
 ### Codex CLI Workflow (Recommended for Bug-Free Rollouts)
 
@@ -134,7 +134,7 @@ MPY_CROSS="$bm83_mpy_cross" bash ./build_mpy.sh
 For **macOS, Linux ARM or Windows Git Bash**, install or build a native
 CircuitPython 10.3.1 compiler for the host, then set its path explicitly. The
 Linux download does not run directly on macOS or Windows. See
-[compiler setup](README.md#prerequisites) for the source and platform choices.
+[compiler setup](building.md#prerequisites) for the source and platform choices.
 
 ```bash
 # Example native macOS path; replace with your actual installed compiler.
@@ -448,9 +448,9 @@ Do not merge or claim the defect closed on host tests or recovery alone.
 
 ## Related Documentation
 
-- [README.md](README.md) - Project overview and setup
-- [NEXTION_SETUP.md](NEXTION_SETUP.md) - Nextion button configuration
-- [CODE_REFERENCE.md](CODE_REFERENCE.md) - Code structure and API reference
+- [README.md](../../README.md) - Project overview and setup
+- [NEXTION_SETUP.md](nextion-setup.md) - Nextion button configuration
+- [CODE_REFERENCE.md](../reference/code-reference.md) - Code structure and API reference
 
 ---
 

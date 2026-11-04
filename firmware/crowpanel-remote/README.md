@@ -29,7 +29,7 @@ and a status placeholder otherwise. The **Settings** button opens a
 second page containing Power, Pair, EQ, Erase BLE bonds, **Wi-Fi / Artwork** and
 **Pause volume remote / Enable volume remote**. Pause releases the BLE HID link
 and stops advertising while retaining saved bonds. Enable permits saved hosts
-to reconnect; it cannot select one. See the [handoff guide](../../docs/ble-volume-handoff.md)
+to reconnect; it cannot select one. See the [handoff guide](../../docs/guides/ble-volume-handoff.md)
 for switching hosts and interpreting confirmed status. Compact Previous,
 Play/Pause, Next and Volume −/+ controls remain available on both pages.
 Battery/supply indication and screen-wake gesture suppression are preserved.
@@ -52,7 +52,7 @@ computer or helper application is needed during playback.
 The shared controls emit the **same token vocabulary the Nextion sends over
 UART** (`BT_VOLUP_P` / `BT_VOLUP_R` press-release pairs for the volume
 buttons' hold-and-repeat, single tokens otherwise — see
-`../../NEXTION_SETUP.md`). Volume buttons release on both finger lift and
+`../../docs/guides/nextion-setup.md`). Volume buttons release on both finger lift and
 press loss. The existing screen-wake gesture suppression remains in place.
 BLE Pause/Enable and network retry are remote-only controls. BLE status uses a
 separate `BLS2` frame; legacy `BMS2` Now Playing frames keep their existing format.
@@ -256,7 +256,7 @@ BSSID; replacing the AP requires enrollment again.
    **Known runtime exception:** the evaluated controller's CircuitPython
    `10.3.1-dirty` build faults during VM teardown. The utility below still uses
    Ctrl-D; do not run it unmodified on that device. Follow the
-   [controller recovery safeguards](../../DEPLOYMENT.md#optional-universe-badge-receiver)
+   [controller recovery safeguards](../../docs/guides/deployment.md#optional-universe-badge-receiver)
    and first check whether recovery restores the existing link. A fresh
    playback snapshot proves the control link, not artwork Wi-Fi or the screen.
 2. Close serial monitors and captures. From the repository root, start the

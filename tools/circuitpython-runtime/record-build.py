@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
-import subprocess
+import subprocess  # nosec B404 # trusted isolated-builder commands only, never shell input
 import sys
 
 
@@ -26,7 +26,7 @@ HASHLIB_FILES = {
 
 
 def command(*args):
-    return subprocess.check_output(args, text=True).strip()
+    return subprocess.check_output(args, text=True).strip()  # nosec B603 # fixed build/provenance argv at every call site
 
 
 def sha(path):

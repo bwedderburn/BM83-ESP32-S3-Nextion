@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
+import subprocess  # nosec B404 # fixed tool argv and validated pytest arguments; never a shell
 import sys
 from collections import Counter
 from pathlib import Path
@@ -67,7 +67,7 @@ def _repo_root() -> Path:
 def _run(cmd: list[str], timeout: int = 60, cwd: Path | None = None) -> dict:
     """Run a subprocess safely; never raises, always returns code/stdout/stderr."""
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # nosec B603 # internal fixed commands; public pytest arguments are allowlisted
             cmd, cwd=str(cwd) if cwd else None, capture_output=True,
             text=True, errors="replace", timeout=timeout,
         )
@@ -281,7 +281,8 @@ def repo_dependency_report() -> str:
                  if ln.strip() and not ln.strip().startswith("#")]
         report["pip_requirements"][str(rel).replace(os.sep, "/")] = lines
     cp_pat = re.compile(r"[Cc]ircuit[Pp]ython[^\n]{0,40}?(\d+\.\d+(?:\.\d+)?)")
-    for name in ("README.md", "DEPLOYMENT.md", "CLAUDE.md", "CODE_REFERENCE.md"):
+    for name in ("README.md", "docs/guides/deployment.md", "CLAUDE.md",
+                 "docs/reference/code-reference.md", "docs/guides/building.md"):
         f = ROOT / name
         if f.exists():
             for ver in sorted(set(cp_pat.findall(f.read_text(encoding="utf-8", errors="replace")))):

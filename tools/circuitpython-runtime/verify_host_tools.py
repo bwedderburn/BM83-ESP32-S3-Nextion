@@ -10,7 +10,7 @@ from importlib import metadata
 import hashlib
 import json
 from pathlib import Path
-import subprocess
+import subprocess  # nosec B404 # offline allowlisted modules below; no shell or device commands
 import sys
 import tempfile
 
@@ -44,7 +44,7 @@ def run_tool(check, module, arguments, directory, expect_failure=False):
     if "--port" in arguments or any("write-flash" in value for value in arguments):
         raise VerificationError(check)
     try:
-        result = subprocess.run([sys.executable, "-m", module, *arguments],
+        result = subprocess.run([sys.executable, "-m", module, *arguments],  # nosec B603 # validated offline module/verb above
                                 cwd=directory, capture_output=True, timeout=60,
                                 check=False)
     except (OSError, subprocess.TimeoutExpired):

@@ -259,7 +259,7 @@ If you see examples elsewhere showing both commands together, they are incorrect
 3. Press **Ctrl+D** in serial terminal or press RESET button to reload
 4. Verify you now see clean tokens: `b'BT_POWER'` instead of `b'BT_POWERf\x00'`
 
-**See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed firmware update instructions.**
+**See [DEPLOYMENT.md](deployment.md) for detailed firmware update instructions.**
 
 ### Token is received but volume doesn't change
 This is usually a **BLE HID** issue, not a Nextion issue:
@@ -308,7 +308,7 @@ But again, **this is unnecessary for standard tokens** - just use `print "BT_VOL
 
 - `firmware/circuitpython/lib/nextion/display.py` - Token allowlist and parsing logic
 - `firmware/circuitpython/main.py` - Press/release event handlers and hold-and-repeat logic
-- `CODE_REFERENCE.md` - Complete code reference documentation
+- `docs/reference/code-reference.md` - Complete code reference documentation
 
 ---
 

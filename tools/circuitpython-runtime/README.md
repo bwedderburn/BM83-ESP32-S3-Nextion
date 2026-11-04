@@ -163,5 +163,5 @@ reference artifacts, not write targets. Do not flash a combined `firmware.bin`.
 Keep the old images, source/compiler manifests, private backups and saved state
 intact. A reproducible build and offline validation do not establish radio/audio
 stability, physical screens/buttons or deployment approval. Follow the separately
-authorized [guarded update guide](../../docs/ble-runtime-update.md) only when
+authorized [guarded update guide](../../docs/guides/ble-runtime-update.md) only when
 hardware work is explicitly resumed.

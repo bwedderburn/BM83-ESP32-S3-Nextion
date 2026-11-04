@@ -61,7 +61,7 @@ A useful supervised sequence is:
 
 If power cycling restores controls and metadata but leaves audio silent, record
 audible recovery as a failure. Keep any later recovery action as a separate
-result. The [muted-path wedge note](muted-path-wedge.md) describes a similar
+result. The [muted-path wedge note](../troubleshooting/muted-path-wedge.md) describes a similar
 historical symptom and a source-app Pause, wait at least two seconds, Play
 workaround. For a new incident, also establish the source report (`0x82` for
 A2DP), Windows output selection, mute, and volume before assigning a cause.
@@ -107,7 +107,7 @@ CircuitPython's `supervisor.runtime.autoreload = False`; restore the prior
 entrypoint state, re-enable autoreload as described above, and deliberately reload
 after testing.
 
-`deploy.sh` copies only `main.py` and `lib/`. It neither removes nor warns about
+The current `deploy.sh` copies `boot.py`, `main.py` and `lib/`. It neither removes nor warns about
 a leftover `code.py`, and CircuitPython runs the first of `code.txt`, `code.py`,
 `main.py`, and `main.txt` it finds. A forgotten bench `code.py` therefore keeps
 wrapping every later deploy. Confirm that `code.py` is absent, or back to its

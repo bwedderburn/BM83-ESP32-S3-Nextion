@@ -99,7 +99,7 @@ def _ensure_paired(self):
                     if obj is not None:
                         addr = obj
                         break
-                except Exception:
+                except Exception:  # nosec B110 # optional peer-address diagnostic; pairing handled separately
                     pass
             if addr is not None:
                 print("[BLE] peer:", addr)
