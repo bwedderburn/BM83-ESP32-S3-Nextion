@@ -4,7 +4,7 @@
 setuptools>=64
 
 # click: Min. version was set to support the API used in idf.py and auto-completion
-click>=7.0,<8.2
+click>=8.5.0,<8.6
 rich-click>=1.8.1,<2.0
 
 # pyserial: Min. version was set to support the used API
