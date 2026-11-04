@@ -2,6 +2,10 @@
 # Preserve the reviewed patch bytes on every host and allow only that format.
 tools/circuitpython-runtime/hashlib-close.patch text eol=lf whitespace=-blank-at-eol
 
+# Native-build provenance hashes cover the exact bytes copied into Docker.
+tools/circuitpython-runtime/requirements-build.txt text eol=lf
+tools/circuitpython-runtime/espidf.constraints.v6.0.txt text eol=lf
+
 # Vendor firmware packages are opaque artifacts: preserve their exact bytes
 # and keep generated HEX records out of text diffs and Copilot summaries.
 /Bluetooth_Basic_Demo_BM83_EVB.X.MSPK2v1.3.4.hex binary
