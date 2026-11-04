@@ -18,7 +18,7 @@ from remote.state_tx import StatePublisher
 from remote.ble_status import BleStatusPublisher
 from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
 from remote.metadata_bridge import MetadataBridge
-from remote.badge_remote import BadgeRemote, np_from_snapshot
+from remote.badge_remote import BadgeRemote, np_from_snapshot, set_phase1_metrics
 from bm83.bm83 import Bm83
 from bm83.link_probe import StartupLinkProbe
 from blehid.ble import BleHid
@@ -65,17 +65,33 @@ REMOTE_MAC = "44:1B:F6:8A:C1:7C"
 # manual for now: in the source app, pause, wait ~2s, play.
 STREAM_KICK_ENABLED = False
 
-def main():
+def main(phase1_timing=False):
+    # Explicit diagnostic entrypoint only; ordinary startup allocates no metrics.
+    metrics = None
+    if phase1_timing:
+        from utils.phase1_metrics import Phase1Metrics, TimingUART, GC
+        metrics = Phase1Metrics()
+    gc_started = metrics.now() if metrics is not None else None
     gc.collect()
+    if metrics is not None:
+        metrics.finish(GC, gc_started)
+    set_phase1_metrics(metrics)
 
     # Bounded optional artwork Wi-Fi join before UART setup, never in its loop.
     start_artwork_wifi()
 
     nx_uart = busio.UART(NX_TX, NX_RX, baudrate=NX_BAUD, timeout=0.0, receiver_buffer_size=1024)
     bm_uart = busio.UART(BM83_TX, BM83_RX, baudrate=BM83_BAUD, timeout=0.0, receiver_buffer_size=8192)
+    if metrics is not None:
+        nx_uart = TimingUART(nx_uart, metrics, 1)
+        bm_uart = TimingUART(bm_uart, metrics, 0)
 
-    nx = Nextion(nx_uart)
-    bm = Bm83(bm_uart)
+    if metrics is None:
+        nx = Nextion(nx_uart)
+        bm = Bm83(bm_uart)
+    else:
+        nx = Nextion(nx_uart, phase1_metrics=metrics)
+        bm = Bm83(bm_uart, phase1_metrics=metrics)
     bm.stream_kick_enabled = STREAM_KICK_ENABLED
 
     ble = BleHid(BLE_ENABLED, BLE_NAME)
@@ -83,8 +99,12 @@ def main():
 
     # Never raises: a missing espnow module or a radio bring-up failure
     # just leaves the remote off and the panel working as before.
-    remote = EspNowRemote(enabled=REMOTE_ENABLED, peer_mac=REMOTE_MAC,
-                          ble_active=BLE_ENABLED)
+    if metrics is None:
+        remote = EspNowRemote(enabled=REMOTE_ENABLED, peer_mac=REMOTE_MAC,
+                              ble_active=BLE_ENABLED)
+    else:
+        remote = EspNowRemote(enabled=REMOTE_ENABLED, peer_mac=REMOTE_MAC,
+                              ble_active=BLE_ENABLED, phase1_metrics=metrics)
     remote.setup()
     remote_poll = remote.poll
     remote_state = StatePublisher(remote)
@@ -337,9 +357,14 @@ def main():
     # while <=2s GC increased pause time without reducing peak usage further. Tweak if patterns change.
 
     while True:
+        if metrics is not None:
+            metrics.loop_begin()
         now = monotonic()
         if now - last_gc > gc_interval_s:
+            gc_started = metrics.now() if metrics is not None else None
             gc.collect()
+            if metrics is not None:
+                metrics.finish(GC, gc_started)
             last_gc = now
 
         nx_tick()
@@ -812,6 +837,8 @@ def main():
         remote_state.set_transport(bm.power_on, bm.connected, aux_mode, bm.avrcp_suspended)
         remote_state.set_eq(bm.EQ_SEQ[bm.eq_index])
         remote_state.tick(ble_status)
+        if metrics is not None:
+            metrics.report_if_due()
         sleep(0.005)
 
 

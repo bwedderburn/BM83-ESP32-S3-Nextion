@@ -70,6 +70,7 @@ NX_RUNTIME = {
 class Nextion:
     __slots__ = (
         "uart",
+        "_phase1_metrics",
         "_rx",
         "current_page",
         "_last_sendme_at",
@@ -83,8 +84,9 @@ class Nextion:
         "_token_throttle_ms",
         "_last_token",
     )
-    def __init__(self, uart=None):
+    def __init__(self, uart=None, phase1_metrics=None):
         self.uart = uart
+        self._phase1_metrics = phase1_metrics
         self._rx = bytearray()
 
         self.current_page = None
@@ -171,9 +173,16 @@ class Nextion:
             return
         if chunk:
             self._rx.extend(chunk)
+            if self._phase1_metrics is not None:
+                self._phase1_metrics.parser_observe(1, len(self._rx), input_bytes=len(chunk))
             if len(self._rx) > _RX_MAX:
+                if self._phase1_metrics is not None:
+                    self._phase1_metrics.event("nextion_parser_overflow")
+                    self._phase1_metrics.event("nextion_parser_dropped_bytes", len(self._rx) - _RX_KEEP)
                 dprint("[NX] rx overflow, trimming to", _RX_KEEP)
                 self._rx = self._rx[-_RX_KEEP:]
+        elif self._phase1_metrics is not None:
+            self._phase1_metrics.parser_observe(1, len(self._rx))
 
     def _pop_frame(self):
         i = self._rx.find(TERM)
@@ -267,6 +276,8 @@ class Nextion:
                 tokens.append(clean_token)
                 if len(tokens) >= max_tokens:
                     break
+        if self._phase1_metrics is not None:
+            self._phase1_metrics.parser_observe(1, len(self._rx), events=len(tokens))
         return tokens, page_changed
 
     def process_bytes(self, data, token_handler=None):

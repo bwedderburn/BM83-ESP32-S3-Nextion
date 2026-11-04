@@ -156,7 +156,7 @@ class EspNowRemote:
 
     def __init__(self, enabled=True, peer_mac=None, vocabulary=REMOTE_TOKENS,
                  espnow_module=None, clock=None, log=print, ble_active=False,
-                 runtime=None):
+                 runtime=None, phase1_metrics=None):
         self.want = enabled
         self.ble_active = ble_active
         self._runtime = runtime_version() if runtime is None else runtime
@@ -190,6 +190,8 @@ class EspNowRemote:
         self._tx_backoff_until = 0.0
         self.tx_frames = 0
         self._ble_requests = []
+        self._phase1_metrics = phase1_metrics
+        self._tx_metric_started = None
 
     def setup(self):
         """Bring the receiver up. Never raises; returns True when live."""
@@ -212,6 +214,8 @@ class EspNowRemote:
             return False
         try:
             self._radio = self._mod.ESPNow()
+            if self._phase1_metrics is not None:
+                self._phase1_metrics.espnow_counter_reset()
             # The native singleton is newly allocated/zeroed on each setup.
             # Captures arriving during setup remain unread and start at zero.
             self._rx_consumed = 0
@@ -235,7 +239,8 @@ class EspNowRemote:
             # These completion counters allow exactly one outstanding send.
             # ESPNow.send can block for 2s if its internal buffers fill: never
             # enqueue another frame before the previous callback completes.
-            self._tx_counts = (self._radio.send_success, self._radio.send_failure)
+            self._tx_counts = ((self._radio.send_success, self._radio.send_failure)
+                               if self._phase1_metrics is None else self._observed_tx_counts())
             self._tx_peer = self._mod.Peer(mac=self.peer_mac)
             self._radio.peers.append(self._tx_peer)
             self.state_tx_enabled = True
@@ -248,11 +253,16 @@ class EspNowRemote:
         if not self.state_tx_enabled or self._clock() < self._tx_backoff_until:
             return False
         try:
-            counts = (self._radio.send_success, self._radio.send_failure)
+            counts = ((self._radio.send_success, self._radio.send_failure)
+                      if self._phase1_metrics is None else self._observed_tx_counts())
             if self._tx_pending:
                 if counts == self._tx_counts:
                     return False
                 self._tx_pending = False
+                if self._phase1_metrics is not None and self._tx_metric_started is not None:
+                    from utils.phase1_metrics import ESPNOW_COMPLETION
+                    self._phase1_metrics.finish(ESPNOW_COMPLETION, self._tx_metric_started)
+                    self._tx_metric_started = None
             return True
         except Exception:
             return False
@@ -279,8 +289,9 @@ class EspNowRemote:
         if not self.state_tx_ready():
             return False
         try:
-            self._tx_counts = (self._radio.send_success, self._radio.send_failure)
-            self._radio.send(frame, self._tx_peer)
+            self._tx_counts = ((self._radio.send_success, self._radio.send_failure)
+                               if self._phase1_metrics is None else self._observed_tx_counts())
+            self._native_send(frame, self._tx_peer)
             self._tx_pending = True
             self.tx_frames += 1
             return True
@@ -288,6 +299,33 @@ class EspNowRemote:
             self._tx_backoff_until = self._clock() + ERROR_BACKOFF_S
             self._log("[REMOTE] state TX back-off: %r" % (e,))
             return False
+
+    def _observed_tx_counts(self):
+        """Observe only native reads already needed by the existing send guard."""
+        try:
+            counts = (self._radio.send_success, self._radio.send_failure)
+        except Exception:
+            self._phase1_metrics.espnow_counter_unavailable(read_error=True)
+            raise
+        self._phase1_metrics.espnow_counters(counts)
+        return counts
+
+    def _native_send(self, frame, peer):
+        metrics = self._phase1_metrics
+        if metrics is None:
+            return self._radio.send(frame, peer)
+        from utils.phase1_metrics import ESPNOW_SEND
+        started = metrics.now()
+        try:
+            result = self._radio.send(frame, peer)
+            self._tx_metric_started = started
+            return result
+        except Exception:
+            self._tx_metric_started = None
+            metrics.event("espnow_send_error")
+            raise
+        finally:
+            metrics.finish(ESPNOW_SEND, started)
 
     @staticmethod
     def _keep_radio_awake():
@@ -329,6 +367,9 @@ class EspNowRemote:
         self.state_tx_enabled = False
         self._tx_peer = None
         self._tx_pending = False
+        if self._phase1_metrics is not None and self._tx_metric_started is not None:
+            self._phase1_metrics.event("espnow_pending_cancelled")
+            self._tx_metric_started = None
         self._tx_counts = None
         self._tx_backoff_until = 0.0
         self._log("[REMOTE] rebuilding ESP-NOW receive buffer")

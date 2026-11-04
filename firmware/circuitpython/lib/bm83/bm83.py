@@ -32,6 +32,7 @@ _AVRCP_ATTR_NAMES = {
 class Bm83:
     __slots__ = (
         "uart",
+        "_phase1_metrics",
         "_rx",
         "_rx_head",
         "_rx_max",
@@ -190,8 +191,9 @@ class Bm83:
     # remain authoritative evidence.
     LINK_FLAP_STATES = (0x08, 0x0C, 0x0F, 0x11, 0x15)
 
-    def __init__(self, uart=None):
+    def __init__(self, uart=None, phase1_metrics=None):
         self.uart = uart
+        self._phase1_metrics = phase1_metrics
         # Head-index buffer: advance _rx_head past consumed bytes, compact
         # lazily. Avoids per-frame bytearray slice-reassignment on CP.
         self._rx = bytearray()
@@ -480,8 +482,13 @@ class Bm83:
         rx = self._rx
         head = self._rx_head
         active = len(rx) - head
+        if self._phase1_metrics is not None:
+            self._phase1_metrics.parser_observe(0, active, input_bytes=len(chunk) if chunk else 0)
         if active > self._rx_max:
             keep = 256
+            if self._phase1_metrics is not None:
+                self._phase1_metrics.event("bm83_parser_overflow")
+                self._phase1_metrics.event("bm83_parser_dropped_bytes", active - keep)
             dprint("[BM83] buffer overflow, trimming head, keeping", keep, "bytes")
             self._rx = bytearray(rx[-keep:])
             rx = self._rx
@@ -492,9 +499,13 @@ class Bm83:
                 break
             sof = rx.find(b"\xAA", head)
             if sof < 0:
+                if self._phase1_metrics is not None:
+                    self._phase1_metrics.event("bm83_resync_discarded_bytes", len(rx) - head)
                 head = len(rx)
                 break
             if sof > head:
+                if self._phase1_metrics is not None:
+                    self._phase1_metrics.event("bm83_resync_discarded_bytes", sof - head)
                 head = sof
             if (len(rx) - head) < 4:
                 break
@@ -505,6 +516,9 @@ class Bm83:
             # retain. Reject impossible lengths immediately so one noisy
             # 0xAA FF FF prefix cannot wedge parsing until buffer overflow.
             if ln < 1 or ln > self._rx_max:
+                if self._phase1_metrics is not None:
+                    self._phase1_metrics.event("bm83_invalid_length")
+                    self._phase1_metrics.event("bm83_resync_discarded_bytes")
                 dprint("[BM83] invalid frame length", ln, "-> resync")
                 head += 1
                 continue
@@ -515,6 +529,9 @@ class Bm83:
             body_end = body_start + ln
             chk = rx[body_end]
             if chk != self._checksum_range(hi, lo, rx, body_start, body_end):
+                if self._phase1_metrics is not None:
+                    self._phase1_metrics.event("bm83_checksum_error")
+                    self._phase1_metrics.event("bm83_resync_discarded_bytes")
                 head += 1
                 continue
             op = rx[body_start]
@@ -612,6 +629,8 @@ class Bm83:
             rx = self._rx
             head = 0
         self._rx_head = head
+        if self._phase1_metrics is not None:
+            self._phase1_metrics.parser_observe(0, len(rx) - head, events=len(out))
         return out
 
     def tick_heartbeat(self, now=None):

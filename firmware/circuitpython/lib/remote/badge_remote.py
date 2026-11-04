@@ -43,6 +43,13 @@ TOKENS = ("STATUS", "BT_PREV", "BT_PLAY", "BT_NEXT", "BT_MUTE",
 # panel unless the private profile explicitly opts in.
 BOND_TOKENS = ("BT_EBIND",)
 BLE_TOKENS = (b"BLE_PAUSE", b"BLE_ENABLE")
+_phase1_metrics = None
+
+
+def set_phase1_metrics(metrics):
+    """Opt-in diagnostic observer; never replace a native crypto builtin."""
+    global _phase1_metrics
+    _phase1_metrics = metrics
 
 
 def _hex(value, size):
@@ -103,27 +110,42 @@ def _hash_runtime_safe():
 def _sha256(data):
     if not _hash_runtime_safe():
         raise RuntimeError("Native hash cleanup requires the reviewed runtime")
-    digest = hashlib.new("sha256")
-    deinit = getattr(digest, "deinit", None)
+    metrics = _phase1_metrics
+    started = metrics.now() if metrics is not None else None
+    deinit = None
     try:
+        digest = hashlib.new("sha256")
+        deinit = getattr(digest, "deinit", None)
         if (getattr(getattr(sys, "implementation", None), "name", "") not in ("cpython", "pypy")
                 and not callable(deinit)):
             raise RuntimeError("Native hash cleanup API unavailable")
         digest.update(data)
         return digest.digest()
     finally:
-        if callable(deinit):
-            deinit()
+        try:
+            if callable(deinit):
+                deinit()
+        finally:
+            if metrics is not None:
+                from utils.phase1_metrics import SHA256
+                metrics.finish(SHA256, started, len(data))
 
 
 def tag(key, payload):
     """Hex HMAC-SHA256 truncated to 16 bytes, matching the badge client."""
     if len(key) != 32:
         raise ValueError("BMW1 needs a 32-byte key")
-    block = key + bytes(32)
-    inner = bytes(byte ^ 0x36 for byte in block)
-    outer = bytes(byte ^ 0x5C for byte in block)
-    return binascii.hexlify(_sha256(outer + _sha256(inner + payload))[:16])
+    metrics = _phase1_metrics
+    started = metrics.now() if metrics is not None else None
+    try:
+        block = key + bytes(32)
+        inner = bytes(byte ^ 0x36 for byte in block)
+        outer = bytes(byte ^ 0x5C for byte in block)
+        return binascii.hexlify(_sha256(outer + _sha256(inner + payload))[:16])
+    finally:
+        if metrics is not None:
+            from utils.phase1_metrics import HMAC
+            metrics.finish(HMAC, started, len(payload))
 
 
 def json_text(value):
