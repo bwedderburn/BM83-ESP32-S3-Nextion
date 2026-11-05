@@ -16,6 +16,8 @@
 #define MYNEWT_VAL_BLE_HS_PVCY 1
 #define MYNEWT_VAL_BLE_HOST_BASED_PRIVACY 0
 #define MYNEWT_VAL_BLE_EXT_ADV 0
+#define MYNEWT_VAL_BLE_STATIC_TO_DYNAMIC 1
+#define MYNEWT_VAL_BLE_STORE_MAX_CCCDS CONFIG_BT_NIMBLE_MAX_CCCDS
 #define CONFIG_BT_NIMBLE_MAX_BONDS 8
 #define CONFIG_BT_NIMBLE_MAX_CCCDS 24
 #define CONFIG_BT_NIMBLE_NVS_PERSIST 1
@@ -62,7 +64,19 @@ struct ble_store_status_event { int event_code; union { struct {int obj_type;} f
 typedef int ble_store_read_fn(int,const union ble_store_key *,union ble_store_value *);
 typedef int ble_store_write_fn(int,const union ble_store_value *);
 typedef int ble_store_delete_fn(int,const union ble_store_key *);
-struct { ble_store_read_fn *store_read_cb; ble_store_write_fn *store_write_cb; ble_store_delete_fn *store_delete_cb; } ble_hs_cfg;
+typedef int ble_store_status_fn(struct ble_store_status_event *,void *);
+struct { ble_store_read_fn *store_read_cb; ble_store_write_fn *store_write_cb; ble_store_delete_fn *store_delete_cb; ble_store_status_fn *store_status_cb; void *store_status_arg; } ble_hs_cfg;
+typedef struct {
+    struct ble_store_value_cccd _ble_store_config_cccds[CONFIG_BT_NIMBLE_MAX_CCCDS];
+    int _ble_store_config_num_cccds;
+} ble_store_config_vars_t;
+extern ble_store_config_vars_t *ble_store_config_vars;
+#define ble_store_config_cccds (ble_store_config_vars->_ble_store_config_cccds)
+#define ble_store_config_num_cccds (ble_store_config_vars->_ble_store_config_num_cccds)
+int ble_store_config_read(int,const union ble_store_key *,union ble_store_value *);
+int ble_store_config_write(int,const union ble_store_value *);
+int ble_store_config_delete(int,const union ble_store_key *);
+int ble_hs_locked_by_cur_task(void);
 struct ble_gap_conn_desc { uint16_t conn_handle; ble_addr_t peer_id_addr,peer_ota_addr; struct { unsigned encrypted:1; unsigned bonded:1; } sec_state; };
 enum { BLE_GAP_EVENT_DISCONNECT=1,BLE_GAP_EVENT_IDENTITY_RESOLVED,BLE_GAP_EVENT_ENC_CHANGE,BLE_GAP_EVENT_REPEAT_PAIRING };
 struct ble_gap_event { int type; union { struct {struct ble_gap_conn_desc conn; int reason;} disconnect; struct {uint16_t conn_handle;} identity_resolved; struct {uint16_t conn_handle; int status;} enc_change; struct {uint16_t conn_handle;} repeat_pairing;}; };
@@ -92,6 +106,7 @@ struct ble_npl_eventq *nimble_port_get_dflt_eventq(void);
 int ble_npl_callout_init(struct ble_npl_callout *,struct ble_npl_eventq *,void (*)(struct ble_npl_event *),void *);
 int ble_npl_callout_reset(struct ble_npl_callout *,uint32_t);
 void ble_npl_callout_stop(struct ble_npl_callout *);
+void ble_npl_callout_deinit(struct ble_npl_callout *);
 static inline uint32_t ble_npl_time_ms_to_ticks32(uint32_t ms) { return ms; }
 extern bool test_interrupted;
 extern mp_obj_t test_dict_values[256];

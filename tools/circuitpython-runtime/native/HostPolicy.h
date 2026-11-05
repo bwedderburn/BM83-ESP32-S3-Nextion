@@ -9,6 +9,7 @@ void bleio_host_policy_init(int nvs_error);
 void bleio_host_policy_sync(void);
 void bleio_host_policy_install_store_guards(void);
 void bleio_host_policy_disabled(void);
+void bleio_host_policy_deinit(void);
 int bleio_host_policy_advertising_guard(void);
 typedef uint32_t (*hp_raw_advertise_fn)(bleio_adapter_obj_t *, bool, bool, uint32_t, float,
     const uint8_t *, uint16_t, const uint8_t *, uint16_t, mp_int_t, const bleio_address_obj_t *);

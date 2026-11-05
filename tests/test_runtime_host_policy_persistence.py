@@ -163,8 +163,7 @@ int main(void) {
     assert(memcmp(&a.cccd, &b.cccd, sizeof(a.cccd)) != 0);
     assert(same_store_record(BLE_STORE_OBJ_TYPE_CCCD, &a, &b));
     b.cccd.value_changed = 1;
-    assert(!same_store_record(BLE_STORE_OBJ_TYPE_CCCD, &a, &b));
-    b.cccd.value_changed = 0;
+    assert(same_store_record(BLE_STORE_OBJ_TYPE_CCCD, &a, &b));
     b.cccd.flags = 0;
     assert(!same_store_record(BLE_STORE_OBJ_TYPE_CCCD, &a, &b));
     b.cccd.flags = 1;

@@ -16,6 +16,8 @@
 #include "host/ble_gatt.h"
 #include "host/ble_hs_pvcy.h"
 #include "host/ble_store.h"
+#include "store/config/ble_store_config.h"
+#include "../../esp-idf/components/bt/host/nimble/nimble/nimble/host/store/config/src/ble_store_config_priv.h"
 #include "nimble/hci_common.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_npl.h"
@@ -72,10 +74,12 @@ static hp_domain_t pending_fault_domain;
 static int pending_fault;
 static uint32_t store_generation;
 static struct ble_npl_callout policy_timer;
-static ble_store_write_fn *original_write;
-static ble_store_delete_fn *original_delete;
-static ble_store_read_fn *original_read;
+static bool timer_initialized;
+static volatile bool store_guard_failed;
 typedef hp_command_t policy_request_t;
+
+static int guarded_write(int type, const union ble_store_value *value);
+static int guarded_delete(int type, const union ble_store_key *key);
 
 static uint64_t millis(void) { return (uint64_t)esp_timer_get_time()/1000; }
 static hp_address_t address(const ble_addr_t *a) {
@@ -103,11 +107,35 @@ static void clear_inputs(void) {
 static void fault(hp_domain_t domain, int code) {
     // May run under NimBLE's store lock: latch only; no nested GAP/store call.
     portENTER_CRITICAL(&policy_mux);
-    fault_pending=true; pending_fault_domain=domain; pending_fault=code;
+    if (!store_guard_failed) {
+        fault_pending=true; pending_fault_domain=domain; pending_fault=code;
+    }
     observed.filter_ready=false; observed.hid_ready=false;
     hp_clear_input(&input_queue);
     portEXIT_CRITICAL(&policy_mux);
     schedule();
+}
+static bool check_store_guards(void) {
+    portENTER_CRITICAL(&policy_mux);
+    bool context_ready=true;
+    #if MYNEWT_VAL(BLE_STATIC_TO_DYNAMIC)
+    context_ready=ble_store_config_vars!=NULL;
+    #endif
+    if (!store_guard_failed && (!context_ready || ble_hs_cfg.store_read_cb!=ble_store_config_read ||
+        ble_hs_cfg.store_write_cb!=guarded_write || ble_hs_cfg.store_delete_cb!=guarded_delete ||
+        ble_hs_cfg.store_status_cb!=bleio_host_policy_store_status)) {
+        store_guard_failed=true;
+        fault_pending=true;
+        pending_fault_domain=HP_DOMAIN_NIMBLE;
+        pending_fault=BLE_HS_ESTORE_FAIL;
+        observed.filter_ready=false;
+        observed.hid_ready=false;
+        hp_clear_input(&input_queue);
+        input_origin_valid=false;
+    }
+    bool intact=!store_guard_failed;
+    portEXIT_CRITICAL(&policy_mux);
+    return intact;
 }
 static int persist(void *unused, const hp_blob_t *blob) {
     (void)unused;
@@ -138,7 +166,7 @@ static int terminate(void *unused, uint16_t handle) {
     return rc==BLE_HS_ENOTCONN ? HP_TERMINATE_ABSENT : rc;
 }
 static int submit_input(const hp_input_report_t *report) {
-    if (!hp_input_current(&core,report)) { return BLE_HS_EREJECT; }
+    if (!check_store_guards() || !hp_input_current(&core,report)) { return BLE_HS_EREJECT; }
     struct os_mbuf *buffer=ble_hs_mbuf_from_flat(report->data,report->length);
     if (!buffer) { return BLE_HS_ENOMEM; }
     // This call and all connection/policy callbacks run on the same native host
@@ -193,9 +221,10 @@ static bool same_store_record(int type, const union ble_store_value *a, const un
                 (!a->sec.irk_present || memcmp(a->sec.irk,b->sec.irk,sizeof(a->sec.irk))==0) &&
                 (!a->sec.csrk_present || memcmp(a->sec.csrk,b->sec.csrk,sizeof(a->sec.csrk))==0);
         case BLE_STORE_OBJ_TYPE_CCCD:
+            // The pending notification marker can change in RAM while the
+            // subscribed peer is absent. Only the key and flags are durable.
             return same_store_address(&a->cccd.peer_addr,&b->cccd.peer_addr) &&
-                a->cccd.chr_val_handle==b->cccd.chr_val_handle && a->cccd.flags==b->cccd.flags &&
-                a->cccd.value_changed==b->cccd.value_changed;
+                a->cccd.chr_val_handle==b->cccd.chr_val_handle && a->cccd.flags==b->cccd.flags;
         case BLE_STORE_OBJ_TYPE_CSFC:
             return same_store_address(&a->csfc.peer_addr,&b->csfc.peer_addr) &&
                 memcmp(a->csfc.csfc,b->csfc.csfc,sizeof(a->csfc.csfc))==0;
@@ -337,14 +366,47 @@ static int filter(void *unused, const hp_address_t *target) {
     if (rc) { return rc; }
     return ble_hs_pvcy_set_resolve_enabled(1);
 }
+static int update_existing_cccd(const struct ble_store_value_cccd *existing,
+    const struct ble_store_value_cccd *requested) {
+    // NimBLE invokes the store callback under its host lock. Its pinned ESP
+    // backend skips persistence for an equal CCCD count. Update just the
+    // delivery marker under the same lock, without entering the NVS writer.
+    if (!same_store_address(&existing->peer_addr,&requested->peer_addr) ||
+        existing->chr_val_handle!=requested->chr_val_handle || existing->flags!=requested->flags) {
+        int detail=durable_error_code(BLE_STORE_OBJ_TYPE_CCCD,DURABLE_VALUE_DIFF);
+        fault(HP_DOMAIN_NVS,detail);
+        return BLE_HS_ESTORE_FAIL;
+    }
+    if (existing->value_changed==requested->value_changed) { return 0; }
+    struct ble_store_value_cccd *match=NULL;
+    for (int i=0;i<ble_store_config_num_cccds;i++) {
+        struct ble_store_value_cccd *row=&ble_store_config_cccds[i];
+        if (!same_store_address(&row->peer_addr,&requested->peer_addr) ||
+            row->chr_val_handle!=requested->chr_val_handle) { continue; }
+        if (match || row->flags!=requested->flags) { return BLE_HS_EREJECT; }
+        match=row;
+    }
+    if (!match) { return BLE_HS_ESTORE_FAIL; }
+    match->value_changed=requested->value_changed;
+    return 0;
+}
 static int guarded_write(int type, const union ble_store_value *value) {
+    if (!check_store_guards()) { return BLE_HS_ESTORE_FAIL; }
+    if (type==BLE_STORE_OBJ_TYPE_CCCD && (ble_store_config_num_cccds<0 ||
+        ble_store_config_num_cccds>MYNEWT_VAL(BLE_STORE_MAX_CCCDS))) {
+        fault(HP_DOMAIN_NVS,BLE_HS_ESTORE_FAIL);
+        return BLE_HS_ESTORE_FAIL;
+    }
     const char *prefix=store_prefix(type);
     if (prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
         union ble_store_key key; union ble_store_value existing;
         memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
         ble_store_key_from_value(type,&key,value);
-        int found=original_read(type,&key,&existing);
+        int found=ble_store_config_read(type,&key,&existing);
         if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
+        if (type==BLE_STORE_OBJ_TYPE_CCCD && found==0) {
+            return update_existing_cccd(&existing.cccd,&value->cccd);
+        }
         const ble_addr_t *peer=type==BLE_STORE_OBJ_TYPE_CCCD ? &value->cccd.peer_addr : type==BLE_STORE_OBJ_TYPE_CSFC ? &value->csfc.peer_addr : type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? &value->rpa_rec.peer_addr : &value->sec.peer_addr;
         hp_address_t a=address(peer);
         bool security=type==BLE_STORE_OBJ_TYPE_OUR_SEC || type==BLE_STORE_OBJ_TYPE_PEER_SEC;
@@ -359,18 +421,18 @@ static int guarded_write(int type, const union ble_store_value *value) {
         union ble_store_key key; union ble_store_value existing;
         memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
         ble_store_key_from_value(type,&key,value);
-        int found=original_read(type,&key,&existing);
+        int found=ble_store_config_read(type,&key,&existing);
         if (found==0 && !same_store_record(type,&existing,value)) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
         if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
     }
-    int rc=original_write(type,value), detail=0;
+    int rc=ble_store_config_write(type,value), detail=0;
     if (!rc && prefix) {
         // The pinned store assigns bond_count during OUR_SEC/PEER_SEC writes.
         // Verify the canonical POST-write record, never the caller's old count.
         union ble_store_key key; union ble_store_value canonical, expected;
         memset(&key,0,sizeof(key)); memset(&canonical,0,sizeof(canonical));
         ble_store_key_from_value(type,&key,value);
-        rc=original_read(type,&key,&canonical);
+        rc=ble_store_config_read(type,&key,&canonical);
         memset(&expected,0,sizeof(expected));
         // Public NimBLE write helpers may pass a smaller struct through a
         // union pointer. Never read sizeof(union) bytes from that argument.
@@ -387,8 +449,9 @@ static int guarded_write(int type, const union ble_store_value *value) {
     schedule(); return rc;
 }
 static int guarded_delete(int type, const union ble_store_key *key) {
+    if (!check_store_guards()) { return BLE_HS_ESTORE_FAIL; }
     if (store_prefix(type) && type!=BLE_STORE_OBJ_TYPE_PEER_ADDR) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
-    return original_delete(type,key);
+    return ble_store_config_delete(type,key);
 }
 int bleio_host_policy_store_status(struct ble_store_status_event *event, void *arg) {
     (void)event; (void)arg;
@@ -396,11 +459,20 @@ int bleio_host_policy_store_status(struct ble_store_status_event *event, void *a
     return BLE_HS_ESTORE_CAP; // FULL and OVERFLOW: never round-robin evict a bond/CCCD/CSFC.
 }
 void bleio_host_policy_install_store_guards(void) {
-    original_write=ble_hs_cfg.store_write_cb; original_read=ble_hs_cfg.store_read_cb; original_delete=ble_hs_cfg.store_delete_cb;
-    ble_hs_cfg.store_write_cb=guarded_write; ble_hs_cfg.store_delete_cb=guarded_delete;
+    // Allow the vendor's known store initialization, or an already intact
+    // binding. An unknown callback must never become a write delegate.
+    if (ble_hs_cfg.store_read_cb==ble_store_config_read &&
+        ble_hs_cfg.store_write_cb==ble_store_config_write && ble_hs_cfg.store_delete_cb==ble_store_config_delete &&
+        ble_hs_cfg.store_status_cb==bleio_host_policy_store_status) {
+        ble_hs_cfg.store_write_cb=guarded_write;
+        ble_hs_cfg.store_delete_cb=guarded_delete;
+    }
+    (void)check_store_guards();
 }
 static void service(struct ble_npl_event *event) {
     (void)event;
+    if (!synced || !timer_ready) { return; }
+    bool guards_ok=check_store_guards();
     policy_request_t local; bool has_request, has_fault; int error; hp_domain_t domain;
     portENTER_CRITICAL(&policy_mux);
     has_request=hp_pop(&command_queue,&local); processing=true;
@@ -410,20 +482,21 @@ static void service(struct ble_npl_event *event) {
     bool transitioning=has_request || has_fault || core.status.state==HP_SWITCHING;
     if (has_request || has_fault) { clear_inputs(); }
     if (has_fault) {
-        (void)release_old_input(); hp_fail(&core,domain,error);
+        if (guards_ok) { (void)release_old_input(); }
+        hp_fail(&core,domain,error);
         // A command already queued BEFORE this fault is not a new recovery
         // intent. Publish its terminal error; never erase the fault by applying it.
         if (has_request) { core.status.operation_id=local.operation; if (!local.alias) { core.status.requested_mode=local.mode; } }
-    } else if (has_request) {
+    } else if (has_request && guards_ok) {
         int release_error=release_old_input();
         if (release_error) { core.status.operation_id=local.operation; hp_fail(&core,HP_DOMAIN_NIMBLE,release_error); }
         else if (local.alias) { core.status.operation_id=local.operation; int rc=hp_set_alias(&core,local.target,local.text,local.length); if (rc) { hp_fail(&core,HP_DOMAIN_NVS,rc); } }
         else { hp_request(&core,local.mode,local.target,local.operation,local.timeout_s,millis()); }
     }
-    hp_tick(&core,millis());
+    if (guards_ok) { hp_tick(&core,millis()); }
     // A stop/filter transition and start must run in DIFFERENT NimBLE event
     // contexts. On the next tick, admission is re-evaluated, never cached on VM.
-    if (!transitioning) {
+    if (!transitioning || !guards_ok) {
         portENTER_CRITICAL(&policy_mux);
         bool start_pending=advertising_request.active && !advertising_request.finished;
         bool cancelled=advertising_request.cancelled;
@@ -431,7 +504,7 @@ static void service(struct ble_npl_event *event) {
         portEXIT_CRITICAL(&policy_mux);
         if (start_pending) {
             uint32_t rc=BLE_HS_EREJECT;
-            if (!cancelled && hp_advertising_allowed(&core)) {
+            if (guards_ok && !cancelled && hp_advertising_allowed(&core)) {
                 common_hal_bleio_adapter_obj.user_advertising=advertising_request.user_owned;
                 rc=advertising_request.start(&common_hal_bleio_adapter_obj,
                     advertising_request.connectable,advertising_request.anonymous,
@@ -443,7 +516,7 @@ static void service(struct ble_npl_event *event) {
             portENTER_CRITICAL(&policy_mux);
             cancelled=advertising_request.cancelled || advertising_request.token!=token;
             portEXIT_CRITICAL(&policy_mux);
-            if (cancelled || rc) {
+            if (guards_ok && (cancelled || rc)) {
                 int stopped=stop_advertising(NULL);
                 if ((cancelled || (rc!=BLE_HS_EREJECT) || stopped) && core.status.state!=HP_ERROR) { hp_fail(&core,HP_DOMAIN_NIMBLE,stopped ? stopped : cancelled ? BLE_HS_ETIMEOUT : (int)rc); }
                 rc=cancelled ? BLE_HS_ETIMEOUT : rc;
@@ -457,7 +530,7 @@ static void service(struct ble_npl_event *event) {
         }
     }
     // Bounded FIFO service, no ENOMEM retry, no waits and no VM pointers.
-    for (unsigned i=0;i<4;i++) {
+    for (unsigned i=0;guards_ok && i<4;i++) {
         hp_input_report_t report;
         portENTER_CRITICAL(&policy_mux);
         bool have=!command_queue.pending && !fault_pending && hp_pop_input(&input_queue,&report);
@@ -468,8 +541,13 @@ static void service(struct ble_npl_event *event) {
         if (rc) { clear_inputs(); hp_fail(&core,HP_DOMAIN_NIMBLE,rc); break; }
     }
     publish();
-    int timer_error=ble_npl_callout_reset(&policy_timer,ble_npl_time_ms_to_ticks32(100));
-    if (timer_error) { timer_ready=false; clear_inputs(); (void)release_old_input(); hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); publish(); }
+    int timer_error=synced ? ble_npl_callout_reset(&policy_timer,ble_npl_time_ms_to_ticks32(100)) : 0;
+    if (timer_error) {
+        timer_ready=false;
+        clear_inputs();
+        if (guards_ok) { (void)release_old_input(); hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); }
+        publish();
+    }
     portENTER_CRITICAL(&policy_mux); processing=false; policy_busy=false; portEXIT_CRITICAL(&policy_mux);
 }
 static int reserve_enrollment(void *unused) {
@@ -497,21 +575,50 @@ void bleio_host_policy_init(int nvs_error) {
     initialized=true; publish();
 }
 void bleio_host_policy_sync(void) {
-    int timer_error=ble_npl_callout_init(&policy_timer,nimble_port_get_dflt_eventq(),service,NULL);
-    synced=true;
+    // Default-IRK setup can reinitialize the vendor store before this callback.
+    // Bind again before the adapter publishes readiness to CircuitPython.
+    synced=false;
+    bleio_host_policy_install_store_guards();
+    if (timer_initialized) { ble_npl_callout_stop(&policy_timer); }
+    int timer_error=timer_initialized ? 0 :
+        ble_npl_callout_init(&policy_timer,nimble_port_get_dflt_eventq(),service,NULL);
     if (timer_error) { timer_ready=false; hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); publish(); return; }
-    timer_ready=true;
-    int rc=hp_refresh(&core);
-    if (rc) { hp_fail(&core,HP_DOMAIN_NVS,rc); }
+    timer_initialized=true;
+    clear_inputs();
+    core.status.filter_ready=false;
+    core.status.hid_ready=false;
+    if (!store_guard_failed) {
+        int rc=hp_refresh(&core);
+        if (rc) { hp_fail(&core,HP_DOMAIN_NVS,rc); }
+        else if (core.status.state!=HP_ERROR) {
+            core.status.applied_mode=HP_PAUSED;
+            core.status.state=HP_SWITCHING;
+        }
+    }
     timer_error=ble_npl_callout_reset(&policy_timer,ble_npl_time_ms_to_ticks32(100));
-    if (timer_error) { timer_ready=false; hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); }
+    timer_ready=timer_error==0;
+    if (timer_error) { hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); }
     publish();
+    synced=timer_ready;
 }
-void bleio_host_policy_disabled(void) { synced=false; if (timer_ready) { ble_npl_callout_stop(&policy_timer); } timer_ready=false; clear_inputs(); }
+void bleio_host_policy_disabled(void) {
+    synced=false;
+    timer_ready=false;
+    if (timer_initialized) { ble_npl_callout_stop(&policy_timer); }
+    clear_inputs();
+}
+void bleio_host_policy_deinit(void) {
+    // Adapter calls this after the host task has exited, before its event
+    // queue and allocator are released by nimble_port_deinit().
+    if (timer_initialized) {
+        ble_npl_callout_deinit(&policy_timer);
+        timer_initialized=false;
+    }
+}
 int bleio_host_policy_advertising_guard(void) {
     // Called only by the raw start on the serialized host task. Actual policy
     // transitions and expiry cannot interleave this check and GAP submission.
-    return synced && timer_ready && hp_advertising_allowed(&core) ? (int)core.status.applied_mode : -1;
+    return synced && timer_ready && check_store_guards() && hp_advertising_allowed(&core) ? (int)core.status.applied_mode : -1;
 }
 uint32_t bleio_host_policy_advertising_timeout_ms(uint32_t requested_ms) {
     if (core.status.applied_mode!=HP_ENROLL) { return requested_ms; }
@@ -524,8 +631,9 @@ uint32_t bleio_host_policy_start_advertising(bleio_adapter_obj_t *self, bool con
     const uint8_t *response, uint16_t response_length, mp_int_t power,
     const bleio_address_obj_t *directed_to, hp_raw_advertise_fn start) {
     if (self!=&common_hal_bleio_adapter_obj || directed_to!=NULL || anonymous || length>HP_ADV_MAX_BYTES || response_length>HP_ADV_MAX_BYTES) { return BLE_HS_EINVAL; }
+    if (!synced || !check_store_guards()) { return BLE_HS_EREJECT; }
     portENTER_CRITICAL(&policy_mux);
-    if (!synced || !timer_ready || command_queue.pending || fault_pending || !observed.filter_ready || observed.applied_mode==HP_PAUSED || observed.state==HP_ERROR) { portEXIT_CRITICAL(&policy_mux); return BLE_HS_EREJECT; }
+    if (!synced || !timer_ready || command_queue.pending || fault_pending || store_guard_failed || !observed.filter_ready || observed.applied_mode==HP_PAUSED || observed.state==HP_ERROR) { portEXIT_CRITICAL(&policy_mux); return BLE_HS_EREJECT; }
     if (advertising_request.active) { portEXIT_CRITICAL(&policy_mux); return BLE_HS_EBUSY; }
     uint32_t token=++next_advertising_token;
     if (!token) { token=++next_advertising_token; }
@@ -557,23 +665,26 @@ uint32_t bleio_host_policy_start_advertising(bleio_adapter_obj_t *self, bool con
     }
 }
 bool bleio_host_policy_input_guard(uint16_t handle) {
+    if (!synced || !check_store_guards()) { return false; }
     portENTER_CRITICAL(&policy_mux);
-    bool allowed=synced && timer_ready && !command_queue.pending && !policy_busy && !fault_pending && observed.hid_ready && observed.connected && observed.encrypted && observed.bonded && observed.state==HP_CONNECTED && observed.applied_mode==HP_AUTO && observed_handle==handle && observed.connected_id==observed.target_id;
+    bool allowed=synced && timer_ready && !command_queue.pending && !policy_busy && !fault_pending && !store_guard_failed && observed.hid_ready && observed.connected && observed.encrypted && observed.bonded && observed.state==HP_CONNECTED && observed.applied_mode==HP_AUTO && observed_handle==handle && observed.connected_id==observed.target_id;
     portEXIT_CRITICAL(&policy_mux); return allowed;
 }
 int bleio_host_policy_queue_input(uint16_t handle, uint16_t attribute, const uint8_t *data, size_t length) {
+    if (!synced || !check_store_guards()) { return BLE_HS_EREJECT; }
     portENTER_CRITICAL(&policy_mux);
     bool origin_current=input_origin_valid && input_origin.operation_id==observed.operation_id &&
         input_origin.policy_generation==observed.policy_generation && input_origin.connection_generation==observed.connection_generation &&
         input_origin.subscription_generation==observed.subscription_generation && input_origin.target_id==observed.target_id &&
         origin_handle==observed_handle && origin_input_handle==observed_input_handle && observed.hid_ready;
-    int rc=!synced || !timer_ready || command_queue.pending || policy_busy || fault_pending || !origin_current ? HP_UNAUTHORIZED :
+    int rc=!synced || !timer_ready || command_queue.pending || policy_busy || fault_pending || store_guard_failed || !origin_current ? HP_UNAUTHORIZED :
         hp_queue_input(&input_queue,&input_origin,origin_handle,origin_input_handle,handle,attribute,data,length);
     portEXIT_CRITICAL(&policy_mux);
     if (rc==HP_QUEUE_FULL) { fault(HP_DOMAIN_NIMBLE,BLE_HS_ENOMEM); return BLE_HS_ENOMEM; }
     return rc ? BLE_HS_EREJECT : 0;
 }
 mp_obj_t bleio_host_policy_arm_input(mp_obj_t operation, mp_obj_t policy, mp_obj_t connection, mp_obj_t subscription) {
+    if (!synced || !check_store_guards()) { return mp_obj_new_bool(false); }
     hp_status_t expected;
     portENTER_CRITICAL(&policy_mux); expected=observed; portEXIT_CRITICAL(&policy_mux);
     // Exact arbitrary-Python-int equality avoids truncating a supplied epoch.
@@ -584,7 +695,7 @@ mp_obj_t bleio_host_policy_arm_input(mp_obj_t operation, mp_obj_t policy, mp_obj
         mp_obj_equal(connection,mp_obj_new_int_from_uint(expected.connection_generation)) &&
         mp_obj_equal(subscription,mp_obj_new_int_from_uint(expected.subscription_generation));
     portENTER_CRITICAL(&policy_mux);
-    bool allowed=equal && synced && timer_ready && !command_queue.pending && !policy_busy && !fault_pending &&
+    bool allowed=equal && synced && timer_ready && !command_queue.pending && !policy_busy && !fault_pending && !store_guard_failed &&
         observed.state==HP_CONNECTED && observed.applied_mode==HP_AUTO && observed.hid_ready && observed.connected && observed.encrypted && observed.bonded && observed.connected_id==observed.target_id &&
         observed.operation_id==expected.operation_id && observed.policy_generation==expected.policy_generation &&
         observed.connection_generation==expected.connection_generation && observed.subscription_generation==expected.subscription_generation;
@@ -596,7 +707,7 @@ bool bleio_host_policy_input_value(uint16_t handle, uint16_t attribute, uint8_t 
     if (length>HP_INPUT_BYTES) { return false; }
     memset(out,0,length);
     portENTER_CRITICAL(&policy_mux);
-    bool valid=last_input_valid && !command_queue.pending && !fault_pending && !policy_busy &&
+    bool valid=last_input_valid && !command_queue.pending && !fault_pending && !policy_busy && !store_guard_failed &&
         observed.hid_ready && observed.connected && observed_handle==handle && observed_input_handle==attribute &&
         last_input.handle==handle && last_input.attribute==attribute && last_input.length==length &&
         last_input.connection_generation==observed.connection_generation && last_input.policy_generation==observed.policy_generation &&
@@ -618,6 +729,7 @@ static int resolve_saved(int type, union ble_store_value *value, void *cookie) {
     ctx->identity=normalized; ctx->found=true; return 0;
 }
 uint32_t bleio_host_policy_connect(uint16_t handle) {
+    if (!synced || !check_store_guards()) { terminate(NULL,handle); return 0; }
     portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
     struct ble_gap_conn_desc desc;
     if (ble_gap_conn_find(handle,&desc)) { terminate(NULL,handle); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return 0; }
@@ -639,6 +751,7 @@ uint32_t bleio_host_policy_connect(uint16_t handle) {
 }
 void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
     if (event->type!=BLE_GAP_EVENT_DISCONNECT && event->type!=BLE_GAP_EVENT_IDENTITY_RESOLVED && event->type!=BLE_GAP_EVENT_ENC_CHANGE && event->type!=BLE_GAP_EVENT_REPEAT_PAIRING) { return; }
+    if (!check_store_guards() && event->type!=BLE_GAP_EVENT_DISCONNECT) { return; }
     portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
     hp_status_t before=core.status;
     struct ble_gap_conn_desc desc; uint16_t handle=HP_INVALID_HANDLE;
@@ -660,6 +773,7 @@ void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
     publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); schedule();
 }
 void bleio_host_policy_subscription(uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled) {
+    if (!synced || !check_store_guards()) { return; }
     portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
     uint32_t before=core.status.subscription_generation;
     hp_subscribe(&core,handle,generation,input_handle,enabled); if (before!=core.status.subscription_generation) { clear_inputs(); } publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); schedule();
@@ -675,8 +789,9 @@ static uint64_t parse_id(mp_obj_t value, bool optional) {
 }
 static mp_obj_t id_object(uint64_t id) { if (!id) { return mp_const_none; } char text[17]; snprintf(text,sizeof(text),"%016" PRIx64,id); return mp_obj_new_str(text,16); }
 static mp_obj_t enqueue(policy_request_t *next) {
-    if (!synced || !timer_ready) { mp_raise_RuntimeError(MP_ERROR_TEXT("BLE host policy unavailable")); }
+    if (!synced || !timer_ready || !check_store_guards()) { mp_raise_RuntimeError(MP_ERROR_TEXT("BLE host policy unavailable")); }
     portENTER_CRITICAL(&policy_mux);
+    if (store_guard_failed) { portEXIT_CRITICAL(&policy_mux); mp_raise_RuntimeError(MP_ERROR_TEXT("BLE host policy unavailable")); }
     int rc=hp_submit(&command_queue,next);
     if (rc) { portEXIT_CRITICAL(&policy_mux); mp_raise_RuntimeError(MP_ERROR_TEXT("BLE host policy queue full")); }
     hp_clear_input(&input_queue);
