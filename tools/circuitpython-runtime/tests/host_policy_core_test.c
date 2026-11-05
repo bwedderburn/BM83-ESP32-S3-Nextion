@@ -19,7 +19,84 @@ static int peers(void *c,hp_peer_t *p,size_t *count,unsigned *cccds) { fixture_t
 static int reserve(void *c) { return ((fixture_t *)c)->reserve_error; }
 static void setup(fixture_t *f,hp_core_t *p) { memset(f,0,sizeof(*f));f->count=2;f->peers[0]=peer(6);f->peers[1]=peer(7);f->cccds=6;hp_backend_t b={f,persist,stop,terminate,filter,peers,reserve};hp_init(p,&b,NULL,0); }
 static uint32_t connect_ready(fixture_t *f,hp_core_t *p,unsigned index,uint16_t handle) { uint32_t g=hp_connect(p,handle,&f->peers[index].address);assert(g);hp_security(p,handle,g,true,true,0);hp_subscribe(p,handle,g,123,true);hp_tick(p,200);assert(hp_input_allowed(p,handle));return g; }
+static void test_late_saved_identity_keeps_the_pairing_window(void) {
+    fixture_t fixture;
+    hp_core_t policy;
+    setup(&fixture, &policy);
+    hp_request(&policy, HP_ENROLL, 0, 100, 60, 0);
+    hp_address_t private_address = {.type=1, .val={1,2,3,4,5,0x40}};
+    const uint16_t handle = 42;
+    uint32_t rejected = hp_connect(&policy, handle, &private_address);
+    assert(rejected && policy.status.connected && !policy.status.connected_id);
+
+    hp_identity(&policy, handle, rejected, &fixture.peers[0].address);
+    assert(policy.enrollment_rejected && fixture.terms == 1 && policy.status.state == HP_SWITCHING);
+    assert(policy.deadline_ms == 60000 && policy.status.operation_id == 100 && fixture.saved.mode == HP_PAUSED);
+    assert(!hp_store_allowed(&policy, &fixture.peers[0].address, true, true, true));
+    hp_security(&policy, handle, rejected, true, true, 0);
+    hp_subscribe(&policy, handle, rejected, 123, true);
+    assert(!policy.status.encrypted && !policy.input_subscribed && !hp_advertising_allowed(&policy));
+
+    hp_disconnect(&policy, handle, rejected, 0x216);
+    hp_tick(&policy, 1000);
+    assert(policy.status.state == HP_ENROLLING && hp_advertising_allowed(&policy));
+    assert(policy.status.error_domain == HP_DOMAIN_NONE && policy.status.enroll_remaining_s == 59);
+    assert(!hp_store_allowed(&policy, &fixture.peers[0].address, true, true, true));
+
+    hp_address_t new_address = addr(8);
+    uint32_t admitted = hp_connect(&policy, handle, &new_address);
+    assert(admitted && admitted != rejected && !policy.enrollment_rejected);
+    assert(!hp_reject_enrollment_link(&policy, handle, rejected));
+    hp_identity(&policy, handle, rejected, &fixture.peers[0].address);
+    assert(hp_store_allowed(&policy, &new_address, true, false, false));
+    hp_security(&policy, handle, admitted, true, true, 0);
+    hp_subscribe(&policy, handle, admitted, 123, true);
+    fixture.peers[2] = peer(8);
+    fixture.count = 3;
+    hp_tick(&policy, 1200);
+    assert(policy.status.state == HP_CONNECTED && policy.status.target_id == fixture.peers[2].id);
+    assert(hp_input_allowed(&policy, handle) && policy.peer_count == 3 && fixture.terms == 1);
+}
+
+static void test_enrollment_reject_drains_late_callbacks_after_handle_loss(void) {
+    fixture_t fixture;
+    hp_core_t policy;
+    setup(&fixture, &policy);
+    hp_request(&policy, HP_ENROLL, 0, 101, 5, 0);
+    hp_address_t private_address = {.type=1, .val={1,2,3,4,5,0x40}};
+    const uint16_t handle = 41;
+    uint32_t generation = hp_connect(&policy, handle, &private_address);
+    assert(generation);
+    fixture.terminate_error = HP_TERMINATE_ABSENT;
+    assert(hp_reject_enrollment_link(&policy, handle, generation));
+    assert(policy.enrollment_rejected && policy.handle == HP_INVALID_HANDLE);
+    assert(!hp_store_allowed(&policy, &fixture.peers[0].address, true, true, true));
+    hp_tick(&policy, 1000);
+    assert(policy.status.state == HP_ENROLLING && policy.status.operation_id == 101);
+    hp_tick(&policy, 5000);
+    assert(policy.status.state == HP_STATE_PAUSED && policy.status.error_code == HP_TIMEOUT);
+    assert(fixture.terms == 1 && !hp_advertising_allowed(&policy));
+}
+
+static void test_enrollment_termination_failure_survives_expiry(void) {
+    fixture_t fixture;
+    hp_core_t policy;
+    setup(&fixture, &policy);
+    hp_request(&policy, HP_ENROLL, 0, 102, 5, 0);
+    hp_address_t private_address = {.type=1, .val={1,2,3,4,5,0x40}};
+    uint32_t generation = hp_connect(&policy, 41, &private_address);
+    assert(generation);
+    fixture.terminate_error = 88;
+    assert(hp_reject_enrollment_link(&policy, 41, generation));
+    assert(policy.status.state == HP_ERROR && policy.status.error_domain == HP_DOMAIN_NIMBLE);
+    hp_tick(&policy, 5000);
+    assert(policy.status.error_code == 88 && policy.status.state == HP_ERROR);
+    assert(fixture.terms == 1 && fixture.saved.mode == HP_PAUSED && !hp_advertising_allowed(&policy));
+}
 int main(void) {
+    test_late_saved_identity_keeps_the_pairing_window();
+    test_enrollment_reject_drains_late_callbacks_after_handle_loss();
+    test_enrollment_termination_failure_survives_expiry();
     fixture_t f;hp_core_t p;setup(&f,&p);
     assert(p.status.state==HP_STATE_PAUSED&&!hp_advertising_allowed(&p));
     hp_request(&p,HP_AUTO,0,1,60,0);assert(p.status.state==HP_ERROR&&!hp_advertising_allowed(&p));

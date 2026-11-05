@@ -301,8 +301,8 @@ class HostPolicyPublisher:
         if not self._observe_completion():
             return False
         now, status = self.clock(), self.snapshot()
-        if self.result == 1 and (status.get("owner_error") or status.get("state") == "ERROR"):
-            self.result, self.error = 2, status.get("owner_error") or 7
+        if self.result == 1 and status.get("owner_error"):
+            self.result, self.error = 2, status["owner_error"]
         if self._alias_pending and status.get("alias_complete"):
             self._alias_pending = False
             if not status.get("owner_error"):

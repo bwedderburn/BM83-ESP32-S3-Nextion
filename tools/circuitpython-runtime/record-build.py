@@ -18,6 +18,7 @@ RECIPE = Path('/opt/recipe')
 OUTPUT = Path('/output')
 BUILD = ROOT / 'ports/espressif/build-espressif_esp32s3_devkitc_1_n8r8'
 IDF = ROOT / 'ports/espressif/esp-idf'
+NIMBLE_GITLINK = 'components/bt/host/nimble/nimble'
 BOARD_CONFIG = 'ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig'
 HASHLIB_FILES = {
     'shared-bindings/hashlib/Hash.c', 'shared-bindings/hashlib/Hash.h',
@@ -35,6 +36,14 @@ HOST_POLICY_FILES = {
     'ports/espressif/common-hal/_bleio/HostPolicy.h',
     'ports/espressif/common-hal/_bleio/HostPolicyCore.c',
     'ports/espressif/common-hal/_bleio/HostPolicyCore.h',
+}
+NIMBLE_PATCH_FILES = {
+    'nimble-legacy-le-features.patch': {'nimble/host/src/ble_gap.c'},
+    'nimble-csfc-upsert.patch': {
+        'nimble/host/src/ble_gatts.c', 'nimble/host/store/config/src/ble_store_config.c',
+        'nimble/host/store/config/src/ble_store_config_priv.h',
+        'nimble/host/store/config/src/ble_store_nvs.c',
+    },
 }
 
 
@@ -66,7 +75,7 @@ def check_host_tools(pins):
 def check_sources():
     pins = json.loads((RECIPE / 'source-pins.json').read_text())
     paths = {'circuitpython': ROOT, 'esp_idf': IDF,
-             'esp_nimble': IDF / 'components/bt/host/nimble/nimble'}
+             'esp_nimble': IDF / NIMBLE_GITLINK}
     sources = {name: command('git', '-C', str(path), 'rev-parse', 'HEAD')
                for name, path in paths.items()}
     for name, commit in sources.items():
@@ -102,8 +111,28 @@ def check_sources():
     for filename, expected_hash in policy['files'].items():
         if sha(ROOT / filename) != expected_hash:
             raise ValueError('Unexpected native host policy source: ' + filename)
+    nimble = paths['esp_nimble']
+    vendor_patches = pins.get('nimble_patches', {})
+    if set(vendor_patches) != set(NIMBLE_PATCH_FILES):
+        raise ValueError('Missing or unexpected reviewed NimBLE patch')
+    for patch, filenames in NIMBLE_PATCH_FILES.items():
+        reviewed = vendor_patches[patch]
+        if (set(reviewed) != {'sha256', 'files'} or set(reviewed['files']) != filenames
+                or sha(RECIPE / patch) != reviewed['sha256']):
+            raise ValueError('Unexpected NimBLE patch provenance: ' + patch)
+        for filename, expected_hash in reviewed['files'].items():
+            if sha(nimble / filename) != expected_hash:
+                raise ValueError('Unexpected patched NimBLE source: ' + filename)
+    nimble_dirty = command('git', '-C', str(nimble), 'diff', 'HEAD', '--name-only', '--ignore-submodules=none')
+    idf_dirty = command('git', '-C', str(IDF), 'diff', 'HEAD', '--name-only', '--ignore-submodules=none')
+    if (set(nimble_dirty.splitlines()) != set().union(*NIMBLE_PATCH_FILES.values())
+            or idf_dirty != NIMBLE_GITLINK):
+        raise ValueError('Unexpected modified source in the NimBLE or IDF submodule')
+    for nested in (IDF, nimble):
+        if command('git', '-C', str(nested), 'ls-files', '--others', '--exclude-standard'):
+            raise ValueError('Unexpected untracked source in the NimBLE or IDF submodule')
     dirty = command('git', '-C', str(ROOT), 'diff', 'HEAD', '--name-only', '--ignore-submodules=none')
-    if set(dirty.splitlines()) != {web_tool} | HASHLIB_FILES | HOST_POLICY_FILES:
+    if set(dirty.splitlines()) != {web_tool, 'ports/espressif/esp-idf'} | HASHLIB_FILES | HOST_POLICY_FILES:
         raise ValueError('Unexpected modified source beyond the reviewed build patches')
     if command('git', '-C', str(ROOT), 'ls-files', '--others', '--exclude-standard'):
         raise ValueError('Unexpected untracked source')
@@ -201,6 +230,8 @@ def record():
                    'web_assets_patch_sha256': sha(RECIPE / 'reproducible-web-assets.patch'),
                    'hashlib_close_patch_sha256': sha(RECIPE / 'hashlib-close.patch'),
                    'host_policy_patch_sha256': sha(RECIPE / 'host-policy.patch'),
+                   'nimble_legacy_features_patch_sha256': sha(RECIPE / 'nimble-legacy-le-features.patch'),
+                   'nimble_csfc_patch_sha256': sha(RECIPE / 'nimble-csfc-upsert.patch'),
                    'idf_tools_json_sha256': sha(IDF / 'tools/tools.json')},
         'artifacts': artifacts,
     }

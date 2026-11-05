@@ -1,6 +1,10 @@
 # A unified patch's blank context lines contain a structural single space.
 # Preserve the reviewed patch bytes on every host and allow only that format.
 tools/circuitpython-runtime/hashlib-close.patch text eol=lf whitespace=-blank-at-eol
+tools/circuitpython-runtime/host-policy.patch text eol=lf whitespace=-blank-at-eol
+tools/circuitpython-runtime/nimble-legacy-le-features.patch text eol=lf whitespace=-blank-at-eol
+tools/circuitpython-runtime/nimble-csfc-upsert.patch text eol=lf whitespace=-blank-at-eol
+tools/circuitpython-runtime/tests/legacy_le_features_upstream.c text eol=lf
 
 # Native-build provenance hashes cover the exact bytes copied into Docker.
 tools/circuitpython-runtime/requirements-build.txt text eol=lf

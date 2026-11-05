@@ -428,6 +428,37 @@ static void test_fresh_private_enrollment(void) {
     assert(terminations == 0);
 }
 
+static void test_rejected_enrollment_cannot_write_existing_records(void) {
+    reset();
+    hp_request(&core, HP_ENROLL, 0, 25, 60, 0);
+    const uint16_t handle = 50;
+    ble_addr_t private_address = test_rpa(9);
+    test_connection = (struct ble_gap_conn_desc){
+        .conn_handle = handle, .peer_id_addr = private_address, .peer_ota_addr = private_address,
+    };
+    uint32_t generation = bleio_host_policy_connect(handle);
+    assert(generation && !core.candidate_valid);
+    test_connection.peer_id_addr = test_address(6);
+    struct ble_gap_event resolved = {
+        .type = BLE_GAP_EVENT_IDENTITY_RESOLVED, .identity_resolved = {.conn_handle = handle},
+    };
+    bleio_host_policy_event(&resolved, generation);
+    assert(core.enrollment_rejected && terminations == 1 && !fault_pending);
+
+    union ble_store_value original = record_ram(BLE_STORE_OBJ_TYPE_OUR_SEC, 0);
+    union ble_store_value changed = original;
+    changed.sec.ltk[0] ^= 1;
+    assert(nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC, &changed) == BLE_HS_ESTORE_FAIL);
+    union ble_store_key key;
+    ble_store_key_from_value(BLE_STORE_OBJ_TYPE_OUR_SEC, &key, &original);
+    assert(guarded_delete(BLE_STORE_OBJ_TYPE_OUR_SEC, &key) == BLE_HS_ESTORE_FAIL);
+    assert(!fault_pending && same_store_record(BLE_STORE_OBJ_TYPE_OUR_SEC, &original,
+        &records[BLE_STORE_OBJ_TYPE_OUR_SEC][0].nvs));
+    hp_disconnect(&core, handle, generation, 0x216);
+    service(NULL);
+    assert(core.status.state == HP_ENROLLING && core.status.operation_id == 25 && !fault_pending);
+}
+
 static void test_failed_peripheral_establishment(void) {
     reset();
     hp_request(&core, HP_ENROLL, 0, 25, 60, 0);
@@ -536,6 +567,7 @@ int main(void){
     test_marker_store_boundaries();
     test_rpa_mappings_preserve_existing_rows();
     test_fresh_private_enrollment();
+    test_rejected_enrollment_cannot_write_existing_records();
     test_failed_peripheral_establishment();
     test_failed_connection_callback_registration();
     test_unexpected_callback_drift();

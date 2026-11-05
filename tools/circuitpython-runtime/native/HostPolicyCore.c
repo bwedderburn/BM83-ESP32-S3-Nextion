@@ -173,7 +173,8 @@ void hp_request(hp_core_t *p, hp_mode_t mode, uint64_t target, uint32_t operatio
     if (p->terminate_failed) { p->terminate_sent=false; p->terminate_failed=false; }
     p->status.filter_ready=false; p->status.hid_ready=false; p->input_subscribed=false;
     p->status.error_domain=HP_DOMAIN_NONE; p->status.error_code=0;
-    p->candidate_valid=false; p->deadline_ms=0; p->status.enroll_remaining_s=0;
+    p->candidate_valid=false; p->candidate_store_started=false;
+    p->deadline_ms=0; p->status.enroll_remaining_s=0;
     int rc=hp_refresh(p);
     if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
     hp_peer_t *peer=NULL;
@@ -202,6 +203,7 @@ void hp_request(hp_core_t *p, hp_mode_t mode, uint64_t target, uint32_t operatio
     hp_tick(p,now_ms);
 }
 void hp_tick(hp_core_t *p, uint64_t now_ms) {
+    if (p->status.state==HP_ERROR) { return; }
     if (p->status.requested_mode==HP_ENROLL && p->deadline_ms) {
         if (now_ms>=p->deadline_ms) {
             p->status.requested_mode=HP_PAUSED; p->deadline_ms=0; p->status.enroll_remaining_s=0;
@@ -248,6 +250,7 @@ uint32_t hp_connect(hp_core_t *p, uint16_t handle, const hp_address_t *address) 
     if (p->status.applied_mode==HP_AUTO && (!valid || hp_identity_id(&normalized)!=p->status.target_id || !hp_address_equal(&normalized,&p->blob.selected))) { p->backend.terminate(p->backend.context,handle); return 0; }
     if (p->status.applied_mode==HP_ENROLL && valid && (enrollment_existing(p,hp_identity_id(&normalized)) || (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate)))) { p->backend.terminate(p->backend.context,handle); return 0; }
     p->handle=handle; p->terminate_sent=false; p->terminate_failed=false; p->input_subscribed=false;
+    p->enrollment_rejected=false;
     p->status.connection_generation++; if (!p->status.connection_generation) { p->status.connection_generation++; }
     p->connected_address=*address; p->status.connected=true;
     p->status.connected_id=valid ? hp_identity_id(&normalized) : 0;
@@ -255,24 +258,43 @@ uint32_t hp_connect(hp_core_t *p, uint16_t handle, const hp_address_t *address) 
     if (p->status.applied_mode==HP_ENROLL && valid) { p->candidate=normalized; p->candidate_valid=true; }
     return p->status.connection_generation;
 }
+bool hp_reject_enrollment_link(hp_core_t *p, uint16_t handle, uint32_t generation) {
+    if (p->status.applied_mode!=HP_ENROLL || p->status.requested_mode!=HP_ENROLL ||
+        p->status.state==HP_ERROR || handle==HP_INVALID_HANDLE || handle!=p->handle ||
+        generation!=p->status.connection_generation) { return false; }
+    if (p->enrollment_rejected) { return true; }
+    // SMP can still call the bond store after identity resolution returned.
+    // Keep the reject latched through those callbacks and until the next admission.
+    p->enrollment_rejected=true;
+    if (!p->candidate_store_started) { p->candidate_valid=false; }
+    p->status.connected_id=0; p->status.encrypted=false; p->status.bonded=false;
+    p->status.filter_ready=false; p->status.hid_ready=false; p->input_subscribed=false;
+    p->status.state=HP_SWITCHING;
+    terminate_once(p);
+    return true;
+}
 void hp_identity(hp_core_t *p, uint16_t handle, uint32_t generation, const hp_address_t *address) {
-    if (handle!=p->handle || generation!=p->status.connection_generation) { return; }
+    if (handle!=p->handle || generation!=p->status.connection_generation ||
+        p->status.state==HP_ERROR || p->enrollment_rejected) { return; }
     hp_address_t normalized;
     if (!hp_normalize(&normalized,address) || (p->status.applied_mode==HP_AUTO && !hp_address_equal(&normalized,&p->blob.selected))) { hp_fail(p,HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); return; }
     if (p->status.applied_mode==HP_ENROLL) {
-        if (enrollment_existing(p,hp_identity_id(&normalized)) || (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate))) { hp_fail(p,HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return; }
+        if (enrollment_existing(p,hp_identity_id(&normalized)) || (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate))) {
+            if (!hp_reject_enrollment_link(p,handle,generation)) { hp_fail(p,HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); }
+            return;
+        }
         p->candidate=normalized; p->candidate_valid=true;
     }
     p->connected_address=normalized; p->status.connected_id=hp_identity_id(&normalized);
 }
 void hp_security(hp_core_t *p, uint16_t handle, uint32_t generation, bool encrypted, bool bonded, int error) {
-    if (handle!=p->handle || generation!=p->status.connection_generation) { return; }
+    if (handle!=p->handle || generation!=p->status.connection_generation || p->enrollment_rejected) { return; }
     p->status.encrypted=encrypted; p->status.bonded=bonded;
     if (!encrypted || !bonded) { p->status.hid_ready=false; }
     if (error || !encrypted) { hp_fail(p,HP_DOMAIN_SECURITY,error ? error : HP_UNAUTHORIZED); }
 }
 void hp_subscribe(hp_core_t *p, uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled) {
-    if (handle!=p->handle || generation!=p->status.connection_generation) { return; }
+    if (handle!=p->handle || generation!=p->status.connection_generation || p->enrollment_rejected) { return; }
     if (p->hid_input_handle!=input_handle || p->input_subscribed!=enabled) { p->status.subscription_generation++; p->status.hid_ready=false; }
     p->hid_input_handle=input_handle; p->input_subscribed=enabled;
 }
@@ -293,12 +315,12 @@ bool hp_input_allowed(const hp_core_t *p, uint16_t handle) {
 }
 bool hp_store_allowed(hp_core_t *p, const hp_address_t *address, bool security, bool exists, bool same_keys) {
     hp_address_t normalized;
-    if (!hp_normalize(&normalized,address) || p->status.state==HP_ERROR) { return false; }
+    if (!hp_normalize(&normalized,address) || p->status.state==HP_ERROR || p->enrollment_rejected) { return false; }
     if (exists && security) { return same_keys; } // Never replace a saved peer's keys.
     if (p->status.applied_mode==HP_AUTO) { return hp_address_equal(&normalized,&p->blob.selected) && (!security || exists); }
     if (p->status.applied_mode!=HP_ENROLL || p->handle==HP_INVALID_HANDLE || enrollment_existing(p,hp_identity_id(&normalized))) { return false; }
     if (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate)) { return false; }
-    p->candidate=normalized; p->candidate_valid=true;
+    p->candidate=normalized; p->candidate_valid=true; p->candidate_store_started=true;
     return true;
 }
 int hp_set_alias(hp_core_t *p, uint64_t id, const char *alias, size_t length) {

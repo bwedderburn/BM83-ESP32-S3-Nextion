@@ -397,6 +397,8 @@ static int update_existing_cccd(const struct ble_store_value_cccd *existing,
 }
 static int guarded_write(int type, const union ble_store_value *value) {
     if (!check_store_guards()) { return BLE_HS_ESTORE_FAIL; }
+    const char *prefix=store_prefix(type);
+    if (core.enrollment_rejected && prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) { return BLE_HS_ESTORE_FAIL; }
     if (type==BLE_STORE_OBJ_TYPE_CCCD && (ble_store_config_num_cccds<0 ||
         ble_store_config_num_cccds>MYNEWT_VAL(BLE_STORE_MAX_CCCDS))) {
         fault(HP_DOMAIN_NVS,BLE_HS_ESTORE_FAIL);
@@ -414,7 +416,6 @@ static int guarded_write(int type, const union ble_store_value *value) {
             return BLE_HS_ESTORE_FAIL;
         }
     }
-    const char *prefix=store_prefix(type);
     if (prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
         union ble_store_key key; union ble_store_value existing;
         memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
@@ -477,7 +478,9 @@ static int guarded_write(int type, const union ble_store_value *value) {
 }
 static int guarded_delete(int type, const union ble_store_key *key) {
     if (!check_store_guards()) { return BLE_HS_ESTORE_FAIL; }
-    if (store_prefix(type) && type!=BLE_STORE_OBJ_TYPE_PEER_ADDR) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
+    const char *prefix=store_prefix(type);
+    if (core.enrollment_rejected && prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) { return BLE_HS_ESTORE_FAIL; }
+    if (prefix && type!=BLE_STORE_OBJ_TYPE_PEER_ADDR) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
     return ble_store_config_delete(type,key);
 }
 int bleio_host_policy_store_status(struct ble_store_status_event *event, void *arg) {
@@ -808,13 +811,19 @@ void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
             hp_disconnect(&core,event->disconnect.conn.conn_handle,generation,event->disconnect.reason); break;
         case BLE_GAP_EVENT_IDENTITY_RESOLVED:
             handle=event->identity_resolved.conn_handle;
+            if (handle!=core.handle || generation!=core.status.connection_generation || core.enrollment_rejected) { break; }
             if (!ble_gap_conn_find(handle,&desc)) { hp_address_t a=address(&desc.peer_id_addr); hp_identity(&core,handle,generation,&a); } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
             break;
         case BLE_GAP_EVENT_ENC_CHANGE:
             handle=event->enc_change.conn_handle;
+            if (handle!=core.handle || generation!=core.status.connection_generation || core.enrollment_rejected) { break; }
             if (!ble_gap_conn_find(handle,&desc)) { hp_address_t a=address(&desc.peer_id_addr); hp_identity(&core,handle,generation,&a); hp_security(&core,handle,generation,desc.sec_state.encrypted,desc.sec_state.bonded,event->enc_change.status); } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
             break;
-        case BLE_GAP_EVENT_REPEAT_PAIRING: fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); break;
+        case BLE_GAP_EVENT_REPEAT_PAIRING:
+            handle=event->repeat_pairing.conn_handle;
+            if (handle==core.handle && generation==core.status.connection_generation && core.status.state!=HP_ERROR &&
+                !hp_reject_enrollment_link(&core,handle,generation)) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); }
+            break;
         default: return;
     }
     if (before.connection_generation!=core.status.connection_generation || before.connected_id!=core.status.connected_id || before.connected!=core.status.connected || before.encrypted!=core.status.encrypted || before.bonded!=core.status.bonded || before.state!=core.status.state) { clear_inputs(); }

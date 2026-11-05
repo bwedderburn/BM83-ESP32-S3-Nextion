@@ -55,7 +55,7 @@ typedef struct {
     hp_blob_t blob;
     hp_status_t status;
     hp_address_t connected_address, candidate;
-    bool candidate_valid, terminate_sent, terminate_failed;
+    bool candidate_valid, candidate_store_started, terminate_sent, terminate_failed, enrollment_rejected;
     uint16_t handle, hid_input_handle;
     bool input_subscribed;
     uint64_t deadline_ms;
@@ -101,6 +101,7 @@ void hp_tick(hp_core_t *, uint64_t now_ms);
 void hp_fail(hp_core_t *, hp_domain_t, int);
 uint32_t hp_connect(hp_core_t *, uint16_t handle, const hp_address_t *);
 void hp_identity(hp_core_t *, uint16_t, uint32_t, const hp_address_t *);
+bool hp_reject_enrollment_link(hp_core_t *, uint16_t, uint32_t);
 void hp_security(hp_core_t *, uint16_t, uint32_t, bool encrypted, bool bonded, int error);
 void hp_subscribe(hp_core_t *, uint16_t, uint32_t, uint16_t input_handle, bool enabled);
 void hp_disconnect(hp_core_t *, uint16_t, uint32_t, int full_reason);

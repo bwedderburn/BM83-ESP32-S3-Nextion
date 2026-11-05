@@ -21,6 +21,7 @@ TOOL_KEYS = {"python", "cmake", "ninja", "gcc", "cryptography", "builder_image"}
 HASH_INPUTS = {"constraints_sha256", "requirements_sha256", "patch_sha256",
                "idf_tools_json_sha256", "web_assets_patch_sha256", "hashlib_close_patch_sha256",
                "host_policy_patch_sha256"}
+NIMBLE_HASH_INPUTS = {"nimble_legacy_features_patch_sha256", "nimble_csfc_patch_sha256"}
 ARTIFACTS = {"app", "elf", "sdkconfig", "sdkconfig_h", "partition_table",
              "distro_manifest", "python_packages"}
 TOP_KEYS = {"schema_version", "sources", "toolchain", "inputs", "artifacts"}
@@ -87,8 +88,10 @@ def load_manifest(folder):
     require(re.fullmatch(r"sha256:[0-9a-f]{64}", tools["builder_image"]),
             "Builder image must be recorded by immutable image SHA256")
     inputs = manifest["inputs"]
-    require(isinstance(inputs, dict) and set(inputs) == HASH_INPUTS | {"source_date_epoch"}
-            and all(digest(inputs[key]) for key in HASH_INPUTS)
+    require(isinstance(inputs, dict), "Invalid recorded build inputs")
+    original_keys = HASH_INPUTS | {"source_date_epoch"}
+    require(set(inputs) in (original_keys, original_keys | NIMBLE_HASH_INPUTS)
+            and all(digest(inputs[key]) for key in set(inputs) - {"source_date_epoch"})
             and type(inputs["source_date_epoch"]) is int and inputs["source_date_epoch"] >= 0,
             "Build input provenance is incomplete")
     artifacts = manifest["artifacts"]

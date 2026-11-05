@@ -40,7 +40,7 @@ RUN --mount=type=cache,target=/opt/idf-tools/dist,id=bm83-cp1031-tool-downloads 
     printf '6.0' > /opt/idf-venv/idf_version.txt && \
     /opt/idf-venv/bin/python -m pip check
 
-COPY build-runtime.sh record-build.py verify_host_tools.py reproducible-web-assets.patch hashlib-close.patch host-policy.patch /opt/recipe/
+COPY build-runtime.sh record-build.py verify_host_tools.py reproducible-web-assets.patch hashlib-close.patch host-policy.patch nimble-legacy-le-features.patch nimble-csfc-upsert.patch /opt/recipe/
 # Python 3.11's gzip default embeds wall-clock time in the web assets.
 # Fix the generator input, never normalize or rewrite a completed binary.
 RUN cd /opt/circuitpython && \
@@ -50,6 +50,10 @@ RUN cd /opt/circuitpython && \
     git apply /opt/recipe/hashlib-close.patch && \
     git apply --check /opt/recipe/host-policy.patch && \
     git apply /opt/recipe/host-policy.patch && \
+    git -C ports/espressif/esp-idf/components/bt/host/nimble/nimble apply --check \
+      /opt/recipe/nimble-legacy-le-features.patch /opt/recipe/nimble-csfc-upsert.patch && \
+    git -C ports/espressif/esp-idf/components/bt/host/nimble/nimble apply \
+      /opt/recipe/nimble-legacy-le-features.patch /opt/recipe/nimble-csfc-upsert.patch && \
     git add --intent-to-add -- \
       ports/espressif/common-hal/_bleio/HostPolicy.c \
       ports/espressif/common-hal/_bleio/HostPolicy.h \

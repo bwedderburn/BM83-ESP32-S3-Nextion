@@ -129,6 +129,24 @@ def test_policy_queue_is_not_completion_even_for_same_already_connected_target()
     assert body[3:11] == number(2)+number(9) and int.from_bytes(body[30:32], "big") & 1
 
 
+def test_accepted_pair_request_reports_the_correlated_native_failure():
+    backend, sink, clock = Backend(), Sink(), Clock()
+    publisher = HostPolicyPublisher(sink, backend, 1, clock)
+    admit(publisher, sink)
+    command = decode_command(encode_command(1, 2, 9, 3, payload=number(60, 2)))
+    assert publisher.request_host(command)
+    backend.owner.tick()
+    backend.adapter.status.update(operation_id=2, requested_mode="ENROLL", state="ERROR",
+                                  error_domain="SECURITY", error_code=5)
+    backend.owner.tick()
+    kind, body = drain_one(publisher, sink)
+    assert kind == 1
+    assert body[1:3] == b"\x01\x00"
+    assert body[3:15] == number(2) + number(9) + number(2)
+    assert body[29] == 5  # Native ERROR.
+    assert body[32:37] == b"\x04" + number(5)  # SECURITY domain and full native code.
+
+
 def test_paired_sender_dispatch_cancels_hold_but_never_touches_audio_or_calls_native_in_callback():
     remote, _radio, clock, _logs = make_remote()
     frame = encode_command(1, 2, 1, 1)

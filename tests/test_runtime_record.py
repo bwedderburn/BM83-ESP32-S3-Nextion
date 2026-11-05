@@ -63,6 +63,11 @@ def source_tree(tmp_path, monkeypatch):
     nimble_origin = tmp_path / "nimble-origin"
     init_repo(nimble_origin)
     (nimble_origin / "native.c").write_text("/* synthetic NimBLE input */\n")
+    for names in record.NIMBLE_PATCH_FILES.values():
+        for name in names:
+            source = nimble_origin / name
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("/* synthetic pinned NimBLE source */\n")
     commit_all(nimble_origin)
 
     idf_origin = tmp_path / "idf-origin"
@@ -103,6 +108,7 @@ def source_tree(tmp_path, monkeypatch):
     for filename in record.HOST_POLICY_FILES - {BOARD}:
         (root / filename).write_text("/* synthetic exact reviewed native host policy */\n")
     idf = root / "ports/espressif/esp-idf"
+    nimble = idf / nimble_relative
 
     recipe = tmp_path / "recipe"
     recipe.mkdir()
@@ -116,6 +122,16 @@ def source_tree(tmp_path, monkeypatch):
     (recipe / "hashlib-close.patch").write_bytes(native_patch)
     policy_patch = b"synthetic reviewed native host policy patch\n"
     (recipe / "host-policy.patch").write_bytes(policy_patch)
+    nimble_patches = {}
+    for patch, names in record.NIMBLE_PATCH_FILES.items():
+        data = ("synthetic reviewed " + patch + "\n").encode()
+        (recipe / patch).write_bytes(data)
+        for name in names:
+            (nimble / name).write_text("/* synthetic reviewed patched NimBLE source */\n")
+        nimble_patches[patch] = {
+            "sha256": digest(data),
+            "files": {name: digest((nimble / name).read_bytes()) for name in names},
+        }
     sources = {name: git(path, "rev-parse", "HEAD") for name, path in (
         ("circuitpython", root), ("esp_idf", idf), ("esp_nimble", idf / nimble_relative))}
     pins = {
@@ -136,6 +152,7 @@ def source_tree(tmp_path, monkeypatch):
             "sha256": digest(policy_patch),
             "files": {name: digest((root / name).read_bytes()) for name in record.HOST_POLICY_FILES},
         }},
+        "nimble_patches": nimble_patches,
     }
     pins_path = recipe / "source-pins.json"
     pins_path.write_text(json.dumps(pins))
@@ -192,6 +209,20 @@ def test_native_hash_source_allowlist_cannot_be_expanded(source_tree):
         (source_tree.root / "native.c").read_bytes())
     source_tree.pins_path.write_text(json.dumps(source_tree.pins))
     with pytest.raises(ValueError, match="native hash lifetime patch provenance"):
+        record.check_sources()
+
+
+def test_unreviewed_nested_nimble_changes_are_rejected(source_tree):
+    nimble = source_tree.idf / record.NIMBLE_GITLINK
+    (nimble / "native.c").write_text("/* modified unrelated NimBLE source */\n")
+    with pytest.raises(ValueError, match="Unexpected modified source in the NimBLE or IDF submodule"):
+        record.check_sources()
+
+
+def test_vendor_postimage_must_match_its_exact_pin(source_tree):
+    nimble = source_tree.idf / record.NIMBLE_GITLINK
+    (nimble / "nimble/host/src/ble_gap.c").write_text("/* extra NimBLE change */\n")
+    with pytest.raises(ValueError, match="Unexpected patched NimBLE source"):
         record.check_sources()
 
 
@@ -439,6 +470,8 @@ def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_bound
         "reproducible-web-assets.patch": b"synthetic reviewed gzip mtime=0 patch\n",
         "hashlib-close.patch": b"synthetic reviewed native hash lifetime patch\n",
         "host-policy.patch": b"synthetic reviewed native host policy patch\n",
+        "nimble-legacy-le-features.patch": b"synthetic reviewed NimBLE feature fallback\n",
+        "nimble-csfc-upsert.patch": b"synthetic reviewed NimBLE CSFC update\n",
     }
     for name, data in recipes.items():
         (recipe / name).write_bytes(data)
@@ -484,6 +517,8 @@ def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_bound
     assert manifest["inputs"]["patch_sha256"] == digest(recipes["bonds8-cccd24.patch"])
     assert manifest["inputs"]["hashlib_close_patch_sha256"] == digest(recipes["hashlib-close.patch"])
     assert manifest["inputs"]["host_policy_patch_sha256"] == digest(recipes["host-policy.patch"])
+    assert manifest["inputs"]["nimble_legacy_features_patch_sha256"] == digest(recipes["nimble-legacy-le-features.patch"])
+    assert manifest["inputs"]["nimble_csfc_patch_sha256"] == digest(recipes["nimble-csfc-upsert.patch"])
     assert manifest["sources"] == sources
     image_contract = json.loads((fixture.output / "artifact-manifest.json").read_text())
     assert image_contract["configuration"]["CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT"] is False
