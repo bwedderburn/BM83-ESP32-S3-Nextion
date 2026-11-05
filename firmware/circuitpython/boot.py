@@ -1,5 +1,9 @@
-"""Let the application own BLE advertising before workflow startup."""
+"""Set the controller's workflow policy before USB and BLE start."""
 import supervisor
+
+# A host write to CIRCUITPY can interrupt the active radio runtime during
+# teardown. Keep the drive available and restart explicitly after updates.
+supervisor.runtime.autoreload = False
 
 # The maintenance workflow otherwise advertises CIRCUITPYxxxx before main.py
 # gives the HID remote its stable name, and can advertise again after a user

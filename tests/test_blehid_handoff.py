@@ -455,6 +455,7 @@ def test_boot_disables_workflow_before_application_start(monkeypatch):
     runpy.run_path(str(path))
     assert events == ["workflow-off"]
     assert not runtime.enabled
+    assert runtime.autoreload is False
 
 
 def test_boot_capability_failure_does_not_abort_startup(monkeypatch, capsys):
@@ -464,3 +465,4 @@ def test_boot_capability_failure_does_not_abort_startup(monkeypatch, capsys):
     path = Path(__file__).parents[1] / "firmware/circuitpython/boot.py"
     runpy.run_path(str(path))
     assert "workflow control unavailable" in capsys.readouterr().out
+    assert runtime.autoreload is False

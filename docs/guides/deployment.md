@@ -370,10 +370,12 @@ UART acknowledgments and working audio alone do not prove metadata delivery.
 **Runtime limitation:** the installed CircuitPython 10.3.1-dirty runtime has been
 observed hard-faulting during VM teardown, including after Ctrl-C with playback
 paused and before any filesystem write. Do not treat a running-filesystem
-copy or a soft reload as a safe deployment. Pause the source, confirm the
-controller is stopped at the REPL with autoreload disabled (or in safe mode),
-then install and hash-verify only the approved delta. Preserve `boot.py`,
-existing profiles, entrypoints, and bonds. If stopping enters safe mode, retain
+copy or a soft reload as a safe deployment. The controller's `boot.py` disables
+automatic reload on CIRCUITPY writes while keeping the USB drive available.
+Pause the source and confirm the controller is stopped at the REPL with
+autoreload disabled or in safe mode. Install and hash-verify only the approved
+delta, preserve the other startup files, profiles, and bonds, and request a
+deliberate normal restart. If stopping enters safe mode, retain
 the fault evidence; after verification, an ESP32-only
 `microcontroller.reset()` from the safe-mode REPL has restored normal startup.
 This is a recovery procedure, not a fix for the runtime fault. Do not
