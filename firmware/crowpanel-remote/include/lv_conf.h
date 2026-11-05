@@ -497,7 +497,7 @@
 
 #define LV_USE_LINE       1
 
-#define LV_USE_ROLLER     1   /*Requires: lv_label*/
+#define LV_USE_ROLLER     0   /*Requires: lv_label*/
 #if LV_USE_ROLLER
     #define LV_ROLLER_INF_PAGES 7 /*Number of extra "pages" when the roller is infinite*/
 #endif
@@ -536,9 +536,11 @@
     #define LV_USE_CALENDAR_HEADER_DROPDOWN 1
 #endif  /*LV_USE_CALENDAR*/
 
-#define LV_USE_CHART      1
+/* The remote omits unused chart, color wheel, meter and roller widgets.
+ * The default theme retains these classes even without calls from our screens. */
+#define LV_USE_CHART      0
 
-#define LV_USE_COLORWHEEL 1
+#define LV_USE_COLORWHEEL 0
 
 #define LV_USE_IMGBTN     1
 
@@ -550,7 +552,7 @@
 
 #define LV_USE_MENU       1
 
-#define LV_USE_METER      1
+#define LV_USE_METER      0
 
 #define LV_USE_MSGBOX     1
 
@@ -737,7 +739,7 @@
  ====================*/
 
 /*Show some widget. It might be required to increase `LV_MEM_SIZE` */
-#define LV_USE_DEMO_WIDGETS 1
+#define LV_USE_DEMO_WIDGETS 0
 #if LV_USE_DEMO_WIDGETS
 #define LV_DEMO_WIDGETS_SLIDESHOW 0
 #endif
@@ -746,7 +748,7 @@
 #define LV_USE_DEMO_KEYPAD_AND_ENCODER 0
 
 /*Benchmark your system*/
-#define LV_USE_DEMO_BENCHMARK 1
+#define LV_USE_DEMO_BENCHMARK 0
 #if LV_USE_DEMO_BENCHMARK
 /*Use RGB565A8 images with 16 bit color depth instead of ARGB8565*/
 #define LV_DEMO_BENCHMARK_RGB565A8 0
@@ -756,7 +758,7 @@
 #define LV_USE_DEMO_STRESS 0
 
 /*Music player demo*/
-#define LV_USE_DEMO_MUSIC 1
+#define LV_USE_DEMO_MUSIC 0
 #if LV_USE_DEMO_MUSIC
     #define LV_DEMO_MUSIC_SQUARE    1
     #define LV_DEMO_MUSIC_LANDSCAPE 0
