@@ -18,7 +18,8 @@
   },
   "configuration": {
     "CONFIG_BT_NIMBLE_MAX_BONDS": 8,
-    "CONFIG_BT_NIMBLE_MAX_CCCDS": 24
+    "CONFIG_BT_NIMBLE_MAX_CCCDS": 24,
+    "CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT": false
   },
   "reference_tools": {
     "python": "3.11.13",
@@ -50,19 +51,20 @@
       }
     },
     "host_policy": {
-      "sha256": "a328e8fe6f2002b21b0fe2f47ba43a01d473371ba75a21d0bef9affe34e13c6d",
+      "sha256": "84da34e3a00bd827346b4256949fd139737489d723e643a060685dcf79ac1a5c",
       "files": {
         "ports/espressif/Makefile": "7ee98b8279c99228c74083c93869c4eddfccbb97aeae0a23e895b691de60b6e6",
         "ports/espressif/common-hal/_bleio/Adapter.c": "52ebfdb05c5450da3077586fbae84e38a322cf6fb2c7854612f253f69a475f1b",
         "ports/espressif/common-hal/_bleio/Characteristic.c": "fd076883a83cd5b425b46081aaf57b5b9a926cdf6f7611acc7e7a0021b732f93",
         "ports/espressif/common-hal/_bleio/Connection.c": "92220d83c519690ef064ad7dafe48005382ea10fa0fff2d936718ff1ca5df9a7",
         "ports/espressif/common-hal/_bleio/Connection.h": "82d462c59522996be26e7e06d2f87ee8dd37a59b05b232f63394081a203a5811",
-        "ports/espressif/common-hal/_bleio/HostPolicy.c": "ee7c8697827254928f474220888104115585f5e071bb0d2affef98ca85b49729",
+        "ports/espressif/common-hal/_bleio/HostPolicy.c": "a3fec442d2ab342bf2eb14be0b0493cd5581b2878a3e6259cf258f3dba8e8222",
         "ports/espressif/common-hal/_bleio/HostPolicy.h": "29c01ab9780659011d793691ccd1e6ab6e7ee9aee0f4ac3ef9320808574b28bc",
         "ports/espressif/common-hal/_bleio/HostPolicyCore.c": "4f552c524111c6834d2e27c173db433551825da92b2a0280378457577c2248a6",
         "ports/espressif/common-hal/_bleio/HostPolicyCore.h": "0930e1d473742831951e8f367d39825ae6a3eae4665e52f4028f3e1796a2addd",
         "ports/espressif/common-hal/_bleio/__init__.c": "9948f853dfec7fefa5e855fca23167e9a8278d1799799ab33c8fa2f2479e7bf8",
-        "shared-bindings/_bleio/Adapter.c": "46edc1d3d848911284adfc928ea577fde9ac7dbfdfa75bb93e494e6a8fc98d79"
+        "shared-bindings/_bleio/Adapter.c": "46edc1d3d848911284adfc928ea577fde9ac7dbfdfa75bb93e494e6a8fc98d79",
+        "ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig": "dd2ea96975adb9f2d4ba0ab14dce8a4955a8d6392b3638a2158c8868a8c67cd3"
       }
     }
   }

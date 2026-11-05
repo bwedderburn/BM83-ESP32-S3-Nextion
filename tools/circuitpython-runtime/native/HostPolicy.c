@@ -34,6 +34,9 @@
 #if defined(CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION) && CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION
 #error BM83 host policy must never enable repeat-pair deletion
 #endif
+#if defined(CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT) && CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT
+#error BM83 host policy owns all advertising restarts
+#endif
 
 // Exported pinned NimBLE internal functions. Exact signatures are pinned/hashed
 // with this recipe; no private key is copied outside this native translation unit.

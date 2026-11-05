@@ -79,7 +79,10 @@ reasons and operation/policy/connection generations are observations, not inferr
 from a command ACK. Advertising and HID input submission must be serialized with
 native policy transitions, using copied bounded records and generation checks.
 
-`runtime_patches.host_policy` pins the patch plus all eleven complete patched
+The board disables NimBLE's automatic connection reattempt so a failed link
+cannot restart advertising outside the saved host policy.
+
+`runtime_patches.host_policy` pins the patch plus all twelve complete patched
 source files. `record-build.py` rejects missing, extra, staged or untracked source
 changes and requires the patch digest in both clean-build manifests. The four new
 native source files are explicitly marked intent-to-add after patch application;

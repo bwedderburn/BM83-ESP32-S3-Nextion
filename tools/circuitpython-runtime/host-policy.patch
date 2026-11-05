@@ -1,3 +1,10 @@
+diff --git a/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig b/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig
+index e0f1a56..4d72ee0 100644
+--- a/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig
++++ b/ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig
+@@ -16 +16,2 @@
+ CONFIG_BT_NIMBLE_MAX_CCCDS=24
++CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=n
 diff --git a/ports/espressif/Makefile b/ports/espressif/Makefile
 index b772e38..14d4c74 100644
 --- a/ports/espressif/Makefile
@@ -344,10 +351,10 @@ index 8d8e727..31f7cec 100644
  void bleio_connection_clear(bleio_connection_internal_t *self);
 diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.c b/ports/espressif/common-hal/_bleio/HostPolicy.c
 new file mode 100644
-index 0000000..b15c85c
+index 0000000..618ef89
 --- /dev/null
 +++ b/ports/espressif/common-hal/_bleio/HostPolicy.c
-@@ -0,0 +1,894 @@
+@@ -0,0 +1,897 @@
 +// SPDX-License-Identifier: MIT
 +// BM83 ESP32-only capability. No key material is exposed to Python or logging.
 +#include "common-hal/_bleio/HostPolicy.h"
@@ -383,6 +390,9 @@ index 0000000..b15c85c
 +#endif
 +#if defined(CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION) && CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION
 +#error BM83 host policy must never enable repeat-pair deletion
++#endif
++#if defined(CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT) && CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT
++#error BM83 host policy owns all advertising restarts
 +#endif
 +
 +// Exported pinned NimBLE internal functions. Exact signatures are pinned/hashed

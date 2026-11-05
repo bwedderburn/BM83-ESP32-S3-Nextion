@@ -18,13 +18,14 @@ RECIPE = Path('/opt/recipe')
 OUTPUT = Path('/output')
 BUILD = ROOT / 'ports/espressif/build-espressif_esp32s3_devkitc_1_n8r8'
 IDF = ROOT / 'ports/espressif/esp-idf'
+BOARD_CONFIG = 'ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig'
 HASHLIB_FILES = {
     'shared-bindings/hashlib/Hash.c', 'shared-bindings/hashlib/Hash.h',
     'shared-bindings/hashlib/__init__.c', 'shared-module/hashlib/Hash.c',
     'shared-module/hashlib/Hash.h', 'shared-module/hashlib/__init__.c',
 }
 HOST_POLICY_FILES = {
-    'ports/espressif/Makefile', 'shared-bindings/_bleio/Adapter.c',
+    BOARD_CONFIG, 'ports/espressif/Makefile', 'shared-bindings/_bleio/Adapter.c',
     'ports/espressif/common-hal/_bleio/Adapter.c',
     'ports/espressif/common-hal/_bleio/Connection.c',
     'ports/espressif/common-hal/_bleio/Connection.h',
@@ -71,10 +72,10 @@ def check_sources():
     for name, commit in sources.items():
         if commit != pins['sources'][name]['commit']:
             raise ValueError('Unexpected pinned source: ' + name)
-    board = 'ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig'
-    original = command('git', '-C', str(ROOT), 'show', 'HEAD:' + board)
-    expected = original + '\nCONFIG_BT_NIMBLE_MAX_BONDS=8\nCONFIG_BT_NIMBLE_MAX_CCCDS=24\n'
-    if (ROOT / board).read_text() != expected:
+    original = command('git', '-C', str(ROOT), 'show', 'HEAD:' + BOARD_CONFIG)
+    expected = (original + '\nCONFIG_BT_NIMBLE_MAX_BONDS=8\nCONFIG_BT_NIMBLE_MAX_CCCDS=24\n'
+                'CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=n\n')
+    if (ROOT / BOARD_CONFIG).read_text() != expected:
         raise ValueError('Unexpected board configuration patch')
     web_tool = 'tools/gen_web_workflow_static.py'
     original_web = command('git', '-C', str(ROOT), 'show', 'HEAD:' + web_tool) + '\n'
@@ -102,7 +103,7 @@ def check_sources():
         if sha(ROOT / filename) != expected_hash:
             raise ValueError('Unexpected native host policy source: ' + filename)
     dirty = command('git', '-C', str(ROOT), 'diff', 'HEAD', '--name-only', '--ignore-submodules=none')
-    if set(dirty.splitlines()) != {board, web_tool} | HASHLIB_FILES | HOST_POLICY_FILES:
+    if set(dirty.splitlines()) != {web_tool} | HASHLIB_FILES | HOST_POLICY_FILES:
         raise ValueError('Unexpected modified source beyond the reviewed build patches')
     if command('git', '-C', str(ROOT), 'ls-files', '--others', '--exclude-standard'):
         raise ValueError('Unexpected untracked source')
@@ -174,6 +175,8 @@ def validate_board():
     for setting in ('CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY', 'CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION'):
         if setting + '=y' in config.splitlines():
             raise ValueError('Unsafe native host policy setting: ' + setting)
+    if '# CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT is not set' not in config.splitlines():
+        raise ValueError('NimBLE connection retries must leave advertising under host policy control')
 
 
 def record():
@@ -207,7 +210,10 @@ def record():
     artifact = {
         'schema_version': 1, 'kind': 'circuitpython-app-only',
         'board': 'espressif_esp32s3_devkitc_1_n8r8', 'sources': sources,
-        'configuration': {'CONFIG_BT_NIMBLE_MAX_BONDS': 8, 'CONFIG_BT_NIMBLE_MAX_CCCDS': 24},
+        'configuration': {
+            'CONFIG_BT_NIMBLE_MAX_BONDS': 8, 'CONFIG_BT_NIMBLE_MAX_CCCDS': 24,
+            'CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT': False,
+        },
         'flash_size': 8388608,
         'app': {**artifacts['app'], 'offset': 65536, 'partition_size': 2097152},
         'partition_table': {**artifacts['partition_table'], 'offset': 32768},

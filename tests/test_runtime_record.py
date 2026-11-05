@@ -17,7 +17,8 @@ record = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(record)
 BOARD = "ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig"
 BASE_BOARD = "# synthetic stock board\nCONFIG_REFERENCE=y\n"
-BOARD_ADDITIONS = "CONFIG_BT_NIMBLE_MAX_BONDS=8\nCONFIG_BT_NIMBLE_MAX_CCCDS=24\n"
+BOARD_ADDITIONS = ("CONFIG_BT_NIMBLE_MAX_BONDS=8\nCONFIG_BT_NIMBLE_MAX_CCCDS=24\n"
+                   "CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=n\n")
 WEB_TOOL = "tools/gen_web_workflow_static.py"
 BASE_WEB_TOOL = "import gzip\n\ndef compress(uncompressed):\n    return gzip.compress(uncompressed)\n"
 PATCHED_WEB_TOOL = BASE_WEB_TOOL.replace("gzip.compress(uncompressed)", "gzip.compress(uncompressed, mtime=0)")
@@ -86,7 +87,7 @@ def source_tree(tmp_path, monkeypatch):
         target = root / filename
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("/* synthetic pinned hash source */\n")
-    for filename in record.HOST_POLICY_FILES:
+    for filename in record.HOST_POLICY_FILES - {BOARD}:
         target = root / filename
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("/* synthetic pinned host policy source */\n")
@@ -99,7 +100,7 @@ def source_tree(tmp_path, monkeypatch):
     web_tool.write_text(PATCHED_WEB_TOOL)
     for filename in record.HASHLIB_FILES:
         (root / filename).write_text("/* synthetic exact reviewed hash lifetime source */\n")
-    for filename in record.HOST_POLICY_FILES:
+    for filename in record.HOST_POLICY_FILES - {BOARD}:
         (root / filename).write_text("/* synthetic exact reviewed native host policy */\n")
     idf = root / "ports/espressif/esp-idf"
 
@@ -194,7 +195,7 @@ def test_native_hash_source_allowlist_cannot_be_expanded(source_tree):
         record.check_sources()
 
 
-@pytest.mark.parametrize("filename", sorted(record.HOST_POLICY_FILES))
+@pytest.mark.parametrize("filename", sorted(record.HOST_POLICY_FILES - {BOARD}))
 @pytest.mark.parametrize("staged", [False, True])
 def test_entire_native_host_policy_source_must_match_reviewed_output(source_tree, filename, staged):
     target = source_tree.root / filename
@@ -425,7 +426,9 @@ def test_only_actual_project_dependency_lock_is_recorded(artifact_tree, project_
         assert not (fixture.output / "managed-dependencies.lock").exists()
 
 
-def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_boundaries(artifact_tree, monkeypatch):
+@pytest.mark.parametrize("vendor_reattempt", [False, True])
+def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_boundaries(
+        artifact_tree, monkeypatch, vendor_reattempt):
     fixture = artifact_tree
     recipe = fixture.root.parent / "recipe"
     recipe.mkdir()
@@ -443,6 +446,8 @@ def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_bound
     (idf / "tools").mkdir(parents=True)
     (idf / "tools/tools.json").write_text('{"synthetic": "toolchain"}\n')
     config = "CONFIG_BT_NIMBLE_MAX_BONDS=8\nCONFIG_BT_NIMBLE_MAX_CCCDS=24\nCONFIG_BT_NIMBLE_NVS_PERSIST=y\nCONFIG_BT_NIMBLE_HS_PVCY=y\n"
+    config += ("CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=y\n" if vendor_reattempt else
+               "# CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT is not set\n")
     (fixture.build / "esp-idf/sdkconfig").write_text(config)
     sources = dict.fromkeys(("circuitpython", "esp_idf", "esp_nimble"), "a" * 40)
 
@@ -469,6 +474,10 @@ def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_bound
     monkeypatch.setattr(record, "importlib", SimpleNamespace(metadata=SimpleNamespace(version=lambda _name: "50.0.0")))
     monkeypatch.setenv("BM83_BUILDER_IMAGE", "sha256:" + "b" * 64)
     monkeypatch.setenv("SOURCE_DATE_EPOCH", "1789146568")
+    if vendor_reattempt:
+        with pytest.raises(ValueError, match="NimBLE connection retries"):
+            record.record()
+        return
     record.record()
     manifest = json.loads((fixture.output / "build-manifest.json").read_text())
     assert manifest["inputs"]["web_assets_patch_sha256"] == digest(recipes["reproducible-web-assets.patch"])
@@ -477,6 +486,7 @@ def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_bound
     assert manifest["inputs"]["host_policy_patch_sha256"] == digest(recipes["host-policy.patch"])
     assert manifest["sources"] == sources
     image_contract = json.loads((fixture.output / "artifact-manifest.json").read_text())
+    assert image_contract["configuration"]["CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT"] is False
     assert image_contract["hardware_accepted"] is False
     assert image_contract["app"]["offset"] == 0x10000
     assert image_contract["app"]["partition_size"] == 2 * 1024 * 1024

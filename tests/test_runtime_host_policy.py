@@ -91,7 +91,10 @@ def test_native_patch_preserves_admission_and_no_deletion_guards():
 def test_native_hid_identity_and_gatt_descriptor_are_not_patch_targets():
     pins = json.loads((RECIPE / "source-pins.json").read_text())
     assert pins["sources"]["circuitpython"]["commit"] == "c9dee12beed76e4ffa11d2d6d99ff104fc976c3a"
-    assert pins["configuration"] == {"CONFIG_BT_NIMBLE_MAX_BONDS": 8, "CONFIG_BT_NIMBLE_MAX_CCCDS": 24}
+    assert pins["configuration"] == {
+        "CONFIG_BT_NIMBLE_MAX_BONDS": 8, "CONFIG_BT_NIMBLE_MAX_CCCDS": 24,
+        "CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT": False,
+    }
     files = pins["runtime_patches"]["host_policy"]["files"]
     assert not any("HIDService" in name or "hid_report" in name.lower() for name in files)
     # Policy enforcement hooks are separate from the existing application report map.
