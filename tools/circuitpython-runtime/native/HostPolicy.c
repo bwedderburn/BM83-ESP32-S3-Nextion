@@ -16,7 +16,7 @@
 #include "host/ble_gatt.h"
 #include "host/ble_hs_pvcy.h"
 #include "host/ble_store.h"
-#include "store/config/ble_store_config.h"
+#include "../../esp-idf/components/bt/host/nimble/nimble/nimble/host/store/config/include/store/config/ble_store_config.h"
 #include "../../esp-idf/components/bt/host/nimble/nimble/nimble/host/store/config/src/ble_store_config_priv.h"
 #include "nimble/hci_common.h"
 #include "nimble/nimble_port.h"
@@ -41,6 +41,8 @@ extern int ble_hs_pvcy_add_entry(const uint8_t *, uint8_t, const uint8_t *);
 extern int ble_hs_pvcy_remove_entry(uint8_t, const uint8_t *);
 extern int ble_hs_hci_cmd_tx(uint16_t, const void *, uint8_t, void *, uint8_t);
 extern int ble_hs_pvcy_rpa_ah(const uint8_t[16], const uint8_t[3], uint8_t[3]);
+extern void ble_hs_lock(void);
+extern void ble_hs_unlock(void);
 
 static hp_core_t core;
 static hp_status_t observed;
@@ -397,6 +399,18 @@ static int guarded_write(int type, const union ble_store_value *value) {
         fault(HP_DOMAIN_NVS,BLE_HS_ESTORE_FAIL);
         return BLE_HS_ESTORE_FAIL;
     }
+    if (type==BLE_STORE_OBJ_TYPE_PEER_ADDR) {
+        // The pinned SMP path writes a mapping even for a public or static
+        // peer without an RPA. Its zero key can match another saved peer's
+        // placeholder. An absent RPA has no mapping to store.
+        static const uint8_t absent_rpa[6]={0};
+        const ble_addr_t *rpa=&value->rpa_rec.peer_rpa_addr;
+        if (memcmp(rpa->val,absent_rpa,sizeof(absent_rpa))==0) { return 0; }
+        if (rpa->type!=BLE_ADDR_RANDOM || (rpa->val[5]&0xc0)!=0x40) {
+            fault(HP_DOMAIN_SECURITY,HP_INVALID);
+            return BLE_HS_ESTORE_FAIL;
+        }
+    }
     const char *prefix=store_prefix(type);
     if (prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
         union ble_store_key key; union ble_store_value existing;
@@ -406,6 +420,16 @@ static int guarded_write(int type, const union ble_store_value *value) {
         if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
         if (type==BLE_STORE_OBJ_TYPE_CCCD && found==0) {
             return update_existing_cccd(&existing.cccd,&value->cccd);
+        }
+        if (type==BLE_STORE_OBJ_TYPE_PEER_ADDR && found==0) {
+            if (!same_store_record(type,&existing,value)) {
+                fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR);
+                return BLE_HS_ESTORE_FAIL;
+            }
+            int detail;
+            int rc=persistent_match(type,&existing,&detail);
+            if (rc) { fault(HP_DOMAIN_NVS,detail ? detail : rc); }
+            return rc;
         }
         const ble_addr_t *peer=type==BLE_STORE_OBJ_TYPE_CCCD ? &value->cccd.peer_addr : type==BLE_STORE_OBJ_TYPE_CSFC ? &value->csfc.peer_addr : type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? &value->rpa_rec.peer_addr : &value->sec.peer_addr;
         hp_address_t a=address(peer);
@@ -554,13 +578,18 @@ static int reserve_enrollment(void *unused) {
     (void)unused;
     // OUR/PEER bond and CCCD limits are checked by the core. Also reserve one
     // CSFC and one RPA mapping before any new SMP record can be written.
-    int types[]={BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CSFC,BLE_STORE_OBJ_TYPE_PEER_ADDR};
+    int types[]={BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CSFC};
     for (unsigned i=0;i<sizeof(types)/sizeof(types[0]);i++) {
         int count=0,rc=ble_store_util_count(types[i],&count);
         if (rc) { return rc; }
         if (count<0 || count>=HP_MAX_PEERS) { return BLE_HS_ESTORE_CAP; }
     }
-    return 0;
+    // The vendor RPA lookup treats BLE_ADDR_ANY as an exact key, so the
+    // generic iterator cannot establish how many private mappings exist.
+    ble_hs_lock();
+    int rpa_count=ble_store_config_num_rpa_recs;
+    ble_hs_unlock();
+    return rpa_count<0 || rpa_count>=HP_MAX_PEERS ? BLE_HS_ESTORE_CAP : 0;
 }
 void bleio_host_policy_init(int nvs_error) {
     if (initialized) { return; }

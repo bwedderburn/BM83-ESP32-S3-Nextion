@@ -13,7 +13,7 @@ index b772e38..14d4c74 100644
  
  ifneq ($(CIRCUITPY_DOTCLOCKFRAMEBUFFER),0)
 diff --git a/ports/espressif/common-hal/_bleio/Adapter.c b/ports/espressif/common-hal/_bleio/Adapter.c
-index e97c84b..bce2807 100644
+index e97c84b..ceebd1e 100644
 --- a/ports/espressif/common-hal/_bleio/Adapter.c
 +++ b/ports/espressif/common-hal/_bleio/Adapter.c
 @@ -38,6 +38,7 @@
@@ -118,7 +118,24 @@ index e97c84b..bce2807 100644
          .primary_phy = BLE_HCI_LE_PHY_1M,
          .secondary_phy = BLE_HCI_LE_PHY_1M,
          .tx_power = tx_power,
-@@ -670,7 +681,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -653,8 +664,12 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+         }
+     }
+-
+-    // If timeout_ms is zero, it means advertise forever. This is different than ble_gap_adv_start().
+-    rc = ble_gap_ext_adv_start(0, timeout_ms, 0);
+-
++
++    // LE Set Extended Advertising Enable takes 10 ms units. Zero is unlimited.
++    uint32_t duration = timeout_ms / 10 + (timeout_ms % 10 != 0);
++    if (duration > UINT16_MAX) {
++        return BLE_HS_EINVAL;
++    }
++    rc = ble_gap_ext_adv_start(0, duration, 0);
++
+     #else
+     // Extended advertising not enabled.
+@@ -670,7 +685,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
          .itvl_min = SEC_TO_UNITS(interval, UNIT_0_625_MS) + 0.5f,
          .itvl_max = SEC_TO_UNITS(interval, UNIT_0_625_MS) + 0.5f,
          .channel_map = 0,
@@ -127,7 +144,7 @@ index e97c84b..bce2807 100644
          .high_duty_cycle = high_duty_directed,
      };
  
-@@ -696,6 +707,16 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -696,6 +711,16 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
      return rc;
  }
  
@@ -144,7 +161,7 @@ index e97c84b..bce2807 100644
  static void check_data_fit(size_t data_len, bool connectable) {
      if (data_len > MYNEWT_VAL(BLE_EXT_ADV_MAX_SIZE) ||
          (connectable && data_len > MYNEWT_VAL(BLE_EXT_ADV_MAX_SIZE))) {
-@@ -737,14 +758,17 @@ void common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self, bool
+@@ -737,14 +762,17 @@ void common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self, bool
              BLE_HS_FOREVER / 1000 - 1);
      }
  
@@ -165,7 +182,7 @@ index e97c84b..bce2807 100644
  }
  
  void common_hal_bleio_adapter_stop_advertising(bleio_adapter_obj_t *self) {
-@@ -808,18 +832,8 @@ mp_obj_t common_hal_bleio_adapter_get_connections(bleio_adapter_obj_t *self) {
+@@ -808,18 +836,8 @@ mp_obj_t common_hal_bleio_adapter_get_connections(bleio_adapter_obj_t *self) {
  // Implement bonding control ourselves when the adapter isn't enabled so that it
  // can run when BLE is off.
  void common_hal_bleio_adapter_erase_bonding(bleio_adapter_obj_t *self) {
@@ -327,10 +344,10 @@ index 8d8e727..31f7cec 100644
  void bleio_connection_clear(bleio_connection_internal_t *self);
 diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.c b/ports/espressif/common-hal/_bleio/HostPolicy.c
 new file mode 100644
-index 0000000..fbde86a
+index 0000000..b15c85c
 --- /dev/null
 +++ b/ports/espressif/common-hal/_bleio/HostPolicy.c
-@@ -0,0 +1,865 @@
+@@ -0,0 +1,894 @@
 +// SPDX-License-Identifier: MIT
 +// BM83 ESP32-only capability. No key material is exposed to Python or logging.
 +#include "common-hal/_bleio/HostPolicy.h"
@@ -349,7 +366,7 @@ index 0000000..fbde86a
 +#include "host/ble_gatt.h"
 +#include "host/ble_hs_pvcy.h"
 +#include "host/ble_store.h"
-+#include "store/config/ble_store_config.h"
++#include "../../esp-idf/components/bt/host/nimble/nimble/nimble/host/store/config/include/store/config/ble_store_config.h"
 +#include "../../esp-idf/components/bt/host/nimble/nimble/nimble/host/store/config/src/ble_store_config_priv.h"
 +#include "nimble/hci_common.h"
 +#include "nimble/nimble_port.h"
@@ -374,6 +391,8 @@ index 0000000..fbde86a
 +extern int ble_hs_pvcy_remove_entry(uint8_t, const uint8_t *);
 +extern int ble_hs_hci_cmd_tx(uint16_t, const void *, uint8_t, void *, uint8_t);
 +extern int ble_hs_pvcy_rpa_ah(const uint8_t[16], const uint8_t[3], uint8_t[3]);
++extern void ble_hs_lock(void);
++extern void ble_hs_unlock(void);
 +
 +static hp_core_t core;
 +static hp_status_t observed;
@@ -730,6 +749,18 @@ index 0000000..fbde86a
 +        fault(HP_DOMAIN_NVS,BLE_HS_ESTORE_FAIL);
 +        return BLE_HS_ESTORE_FAIL;
 +    }
++    if (type==BLE_STORE_OBJ_TYPE_PEER_ADDR) {
++        // The pinned SMP path writes a mapping even for a public or static
++        // peer without an RPA. Its zero key can match another saved peer's
++        // placeholder. An absent RPA has no mapping to store.
++        static const uint8_t absent_rpa[6]={0};
++        const ble_addr_t *rpa=&value->rpa_rec.peer_rpa_addr;
++        if (memcmp(rpa->val,absent_rpa,sizeof(absent_rpa))==0) { return 0; }
++        if (rpa->type!=BLE_ADDR_RANDOM || (rpa->val[5]&0xc0)!=0x40) {
++            fault(HP_DOMAIN_SECURITY,HP_INVALID);
++            return BLE_HS_ESTORE_FAIL;
++        }
++    }
 +    const char *prefix=store_prefix(type);
 +    if (prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
 +        union ble_store_key key; union ble_store_value existing;
@@ -739,6 +770,16 @@ index 0000000..fbde86a
 +        if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
 +        if (type==BLE_STORE_OBJ_TYPE_CCCD && found==0) {
 +            return update_existing_cccd(&existing.cccd,&value->cccd);
++        }
++        if (type==BLE_STORE_OBJ_TYPE_PEER_ADDR && found==0) {
++            if (!same_store_record(type,&existing,value)) {
++                fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR);
++                return BLE_HS_ESTORE_FAIL;
++            }
++            int detail;
++            int rc=persistent_match(type,&existing,&detail);
++            if (rc) { fault(HP_DOMAIN_NVS,detail ? detail : rc); }
++            return rc;
 +        }
 +        const ble_addr_t *peer=type==BLE_STORE_OBJ_TYPE_CCCD ? &value->cccd.peer_addr : type==BLE_STORE_OBJ_TYPE_CSFC ? &value->csfc.peer_addr : type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? &value->rpa_rec.peer_addr : &value->sec.peer_addr;
 +        hp_address_t a=address(peer);
@@ -887,13 +928,18 @@ index 0000000..fbde86a
 +    (void)unused;
 +    // OUR/PEER bond and CCCD limits are checked by the core. Also reserve one
 +    // CSFC and one RPA mapping before any new SMP record can be written.
-+    int types[]={BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CSFC,BLE_STORE_OBJ_TYPE_PEER_ADDR};
++    int types[]={BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CSFC};
 +    for (unsigned i=0;i<sizeof(types)/sizeof(types[0]);i++) {
 +        int count=0,rc=ble_store_util_count(types[i],&count);
 +        if (rc) { return rc; }
 +        if (count<0 || count>=HP_MAX_PEERS) { return BLE_HS_ESTORE_CAP; }
 +    }
-+    return 0;
++    // The vendor RPA lookup treats BLE_ADDR_ANY as an exact key, so the
++    // generic iterator cannot establish how many private mappings exist.
++    ble_hs_lock();
++    int rpa_count=ble_store_config_num_rpa_recs;
++    ble_hs_unlock();
++    return rpa_count<0 || rpa_count>=HP_MAX_PEERS ? BLE_HS_ESTORE_CAP : 0;
 +}
 +void bleio_host_policy_init(int nvs_error) {
 +    if (initialized) { return; }
