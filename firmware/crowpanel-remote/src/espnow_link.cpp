@@ -9,6 +9,7 @@
 #include "espnow_link.h"
 #include "network_setup.h"
 #include "network_recovery_policy.h"
+#include "ble_status.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -285,6 +286,22 @@ bool espnow_send_token(const char *token, uint32_t *sequence) {
     g_last_status = 1;
     if (g_fail_streak < 255) g_fail_streak++;
     return true;
+}
+
+bool espnow_send_host_request(const uint8_t *frame, size_t length) {
+    if (!g_ready || !frame || length < 32 || length > 56 ||
+        memcmp(frame, "BHC1", 4) || length != static_cast<size_t>(32 + frame[29]) ||
+        ble_status::crc16(frame, length - 2) != ble_status::read16(frame + length - 2)) return false;
+    // This explicit request owns the existing send callback. A failed request
+    // never triggers discovery or resets a network underneath another owner.
+    g_idle_sweep.postpone(millis());
+    g_sent++;
+    for (uint8_t attempt = 0; attempt < TOKEN_TRIES; ++attempt) {
+        if (attempt) { g_retries++; delay(TOKEN_RETRY_GAP_MS); }
+        if (send_once(frame, length)) { g_acked++; g_last_status = 0; return true; }
+    }
+    g_last_status = 1;
+    return true;  // Attempted, not confirmed; BHP1 is the only completion path.
 }
 
 const char *espnow_link_status_str() {

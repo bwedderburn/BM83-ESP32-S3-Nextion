@@ -7,8 +7,8 @@ support/wheels, so this recipe runs in a local Linux container on the Intel Mac.
 It does not source-build an unsupported cryptography wheel or relax TLS checks.
 
 The CircuitPython 10.3.1, ESP-IDF and NimBLE commits remain pinned in
-[source-pins.json](source-pins.json). The only board patch is still eight stored
-bonds and 24 CCCD records. Stock partition layout, BLE workflow services, 8 MiB
+[source-pins.json](source-pins.json). The board capacity patch retains eight stored
+bonds and 24 CCCD records. Stock partition layout, GATT service definitions, 8 MiB
 flash and 8 MiB octal PSRAM remain in the pinned source configuration. No device
 access, deployment, pairing, playback or live NVS data is part of this recipe.
 
@@ -25,8 +25,9 @@ otherwise embeds the current time under Python 3.11, even with
 checked/recorded. Decoded web assets were checked against the original build
 during [validation](VALIDATION-2026-11-01.md); that additional comparison is not
 an automatic build-script step. Completed images are never normalized to hide
-differences. The original board
-patch and all native source commit pins remain unchanged.
+differences. The original board capacity patch and all native source commit pins
+remain unchanged. Additional runtime behavior is provided by the separately
+pinned patches below.
 
 ## Native hash-operation ownership
 
@@ -55,6 +56,35 @@ repeated digest/update, explicit close, failed operations and 1,000 cycles. It
 does not emulate ESP32 DMA or real GC scheduling. Physical allocation recovery,
 finalizer fallback, authentication latency and the normal >=30-minute run card
 must still pass before hardware acceptance. A compiled image is not acceptance.
+
+## Native BLE host policy candidate
+
+The additional [host policy patch](host-policy.patch) adds the project-specific
+ESP32 `_bleio` API consumed by Disconnect + Select host. The ordinary eight-bond
+runtime does not supply this capability. This is a development candidate with
+separate [build and physical acceptance gates](../../docs/reliability/phase2-host-selection.md).
+No connected-device acceptance follows from a successful build.
+
+The native policy owns persistent PAUSED/AUTO selection, a bounded ENROLL window,
+saved-identity inventory and owner aliases. It does not expose bonding keys to
+Python, rotate the local identity, replace the HID report map, erase old bonds or
+evict records on capacity failure. The default for missing/corrupt policy or a
+native failure is closed admission. Explicit Disconnect remains paused across
+boot; AUTO admits only the selected saved identity.
+
+The patch checks persistent NimBLE records and keeps OUR_SEC, PEER_SEC and CCCD
+facts separate. Controller privacy and accept-list configuration are verified;
+repeat-pair deletion is disabled. Security/HID readiness, full-width disconnect
+reasons and operation/policy/connection generations are observations, not inferred
+from a command ACK. Advertising and HID input submission must be serialized with
+native policy transitions, using copied bounded records and generation checks.
+
+`runtime_patches.host_policy` pins the patch plus all eleven complete patched
+source files. `record-build.py` rejects missing, extra, staged or untracked source
+changes and requires the patch digest in both clean-build manifests. The four new
+native source files are explicitly marked intent-to-add after patch application;
+the original Git index must remain intact. The host harness compiles production
+policy code; it is not NimBLE radio, actual NVS or RPA-rotation acceptance.
 
 ## Prepare the immutable builder
 

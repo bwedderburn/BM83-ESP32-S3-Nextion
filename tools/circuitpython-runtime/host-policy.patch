@@ -1,0 +1,1576 @@
+diff --git a/ports/espressif/Makefile b/ports/espressif/Makefile
+index b772e38..14d4c74 100644
+--- a/ports/espressif/Makefile
++++ b/ports/espressif/Makefile
+@@ -669,7 +669,8 @@ CHIP_COMPONENTS += esp_driver_i2s
+ endif
+ 
+ ifneq ($(CIRCUITPY_BLEIO_NATIVE),0)
+-SRC_C += common-hal/_bleio/ble_events.c
++SRC_C += common-hal/_bleio/ble_events.c common-hal/_bleio/HostPolicy.c common-hal/_bleio/HostPolicyCore.c
++CFLAGS += -DBM83_BLE_HOST_POLICY=1
+ endif
+ 
+ ifneq ($(CIRCUITPY_DOTCLOCKFRAMEBUFFER),0)
+diff --git a/ports/espressif/common-hal/_bleio/Adapter.c b/ports/espressif/common-hal/_bleio/Adapter.c
+index e97c84b..2dba400 100644
+--- a/ports/espressif/common-hal/_bleio/Adapter.c
++++ b/ports/espressif/common-hal/_bleio/Adapter.c
+@@ -38,6 +38,7 @@
+ 
+ #include "bindings/espidf/__init__.h"
+ #include "common-hal/_bleio/Connection.h"
++#include "common-hal/_bleio/HostPolicy.h"
+ 
+ #include "esp_bt.h"
+ #include "esp_mac.h"
+@@ -60,6 +61,7 @@ static void _on_sync(void) {
+     int rc __attribute__((unused)) = ble_hs_util_ensure_addr(false);
+     assert(rc == 0);
+ 
++    bleio_host_policy_sync();
+     _nimble_sync = true;
+ }
+ 
+@@ -134,7 +136,7 @@ void common_hal_bleio_adapter_set_enabled(bleio_adapter_obj_t *self, bool enable
+ 
+         // ble_hs_cfg.reset_cb = blecent_on_reset;
+         ble_hs_cfg.sync_cb = _on_sync;
+-        ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
++        ble_hs_cfg.store_status_cb = bleio_host_policy_store_status;
+ 
+         ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_NO_IO;
+         ble_hs_cfg.sm_bonding = 1;
+@@ -163,6 +165,7 @@ void common_hal_bleio_adapter_set_enabled(bleio_adapter_obj_t *self, bool enable
+         }
+ 
+         ble_store_config_init();
++        bleio_host_policy_install_store_guards();
+ 
+         _nimble_sync = false;
+         nimble_port_freertos_init(nimble_host_task);
+@@ -182,6 +185,7 @@ void common_hal_bleio_adapter_set_enabled(bleio_adapter_obj_t *self, bool enable
+ 
+         bleio_adapter_reset_name(self);
+     } else {
++        bleio_host_policy_disabled();
+         int ret = nimble_port_stop();
+         while (xTaskGetHandle("nimble_host") != NULL && !mp_hal_is_interrupted()) {
+             RUN_BACKGROUND_TASKS;
+@@ -395,6 +399,7 @@ static void _new_connection(uint16_t conn_handle, bool user_owned) {
+ 
+     // Change the callback for the connection.
+     ble_gap_set_event_cb(conn_handle, bleio_connection_event_cb, connection);
++    connection->host_generation = bleio_host_policy_connect(conn_handle);
+ }
+ 
+ static int _connect_event(struct ble_gap_event *event, void *self_in) {
+@@ -562,12 +567,17 @@ static int _advertising_event(struct ble_gap_event *event, void *self_in) {
+     return 0;
+ }
+ 
+-uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
++static uint32_t host_policy_raw_start_advertising(bleio_adapter_obj_t *self,
+     bool connectable, bool anonymous, uint32_t timeout, float interval,
+     const uint8_t *advertising_data, uint16_t advertising_data_len,
+     const uint8_t *scan_response_data, uint16_t scan_response_data_len,
+     mp_int_t tx_power, const bleio_address_obj_t *directed_to) {
+ 
++    // Shared boundary: includes application AND supervisor legacy/extended ads.
++    const int host_mode = bleio_host_policy_advertising_guard();
++    if (host_mode < 0 || directed_to != NULL) {
++        return BLE_HS_EREJECT;
++    }
+     if (ble_gap_adv_active() && !self->user_advertising) {
+         return BLE_HS_EBUSY;
+     }
+@@ -576,7 +586,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+ 
+     uint32_t rc;
+ 
+-    ble_addr_t peer;
++    ble_addr_t peer = {0};
+     if (directed_to != NULL) {
+         _convert_address(directed_to, &peer);
+     }
+@@ -591,7 +601,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+ 
+     bool high_duty_directed = directed_to != NULL && interval <= 3.5 && timeout <= 1; // Really 1.3, but it's an int
+ 
+-    uint32_t timeout_ms = timeout * 1000;
++    uint32_t timeout_ms = bleio_host_policy_advertising_timeout_ms(timeout * 1000);
+ 
+     #if MYNEWT_VAL(BLE_EXT_ADV)
+     bool extended = advertising_data_len > BLE_ADV_LEGACY_DATA_MAX_LEN ||
+@@ -618,7 +628,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+         .channel_map = 0,
+         .own_addr_type = own_addr_type,
+         .peer = peer,
+-        .filter_policy = BLE_HCI_CONN_FILT_NO_WL,
++        .filter_policy = host_mode == HP_AUTO ? BLE_HCI_ADV_FILT_CONN : BLE_HCI_ADV_FILT_NONE,
+         .primary_phy = BLE_HCI_LE_PHY_1M,
+         .secondary_phy = BLE_HCI_LE_PHY_1M,
+         .tx_power = tx_power,
+@@ -670,7 +680,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+         .itvl_min = SEC_TO_UNITS(interval, UNIT_0_625_MS) + 0.5f,
+         .itvl_max = SEC_TO_UNITS(interval, UNIT_0_625_MS) + 0.5f,
+         .channel_map = 0,
+-        .filter_policy = BLE_HCI_CONN_FILT_NO_WL,
++        .filter_policy = host_mode == HP_AUTO ? BLE_HCI_ADV_FILT_CONN : BLE_HCI_ADV_FILT_NONE,
+         .high_duty_cycle = high_duty_directed,
+     };
+ 
+@@ -696,6 +706,16 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+     return rc;
+ }
+ 
++uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
++    bool connectable, bool anonymous, uint32_t timeout, float interval,
++    const uint8_t *advertising_data, uint16_t advertising_data_len,
++    const uint8_t *scan_response_data, uint16_t scan_response_data_len,
++    mp_int_t tx_power, const bleio_address_obj_t *directed_to) {
++    return bleio_host_policy_start_advertising(self, connectable, anonymous, timeout, interval,
++        advertising_data, advertising_data_len, scan_response_data, scan_response_data_len,
++        tx_power, directed_to, host_policy_raw_start_advertising);
++}
++
+ static void check_data_fit(size_t data_len, bool connectable) {
+     if (data_len > MYNEWT_VAL(BLE_EXT_ADV_MAX_SIZE) ||
+         (connectable && data_len > MYNEWT_VAL(BLE_EXT_ADV_MAX_SIZE))) {
+@@ -737,14 +757,17 @@ void common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self, bool
+             BLE_HS_FOREVER / 1000 - 1);
+     }
+ 
+-    CHECK_NIMBLE_ERROR(_common_hal_bleio_adapter_start_advertising(self, connectable, anonymous, timeout, interval,
++    // Publish native ownership before the host task can receive a connection.
++    self->user_advertising = true;
++    uint32_t host_policy_rc = _common_hal_bleio_adapter_start_advertising(self, connectable, anonymous, timeout, interval,
+         advertising_data_bufinfo->buf,
+         advertising_data_bufinfo->len,
+         scan_response_data_bufinfo->buf,
+         scan_response_data_bufinfo->len,
+         tx_power,
+-        directed_to));
+-    self->user_advertising = true;
++        directed_to);
++    if (host_policy_rc != NIMBLE_OK) { self->user_advertising = false; }
++    CHECK_NIMBLE_ERROR(host_policy_rc);
+ }
+ 
+ void common_hal_bleio_adapter_stop_advertising(bleio_adapter_obj_t *self) {
+@@ -808,18 +831,8 @@ mp_obj_t common_hal_bleio_adapter_get_connections(bleio_adapter_obj_t *self) {
+ // Implement bonding control ourselves when the adapter isn't enabled so that it
+ // can run when BLE is off.
+ void common_hal_bleio_adapter_erase_bonding(bleio_adapter_obj_t *self) {
+-    if (common_hal_bleio_adapter_get_enabled(self)) {
+-        ble_store_clear();
+-    } else {
+-        nvs_handle_t nimble_handle;
+-        esp_err_t err = nvs_open(NIMBLE_NVS_NAMESPACE, NVS_READWRITE, &nimble_handle);
+-        if (err != ESP_OK) {
+-            return;
+-        }
+-        nvs_erase_all(nimble_handle);
+-        nvs_commit(nimble_handle);
+-        nvs_close(nimble_handle);
+-    }
++    (void)self;
++    mp_raise_RuntimeError(MP_ERROR_TEXT("Global bond erase is disabled by host policy"));
+ }
+ 
+ bool common_hal_bleio_adapter_is_bonded_to_central(bleio_adapter_obj_t *self) {
+diff --git a/ports/espressif/common-hal/_bleio/Characteristic.c b/ports/espressif/common-hal/_bleio/Characteristic.c
+index 9436376..cac7216 100644
+--- a/ports/espressif/common-hal/_bleio/Characteristic.c
++++ b/ports/espressif/common-hal/_bleio/Characteristic.c
+@@ -20,9 +20,18 @@
+ 
+ #include "common-hal/_bleio/Adapter.h"
+ #include "common-hal/_bleio/Service.h"
++#include "common-hal/_bleio/HostPolicy.h"
+ 
+ static int characteristic_on_ble_gap_evt(struct ble_gap_event *event, void *param);
+ 
++static bool host_policy_hid_input(bleio_characteristic_obj_t *self) {
++    return self->service != NULL && !self->service->is_remote &&
++        self->service->uuid != NULL && self->uuid != NULL &&
++        ble_uuid_u16(&self->service->uuid->nimble_ble_uuid.u) == 0x1812 &&
++        ble_uuid_u16(&self->uuid->nimble_ble_uuid.u) == 0x2a4d &&
++        (self->props & CHAR_PROP_NOTIFY) != 0;
++}
++
+ // A local characteristic that can notify or indicate registers an event handler
+ // whose storage is the characteristic object itself. NimBLE's GATT table
+ // holds a pointer to the object as its access-callback arg. Both stay valid
+@@ -67,6 +76,11 @@ static void characteristic_set_subscription(bleio_characteristic_obj_t *self,
+ // because the draining is done by the nimble_host task, not by background callbacks.
+ static void characteristic_notify_indicate(bleio_characteristic_obj_t *self,
+     uint16_t conn_handle, mp_buffer_info_t *bufinfo, bool indicate) {
++    if (host_policy_hid_input(self)) {
++        if (indicate) { CHECK_NIMBLE_ERROR(BLE_HS_ENOTSUP); return; }
++        CHECK_NIMBLE_ERROR(bleio_host_policy_queue_input(conn_handle, self->handle, bufinfo->buf, bufinfo->len));
++        return;
++    }
+     while (!mp_hal_is_interrupted()) {
+         struct os_mbuf *om = ble_hs_mbuf_from_flat(bufinfo->buf, bufinfo->len);
+         if (om != NULL) {
+@@ -373,6 +387,13 @@ static int characteristic_on_ble_gap_evt(struct ble_gap_event *event, void *para
+             break;
+         case BLE_GAP_EVENT_SUBSCRIBE:
+             if (event->subscribe.attr_handle == self->handle) {
++                if (host_policy_hid_input(self)) {
++                    bleio_connection_internal_t *policy_connection = bleio_conn_handle_to_connection(event->subscribe.conn_handle);
++                    if (policy_connection != NULL) {
++                        bleio_host_policy_subscription(event->subscribe.conn_handle, policy_connection->host_generation,
++                            self->handle, event->subscribe.cur_notify != 0);
++                    }
++                }
+                 characteristic_set_subscription(self, event->subscribe.conn_handle,
+                     event->subscribe.cur_notify != 0, event->subscribe.cur_indicate != 0);
+             }
+@@ -393,6 +414,14 @@ int bleio_characteristic_access_cb(uint16_t conn_handle, uint16_t attr_handle,
+     switch (ctxt->op) {
+         case BLE_GATT_ACCESS_OP_READ_CHR:
+             if (attr_handle == self->handle) {
++                if (host_policy_hid_input(self)) {
++                    uint8_t report[HP_INPUT_BYTES];
++                    if (!bleio_host_policy_input_value(conn_handle, self->handle, report, self->current_value_len)) {
++                        return BLE_ATT_ERR_UNLIKELY;
++                    }
++                    rc = os_mbuf_append(ctxt->om, report, self->current_value_len);
++                    return rc == 0 ? 0 : BLE_ATT_ERR_INSUFFICIENT_RES;
++                }
+                 rc = os_mbuf_append(ctxt->om,
+                     self->current_value,
+                     self->current_value_len);
+diff --git a/ports/espressif/common-hal/_bleio/Connection.c b/ports/espressif/common-hal/_bleio/Connection.c
+index a063f3e..dc14791 100644
+--- a/ports/espressif/common-hal/_bleio/Connection.c
++++ b/ports/espressif/common-hal/_bleio/Connection.c
+@@ -35,6 +35,7 @@
+ 
+ #include "host/ble_att.h"
+ #include "host/ble_store.h"
++#include "common-hal/_bleio/HostPolicy.h"
+ 
+ // Uncomment to turn on debug logging just in this file.
+ // #undef CIRCUITPY_VERBOSE_BLE
+@@ -43,6 +44,9 @@
+ int bleio_connection_event_cb(struct ble_gap_event *event, void *connection_in) {
+     bleio_connection_internal_t *connection = (bleio_connection_internal_t *)connection_in;
+ 
++    // Record full-domain reasons/security before wrappers/handles are cleared.
++    bleio_host_policy_event(event, connection == NULL ? 0 : connection->host_generation);
++    if (connection == NULL) { return event->type == BLE_GAP_EVENT_REPEAT_PAIRING ? BLE_GAP_REPEAT_PAIRING_IGNORE : 0; }
+     switch (event->type) {
+         case BLE_GAP_EVENT_DISCONNECT: {
+             connection->conn_handle = BLEIO_HANDLE_INVALID;
+@@ -52,7 +56,7 @@ int bleio_connection_event_cb(struct ble_gap_event *event, void *connection_in)
+             mp_printf(&mp_plat_print, "event->disconnect.reason: 0x%x\n", event->disconnect.reason);
+             #endif
+ 
+-            if (connection->connection_obj != mp_const_none) {
++            if (connection->connection_obj != MP_OBJ_NULL && connection->connection_obj != mp_const_none) {
+                 bleio_connection_obj_t *obj = connection->connection_obj;
+                 obj->connection = NULL;
+                 obj->disconnect_reason = event->disconnect.reason;
+@@ -83,20 +87,8 @@ int bleio_connection_event_cb(struct ble_gap_event *event, void *connection_in)
+             break;
+         }
+         case BLE_GAP_EVENT_REPEAT_PAIRING: {
+-            // The peer is asking to pair even though we still have a bond with it.
+-            // This means it no longer has its own copy of that bond. Discard our bond
+-            // and tell the BLE stack to carry on pairing. Otherwise NimBLE silently
+-            // ignores the request, and a central that has forgotten this device can
+-            // never pair again without erasing the bonds on the board. The
+-            // nordic port likewise replaces the stored keys when a peer re-pairs.
+-            struct ble_gap_conn_desc desc;
+-            if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) != 0) {
+-                return BLE_GAP_REPEAT_PAIRING_IGNORE;
+-            }
+-            ble_store_util_delete_peer(&desc.peer_id_addr);
+-            // The BLE stack checks that the bond is really gone before retrying, and
+-            // reports this event again if it is not.
+-            return BLE_GAP_REPEAT_PAIRING_RETRY;
++            // Existing keys are never implicitly discarded or replaced.
++            return BLE_GAP_REPEAT_PAIRING_IGNORE;
+         }
+         case BLE_GAP_EVENT_MTU: {
+             if (event->mtu.conn_handle != connection->conn_handle) {
+diff --git a/ports/espressif/common-hal/_bleio/Connection.h b/ports/espressif/common-hal/_bleio/Connection.h
+index 8d8e727..31f7cec 100644
+--- a/ports/espressif/common-hal/_bleio/Connection.h
++++ b/ports/espressif/common-hal/_bleio/Connection.h
+@@ -30,6 +30,7 @@ typedef enum {
+ // reused.
+ typedef struct {
+     uint16_t conn_handle;
++    uint32_t host_generation;
+     bool is_central;
+     // True if user code initiated or accepted this connection: it connected in the
+     // central role, or a central answered user code's advertising. User-owned
+@@ -66,7 +67,7 @@ typedef struct {
+     mp_obj_base_t base;
+     bleio_connection_internal_t *connection;
+     // The HCI disconnect reason.
+-    uint8_t disconnect_reason;
++    int disconnect_reason; // Full NimBLE error domain, not a truncated HCI byte.
+ } bleio_connection_obj_t;
+ 
+ void bleio_connection_clear(bleio_connection_internal_t *self);
+diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.c b/ports/espressif/common-hal/_bleio/HostPolicy.c
+new file mode 100644
+index 0000000..d684339
+--- /dev/null
++++ b/ports/espressif/common-hal/_bleio/HostPolicy.c
+@@ -0,0 +1,681 @@
++// SPDX-License-Identifier: MIT
++// BM83 ESP32-only capability. No key material is exposed to Python or logging.
++#include "common-hal/_bleio/HostPolicy.h"
++#include <inttypes.h>
++#include <stdio.h>
++#include <string.h>
++#include "py/objstr.h"
++#include "py/runtime.h"
++#include "shared-bindings/_bleio/__init__.h"
++#include "shared-bindings/time/__init__.h"
++#include "shared/runtime/interrupt_char.h"
++#include "supervisor/shared/tick.h"
++#include "common-hal/_bleio/Adapter.h"
++#include "common-hal/_bleio/Connection.h"
++#include "host/ble_hs.h"
++#include "host/ble_gatt.h"
++#include "host/ble_hs_pvcy.h"
++#include "host/ble_store.h"
++#include "nimble/hci_common.h"
++#include "nimble/nimble_port.h"
++#include "nimble/nimble_npl.h"
++#include "freertos/FreeRTOS.h"
++#include "esp_timer.h"
++#include "nvs.h"
++
++#if !MYNEWT_VAL(BLE_WHITELIST) || !MYNEWT_VAL(BLE_HS_PVCY) || MYNEWT_VAL(BLE_HOST_BASED_PRIVACY)
++#error BM83 host policy requires controller privacy and an accept list
++#endif
++#if CONFIG_BT_NIMBLE_MAX_BONDS != 8 || CONFIG_BT_NIMBLE_MAX_CCCDS != 24 || !CONFIG_BT_NIMBLE_NVS_PERSIST
++#error BM83 host policy requires the reviewed persistent 8-bond 24-CCCD configuration
++#endif
++#if defined(CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION) && CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION
++#error BM83 host policy must never enable repeat-pair deletion
++#endif
++
++// Exported pinned NimBLE internal functions. Exact signatures are pinned/hashed
++// with this recipe; no private key is copied outside this native translation unit.
++extern int ble_hs_pvcy_add_entry(const uint8_t *, uint8_t, const uint8_t *);
++extern int ble_hs_pvcy_remove_entry(uint8_t, const uint8_t *);
++extern int ble_hs_hci_cmd_tx(uint16_t, const void *, uint8_t, void *, uint8_t);
++extern int ble_hs_pvcy_rpa_ah(const uint8_t[16], const uint8_t[3], uint8_t[3]);
++
++static hp_core_t core;
++static hp_status_t observed;
++static hp_peer_t observed_peers[HP_MAX_PEERS];
++static size_t observed_count;
++static uint16_t observed_handle=HP_INVALID_HANDLE;
++static portMUX_TYPE policy_mux=portMUX_INITIALIZER_UNLOCKED;
++static volatile bool initialized, synced, processing, policy_busy, timer_ready, fault_pending;
++static hp_queue_t command_queue;
++static hp_input_queue_t input_queue;
++static hp_input_report_t last_input;
++static bool last_input_valid;
++static uint16_t observed_input_handle;
++static hp_status_t input_origin;
++static uint16_t origin_handle,origin_input_handle;
++static bool input_origin_valid;
++#define HP_ADV_MAX_BYTES 1650
++#define HP_ADV_VM_WAIT_MS 200
++typedef struct {
++    bool active, finished, cancelled, waiter_gone, connectable, anonymous, user_owned;
++    uint32_t token, timeout, result;
++    float interval;
++    uint16_t data_length, response_length;
++    mp_int_t power;
++    hp_raw_advertise_fn start;
++    uint8_t data[HP_ADV_MAX_BYTES], response[HP_ADV_MAX_BYTES];
++} advertising_request_t;
++static advertising_request_t advertising_request;
++static uint32_t next_advertising_token;
++static hp_domain_t pending_fault_domain;
++static int pending_fault;
++static uint32_t store_generation;
++static struct ble_npl_callout policy_timer;
++static ble_store_write_fn *original_write;
++static ble_store_delete_fn *original_delete;
++static ble_store_read_fn *original_read;
++typedef hp_command_t policy_request_t;
++
++static uint64_t millis(void) { return (uint64_t)esp_timer_get_time()/1000; }
++static hp_address_t address(const ble_addr_t *a) {
++    hp_address_t result={.type=a->type}; memcpy(result.val,a->val,6); return result;
++}
++static ble_addr_t native_address(const hp_address_t *a) {
++    ble_addr_t result={.type=a->type}; memcpy(result.val,a->val,6); return result;
++}
++static void publish(void) {
++    portENTER_CRITICAL(&policy_mux);
++    observed=core.status; observed_count=core.peer_count;
++    observed_handle=core.handle;
++    observed_input_handle=core.hid_input_handle;
++    memcpy(observed_peers,core.peers,sizeof(observed_peers));
++    portEXIT_CRITICAL(&policy_mux);
++}
++static void schedule(void) {
++    // The single native 100ms callout services fixed requests. Do NOT put an
++    // event from VM/store callbacks: pinned NPL eventq_put can block forever
++    // on a full queue, including while a store callback holds the host lock.
++}
++static void clear_inputs(void) {
++    portENTER_CRITICAL(&policy_mux); hp_clear_input(&input_queue); input_origin_valid=false; portEXIT_CRITICAL(&policy_mux);
++}
++static void fault(hp_domain_t domain, int code) {
++    // May run under NimBLE's store lock: latch only; no nested GAP/store call.
++    portENTER_CRITICAL(&policy_mux);
++    fault_pending=true; pending_fault_domain=domain; pending_fault=code;
++    observed.filter_ready=false; observed.hid_ready=false;
++    hp_clear_input(&input_queue);
++    portEXIT_CRITICAL(&policy_mux);
++    schedule();
++}
++static int persist(void *unused, const hp_blob_t *blob) {
++    (void)unused;
++    nvs_handle_t handle;
++    esp_err_t rc=nvs_open("bm83_hid_policy",NVS_READWRITE,&handle);
++    if (rc!=ESP_OK) { return rc; }
++    rc=nvs_set_blob(handle,"policy_v1",blob,sizeof(*blob));
++    if (rc==ESP_OK) { rc=nvs_commit(handle); }
++    hp_blob_t checked; size_t size=sizeof(checked);
++    if (rc==ESP_OK) { rc=nvs_get_blob(handle,"policy_v1",&checked,&size); }
++    if (rc==ESP_OK && (size!=sizeof(checked) || memcmp(&checked,blob,sizeof(checked)) || !hp_blob_valid(&checked))) { rc=ESP_ERR_INVALID_STATE; }
++    nvs_close(handle); return rc;
++}
++static int stop_advertising(void *unused) {
++    (void)unused;
++    int rc;
++    #if MYNEWT_VAL(BLE_EXT_ADV)
++    rc=ble_gap_ext_adv_stop(0);
++    #else
++    rc=ble_gap_adv_stop();
++    #endif
++    common_hal_bleio_adapter_obj.user_advertising=false;
++    return rc==BLE_HS_EALREADY || rc==BLE_HS_EINVAL ? 0 : rc;
++}
++static int terminate(void *unused, uint16_t handle) {
++    (void)unused;
++    int rc=ble_gap_terminate(handle,BLE_ERR_REM_USER_CONN_TERM);
++    return rc==BLE_HS_ENOTCONN ? HP_TERMINATE_ABSENT : rc;
++}
++static int submit_input(const hp_input_report_t *report) {
++    if (!hp_input_current(&core,report)) { return BLE_HS_EREJECT; }
++    struct os_mbuf *buffer=ble_hs_mbuf_from_flat(report->data,report->length);
++    if (!buffer) { return BLE_HS_ENOMEM; }
++    // This call and all connection/policy callbacks run on the same native host
++    // task. Numeric handle reuse cannot interleave validation and submission.
++    int rc=ble_gatts_notify_custom(report->handle,report->attribute,buffer);
++    if (!rc) { portENTER_CRITICAL(&policy_mux); last_input=*report; last_input_valid=true; portEXIT_CRITICAL(&policy_mux); }
++    return rc;
++}
++static int release_old_input(void) {
++    hp_input_report_t release;
++    portENTER_CRITICAL(&policy_mux); bool valid=last_input_valid; release=last_input; portEXIT_CRITICAL(&policy_mux);
++    if (!valid || !hp_input_current(&core,&release)) { return 0; }
++    bool held=false;
++    for (unsigned i=0;i<release.length;i++) { held |= release.data[i]!=0; release.data[i]=0; }
++    return held ? submit_input(&release) : 0;
++}
++
++static size_t store_size(int type) {
++    return type==BLE_STORE_OBJ_TYPE_CCCD ? sizeof(struct ble_store_value_cccd) :
++           type==BLE_STORE_OBJ_TYPE_CSFC ? sizeof(struct ble_store_value_csfc) :
++           type==BLE_STORE_OBJ_TYPE_LOCAL_IRK ? sizeof(struct ble_store_value_local_irk) :
++           type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? sizeof(struct ble_store_value_rpa_rec) : sizeof(struct ble_store_value_sec);
++}
++static const char *store_prefix(int type) {
++    switch(type) {
++        case BLE_STORE_OBJ_TYPE_OUR_SEC: return "our_sec";
++        case BLE_STORE_OBJ_TYPE_PEER_SEC: return "peer_sec";
++        case BLE_STORE_OBJ_TYPE_CCCD: return "cccd_sec";
++        case BLE_STORE_OBJ_TYPE_CSFC: return "csfc_sec";
++        case BLE_STORE_OBJ_TYPE_LOCAL_IRK: return "local_irk";
++        case BLE_STORE_OBJ_TYPE_PEER_ADDR: return "rpa_rec";
++        default: return NULL;
++    }
++}
++static int persistent_match(int type, const union ble_store_value *value) {
++    const char *prefix=store_prefix(type);
++    if (!prefix) { return 0; }
++    nvs_handle_t handle;
++    int rc=nvs_open("nimble_bond",NVS_READONLY,&handle);
++    if (rc) { return rc; }
++    unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
++    int result=BLE_HS_ESTORE_FAIL;
++    for (unsigned i=1;i<=limit;i++) {
++        char key[16]; snprintf(key,sizeof(key),"%s_%u",prefix,i);
++        union ble_store_value saved; memset(&saved,0,sizeof(saved));
++        size_t size=store_size(type);
++        rc=nvs_get_blob(handle,key,&saved,&size);
++        if (rc==ESP_ERR_NVS_NOT_FOUND) { continue; }
++        if (rc || size!=store_size(type)) { result=rc ? rc : BLE_HS_ESTORE_FAIL; break; }
++        if (!memcmp(&saved,value,size)) { result=0; break; }
++    }
++    nvs_close(handle); return result;
++}
++typedef struct { hp_peer_t *peers; size_t count; unsigned cccds; int error; } peer_collect_t;
++static int collect(int type, union ble_store_value *value, void *cookie) {
++    peer_collect_t *ctx=cookie;
++    hp_address_t raw=address(type==BLE_STORE_OBJ_TYPE_CCCD ? &value->cccd.peer_addr : &value->sec.peer_addr), a;
++    if (!hp_normalize(&a,&raw)) { ctx->error=HP_INVALID; return BLE_HS_EINVAL; }
++    size_t index=0;
++    for (;index<ctx->count;index++) { if (hp_address_equal(&ctx->peers[index].address,&a)) { break; } }
++    if (index==ctx->count) {
++        if (ctx->count==HP_MAX_PEERS) { ctx->error=HP_CAPACITY; return BLE_HS_ESTORE_CAP; }
++        ctx->count++; ctx->peers[index].address=a; ctx->peers[index].durable=true;
++    }
++    hp_peer_t *peer=&ctx->peers[index];
++    if (type==BLE_STORE_OBJ_TYPE_OUR_SEC) { peer->our_sec=value->sec.ltk_present; }
++    else if (type==BLE_STORE_OBJ_TYPE_PEER_SEC) { peer->peer_sec=value->sec.ltk_present || value->sec.irk_present; }
++    else {
++        ctx->cccds++;
++        if ((value->cccd.flags&1) && (!core.hid_input_handle || core.hid_input_handle==value->cccd.chr_val_handle)) { peer->cccd=true; }
++    }
++    int durable_error=persistent_match(type,value);
++    if (durable_error) { peer->durable=false; ctx->error=durable_error; return durable_error; }
++    return 0;
++}
++static int peers(void *unused, hp_peer_t *out, size_t *count, unsigned *cccds) {
++    (void)unused;
++    uint32_t before=store_generation;
++    peer_collect_t ctx={.peers=out};
++    for (unsigned i=0;i<3;i++) {
++        int type=i==0 ? BLE_STORE_OBJ_TYPE_OUR_SEC : i==1 ? BLE_STORE_OBJ_TYPE_PEER_SEC : BLE_STORE_OBJ_TYPE_CCCD;
++        int rc=ble_store_iterate(type,collect,&ctx);
++        if (rc || ctx.error) { return ctx.error ? ctx.error : rc; }
++    }
++    if (before!=store_generation || ctx.count>*count) { return HP_STALE; }
++    // Sorting makes snapshot generation stable across store enumeration order.
++    for (size_t i=0;i<ctx.count;i++) {
++        for (size_t j=i+1;j<ctx.count;j++) {
++            if (hp_identity_id(&out[j].address)<hp_identity_id(&out[i].address)) { hp_peer_t temp=out[i]; out[i]=out[j]; out[j]=temp; }
++        }
++    }
++    *count=ctx.count; *cccds=ctx.cccds; return 0;
++}
++typedef struct { hp_address_t target; bool found,irk_present; uint8_t irk[16]; unsigned checked; int error; } target_privacy_t;
++static int target_privacy(int type, union ble_store_value *value, void *cookie) {
++    (void)type; target_privacy_t *ctx=cookie;
++    if (++ctx->checked>HP_MAX_PEERS) { ctx->error=HP_CAPACITY; return 1; }
++    hp_address_t raw=address(&value->sec.peer_addr);
++    if (!hp_address_equal(&raw,&ctx->target)) { return 0; }
++    if (ctx->found && (ctx->irk_present!=value->sec.irk_present || (ctx->irk_present && memcmp(ctx->irk,value->sec.irk,16)))) { ctx->error=HP_INVALID; return 1; }
++    ctx->found=true; ctx->irk_present=value->sec.irk_present;
++    if (ctx->irk_present) { memcpy(ctx->irk,value->sec.irk,16); }
++    return 0;
++}
++static int filter(void *unused, const hp_address_t *target) {
++    (void)unused;
++    // All procedures are stopped before configuring admission. Clear only the
++    // CONTROLLER'S volatile resolving subset, never NVS bonds/local identity.
++    int rc=ble_hs_pvcy_set_resolve_enabled(0);
++    if (rc) { return rc; }
++    rc=ble_hs_hci_cmd_tx(BLE_HCI_OP(BLE_HCI_OGF_LE,BLE_HCI_OCF_LE_CLR_RESOLV_LIST),NULL,0,NULL,0);
++    if (rc) { return rc; }
++    if (target) {
++        ble_addr_t selected=native_address(target);
++        target_privacy_t privacy; memset(&privacy,0,sizeof(privacy)); privacy.target=*target;
++        // Match normalized identities, including PUBLIC_ID/RANDOM_ID store
++        // types. An exact type0 lookup must not silently miss a type2 IRK.
++        rc=ble_store_iterate(BLE_STORE_OBJ_TYPE_PEER_SEC,target_privacy,&privacy);
++        if (rc || privacy.error) { memset(privacy.irk,0,sizeof(privacy.irk)); return rc ? rc : privacy.error; }
++        // Checked insertion proves this target, rather than relying on sync's
++        // best-effort all-peer restore. One selected entry avoids list overflow.
++        rc=privacy.irk_present ? ble_hs_pvcy_add_entry(selected.val,selected.type,privacy.irk) : 0;
++        memset(privacy.irk,0,sizeof(privacy.irk));
++        if (rc) { return rc; }
++        rc=ble_gap_wl_set(&selected,1);
++    } else {
++        rc=ble_gap_wl_set(NULL,0);
++    }
++    if (rc) { return rc; }
++    return ble_hs_pvcy_set_resolve_enabled(1);
++}
++static int guarded_write(int type, const union ble_store_value *value) {
++    const char *prefix=store_prefix(type);
++    if (prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
++        union ble_store_key key; union ble_store_value existing;
++        memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
++        ble_store_key_from_value(type,&key,value);
++        int found=original_read(type,&key,&existing);
++        if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
++        const ble_addr_t *peer=type==BLE_STORE_OBJ_TYPE_CCCD ? &value->cccd.peer_addr : type==BLE_STORE_OBJ_TYPE_CSFC ? &value->csfc.peer_addr : type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? &value->rpa_rec.peer_addr : &value->sec.peer_addr;
++        hp_address_t a=address(peer);
++        bool security=type==BLE_STORE_OBJ_TYPE_OUR_SEC || type==BLE_STORE_OBJ_TYPE_PEER_SEC;
++        bool same=found==0;
++        if (same && security) {
++            same=existing.sec.ltk_present==value->sec.ltk_present && existing.sec.irk_present==value->sec.irk_present && existing.sec.csrk_present==value->sec.csrk_present && existing.sec.key_size==value->sec.key_size && existing.sec.ediv==value->sec.ediv && existing.sec.rand_num==value->sec.rand_num &&
++                 memcmp(existing.sec.ltk,value->sec.ltk,16)==0 && memcmp(existing.sec.irk,value->sec.irk,16)==0 && memcmp(existing.sec.csrk,value->sec.csrk,16)==0;
++        }
++        portENTER_CRITICAL(&policy_mux); bool blocked=command_queue.pending || processing || fault_pending; portEXIT_CRITICAL(&policy_mux);
++        if (blocked || !hp_store_allowed(&core,&a,security,found==0,same)) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
++    } else if (type==BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
++        union ble_store_key key; union ble_store_value existing;
++        memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
++        ble_store_key_from_value(type,&key,value);
++        int found=original_read(type,&key,&existing);
++        if (found==0 && memcmp(&existing,value,store_size(type))) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
++        if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
++    }
++    int rc=original_write(type,value);
++    if (!rc && prefix) {
++        // The pinned store assigns bond_count during OUR_SEC/PEER_SEC writes.
++        // Verify the canonical POST-write record, never the caller's old count.
++        union ble_store_key key; union ble_store_value canonical, expected;
++        memset(&key,0,sizeof(key)); memset(&canonical,0,sizeof(canonical));
++        ble_store_key_from_value(type,&key,value);
++        rc=original_read(type,&key,&canonical);
++        memset(&expected,0,sizeof(expected));
++        // Public NimBLE write helpers may pass a smaller struct through a
++        // union pointer. Never read sizeof(union) bytes from that argument.
++        memcpy(&expected,value,store_size(type));
++        if (type==BLE_STORE_OBJ_TYPE_OUR_SEC || type==BLE_STORE_OBJ_TYPE_PEER_SEC) { expected.sec.bond_count=canonical.sec.bond_count; }
++        if (!rc && memcmp(&expected,&canonical,store_size(type))) { rc=BLE_HS_ESTORE_FAIL; }
++        if (!rc) { rc=persistent_match(type,&canonical); }
++        memset(&canonical,0,sizeof(canonical)); memset(&expected,0,sizeof(expected));
++    }
++    store_generation++;
++    if (rc) { fault(HP_DOMAIN_NVS,rc); }
++    schedule(); return rc;
++}
++static int guarded_delete(int type, const union ble_store_key *key) {
++    if (store_prefix(type) && type!=BLE_STORE_OBJ_TYPE_PEER_ADDR) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
++    return original_delete(type,key);
++}
++int bleio_host_policy_store_status(struct ble_store_status_event *event, void *arg) {
++    (void)event; (void)arg;
++    fault(HP_DOMAIN_NVS,BLE_HS_ESTORE_CAP);
++    return BLE_HS_ESTORE_CAP; // FULL and OVERFLOW: never round-robin evict a bond/CCCD/CSFC.
++}
++void bleio_host_policy_install_store_guards(void) {
++    original_write=ble_hs_cfg.store_write_cb; original_read=ble_hs_cfg.store_read_cb; original_delete=ble_hs_cfg.store_delete_cb;
++    ble_hs_cfg.store_write_cb=guarded_write; ble_hs_cfg.store_delete_cb=guarded_delete;
++}
++static void service(struct ble_npl_event *event) {
++    (void)event;
++    policy_request_t local; bool has_request, has_fault; int error; hp_domain_t domain;
++    portENTER_CRITICAL(&policy_mux);
++    has_request=hp_pop(&command_queue,&local); processing=true;
++    has_fault=fault_pending; error=pending_fault; domain=pending_fault_domain; fault_pending=false;
++    policy_busy=has_request || has_fault;
++    portEXIT_CRITICAL(&policy_mux);
++    bool transitioning=has_request || has_fault || core.status.state==HP_SWITCHING;
++    if (has_request || has_fault) { clear_inputs(); }
++    if (has_fault) {
++        (void)release_old_input(); hp_fail(&core,domain,error);
++        // A command already queued BEFORE this fault is not a new recovery
++        // intent. Publish its terminal error; never erase the fault by applying it.
++        if (has_request) { core.status.operation_id=local.operation; if (!local.alias) { core.status.requested_mode=local.mode; } }
++    } else if (has_request) {
++        int release_error=release_old_input();
++        if (release_error) { core.status.operation_id=local.operation; hp_fail(&core,HP_DOMAIN_NIMBLE,release_error); }
++        else if (local.alias) { core.status.operation_id=local.operation; int rc=hp_set_alias(&core,local.target,local.text,local.length); if (rc) { hp_fail(&core,HP_DOMAIN_NVS,rc); } }
++        else { hp_request(&core,local.mode,local.target,local.operation,local.timeout_s,millis()); }
++    }
++    hp_tick(&core,millis());
++    // A stop/filter transition and start must run in DIFFERENT NimBLE event
++    // contexts. On the next tick, admission is re-evaluated, never cached on VM.
++    if (!transitioning) {
++        portENTER_CRITICAL(&policy_mux);
++        bool start_pending=advertising_request.active && !advertising_request.finished;
++        bool cancelled=advertising_request.cancelled;
++        uint32_t token=advertising_request.token;
++        portEXIT_CRITICAL(&policy_mux);
++        if (start_pending) {
++            uint32_t rc=BLE_HS_EREJECT;
++            if (!cancelled && hp_advertising_allowed(&core)) {
++                common_hal_bleio_adapter_obj.user_advertising=advertising_request.user_owned;
++                rc=advertising_request.start(&common_hal_bleio_adapter_obj,
++                    advertising_request.connectable,advertising_request.anonymous,
++                    advertising_request.timeout,advertising_request.interval,
++                    advertising_request.data,advertising_request.data_length,
++                    advertising_request.response,advertising_request.response_length,
++                    advertising_request.power,NULL);
++            }
++            portENTER_CRITICAL(&policy_mux);
++            cancelled=advertising_request.cancelled || advertising_request.token!=token;
++            portEXIT_CRITICAL(&policy_mux);
++            if (cancelled || rc) {
++                int stopped=stop_advertising(NULL);
++                if ((cancelled || (rc!=BLE_HS_EREJECT) || stopped) && core.status.state!=HP_ERROR) { hp_fail(&core,HP_DOMAIN_NIMBLE,stopped ? stopped : cancelled ? BLE_HS_ETIMEOUT : (int)rc); }
++                rc=cancelled ? BLE_HS_ETIMEOUT : rc;
++            }
++            portENTER_CRITICAL(&policy_mux);
++            if (advertising_request.token==token) {
++                advertising_request.result=rc; advertising_request.finished=true;
++                if (advertising_request.waiter_gone) { advertising_request.active=false; }
++            }
++            portEXIT_CRITICAL(&policy_mux);
++        }
++    }
++    // Bounded FIFO service, no ENOMEM retry, no waits and no VM pointers.
++    for (unsigned i=0;i<4;i++) {
++        hp_input_report_t report;
++        portENTER_CRITICAL(&policy_mux);
++        bool have=!command_queue.pending && !fault_pending && hp_pop_input(&input_queue,&report);
++        portEXIT_CRITICAL(&policy_mux);
++        if (!have) { break; }
++        if (!hp_input_current(&core,&report)) { continue; }
++        int rc=submit_input(&report);
++        if (rc) { clear_inputs(); hp_fail(&core,HP_DOMAIN_NIMBLE,rc); break; }
++    }
++    publish();
++    int timer_error=ble_npl_callout_reset(&policy_timer,ble_npl_time_ms_to_ticks32(100));
++    if (timer_error) { timer_ready=false; clear_inputs(); (void)release_old_input(); hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); publish(); }
++    portENTER_CRITICAL(&policy_mux); processing=false; policy_busy=false; portEXIT_CRITICAL(&policy_mux);
++}
++static int reserve_enrollment(void *unused) {
++    (void)unused;
++    // OUR/PEER bond and CCCD limits are checked by the core. Also reserve one
++    // CSFC and one RPA mapping before any new SMP record can be written.
++    int types[]={BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CSFC,BLE_STORE_OBJ_TYPE_PEER_ADDR};
++    for (unsigned i=0;i<sizeof(types)/sizeof(types[0]);i++) {
++        int count=0,rc=ble_store_util_count(types[i],&count);
++        if (rc) { return rc; }
++        if (count<0 || count>=HP_MAX_PEERS) { return BLE_HS_ESTORE_CAP; }
++    }
++    return 0;
++}
++void bleio_host_policy_init(int nvs_error) {
++    if (initialized) { return; }
++    hp_backend_t backend={.persist=persist,.stop_advertising=stop_advertising,.terminate=terminate,.filter=filter,.peers=peers,.reserve_enrollment=reserve_enrollment};
++    hp_blob_t blob; memset(&blob,0,sizeof(blob)); bool present=false;
++    if (!nvs_error) {
++        nvs_handle_t handle; int rc=nvs_open("bm83_hid_policy",NVS_READONLY,&handle);
++        if (!rc) { size_t size=sizeof(blob); rc=nvs_get_blob(handle,"policy_v1",&blob,&size); present=rc==ESP_OK; if (present && size!=sizeof(blob)) { nvs_error=ESP_ERR_NVS_INVALID_LENGTH; } nvs_close(handle); }
++        if (rc!=ESP_OK && rc!=ESP_ERR_NVS_NOT_FOUND) { nvs_error=rc; }
++    }
++    hp_init(&core,&backend,present ? &blob : NULL,nvs_error);
++    initialized=true; publish();
++}
++void bleio_host_policy_sync(void) {
++    int timer_error=ble_npl_callout_init(&policy_timer,nimble_port_get_dflt_eventq(),service,NULL);
++    synced=true;
++    if (timer_error) { timer_ready=false; hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); publish(); return; }
++    timer_ready=true;
++    int rc=hp_refresh(&core);
++    if (rc) { hp_fail(&core,HP_DOMAIN_NVS,rc); }
++    timer_error=ble_npl_callout_reset(&policy_timer,ble_npl_time_ms_to_ticks32(100));
++    if (timer_error) { timer_ready=false; hp_fail(&core,HP_DOMAIN_NIMBLE,timer_error); }
++    publish();
++}
++void bleio_host_policy_disabled(void) { synced=false; if (timer_ready) { ble_npl_callout_stop(&policy_timer); } timer_ready=false; clear_inputs(); }
++int bleio_host_policy_advertising_guard(void) {
++    // Called only by the raw start on the serialized host task. Actual policy
++    // transitions and expiry cannot interleave this check and GAP submission.
++    return synced && timer_ready && hp_advertising_allowed(&core) ? (int)core.status.applied_mode : -1;
++}
++uint32_t bleio_host_policy_advertising_timeout_ms(uint32_t requested_ms) {
++    if (core.status.applied_mode!=HP_ENROLL) { return requested_ms; }
++    uint64_t now=millis();
++    uint32_t remaining=now<core.deadline_ms ? (uint32_t)(core.deadline_ms-now) : 1;
++    return requested_ms==0 || requested_ms>remaining ? remaining : requested_ms;
++}
++uint32_t bleio_host_policy_start_advertising(bleio_adapter_obj_t *self, bool connectable, bool anonymous,
++    uint32_t timeout, float interval, const uint8_t *data, uint16_t length,
++    const uint8_t *response, uint16_t response_length, mp_int_t power,
++    const bleio_address_obj_t *directed_to, hp_raw_advertise_fn start) {
++    if (self!=&common_hal_bleio_adapter_obj || directed_to!=NULL || anonymous || length>HP_ADV_MAX_BYTES || response_length>HP_ADV_MAX_BYTES) { return BLE_HS_EINVAL; }
++    portENTER_CRITICAL(&policy_mux);
++    if (!synced || !timer_ready || command_queue.pending || fault_pending || !observed.filter_ready || observed.applied_mode==HP_PAUSED || observed.state==HP_ERROR) { portEXIT_CRITICAL(&policy_mux); return BLE_HS_EREJECT; }
++    if (advertising_request.active) { portEXIT_CRITICAL(&policy_mux); return BLE_HS_EBUSY; }
++    uint32_t token=++next_advertising_token;
++    if (!token) { token=++next_advertising_token; }
++    // Only fixed native arrays survive the cooperative wait, never VM pointers.
++    advertising_request.active=true; advertising_request.finished=false;
++    advertising_request.cancelled=false; advertising_request.waiter_gone=false;
++    advertising_request.token=token; advertising_request.connectable=connectable;
++    advertising_request.anonymous=anonymous; advertising_request.timeout=timeout;
++    advertising_request.interval=interval; advertising_request.power=power;
++    advertising_request.data_length=length; advertising_request.response_length=response_length;
++    advertising_request.user_owned=self->user_advertising; advertising_request.start=start;
++    if (length) { memcpy(advertising_request.data,data,length); }
++    if (response_length) { memcpy(advertising_request.response,response,response_length); }
++    portEXIT_CRITICAL(&policy_mux);
++    uint64_t deadline=millis()+HP_ADV_VM_WAIT_MS;
++    for (;;) {
++        portENTER_CRITICAL(&policy_mux);
++        if (advertising_request.token==token && advertising_request.finished) {
++            uint32_t rc=advertising_request.result; advertising_request.active=false;
++            portEXIT_CRITICAL(&policy_mux); return rc;
++        }
++        if (millis()>=deadline || mp_hal_is_interrupted()) {
++            advertising_request.cancelled=true; advertising_request.waiter_gone=true;
++            portEXIT_CRITICAL(&policy_mux); return BLE_HS_ETIMEOUT;
++        }
++        portEXIT_CRITICAL(&policy_mux);
++        RUN_BACKGROUND_TASKS;
++        common_hal_time_delay_ms(1);
++    }
++}
++bool bleio_host_policy_input_guard(uint16_t handle) {
++    portENTER_CRITICAL(&policy_mux);
++    bool allowed=synced && timer_ready && !command_queue.pending && !policy_busy && !fault_pending && observed.hid_ready && observed.connected && observed.encrypted && observed.bonded && observed.state==HP_CONNECTED && observed.applied_mode==HP_AUTO && observed_handle==handle && observed.connected_id==observed.target_id;
++    portEXIT_CRITICAL(&policy_mux); return allowed;
++}
++int bleio_host_policy_queue_input(uint16_t handle, uint16_t attribute, const uint8_t *data, size_t length) {
++    portENTER_CRITICAL(&policy_mux);
++    bool origin_current=input_origin_valid && input_origin.operation_id==observed.operation_id &&
++        input_origin.policy_generation==observed.policy_generation && input_origin.connection_generation==observed.connection_generation &&
++        input_origin.subscription_generation==observed.subscription_generation && input_origin.target_id==observed.target_id &&
++        origin_handle==observed_handle && origin_input_handle==observed_input_handle && observed.hid_ready;
++    int rc=!synced || !timer_ready || command_queue.pending || policy_busy || fault_pending || !origin_current ? HP_UNAUTHORIZED :
++        hp_queue_input(&input_queue,&input_origin,origin_handle,origin_input_handle,handle,attribute,data,length);
++    portEXIT_CRITICAL(&policy_mux);
++    if (rc==HP_QUEUE_FULL) { fault(HP_DOMAIN_NIMBLE,BLE_HS_ENOMEM); return BLE_HS_ENOMEM; }
++    return rc ? BLE_HS_EREJECT : 0;
++}
++mp_obj_t bleio_host_policy_arm_input(mp_obj_t operation, mp_obj_t policy, mp_obj_t connection, mp_obj_t subscription) {
++    hp_status_t expected;
++    portENTER_CRITICAL(&policy_mux); expected=observed; portEXIT_CRITICAL(&policy_mux);
++    // Exact arbitrary-Python-int equality avoids truncating a supplied epoch.
++    // All VM allocation/comparison is OUTSIDE the native snapshot lock.
++    bool equal=mp_obj_is_int(operation) && mp_obj_is_int(policy) && mp_obj_is_int(connection) && mp_obj_is_int(subscription) &&
++        mp_obj_equal(operation,mp_obj_new_int_from_uint(expected.operation_id)) &&
++        mp_obj_equal(policy,mp_obj_new_int_from_uint(expected.policy_generation)) &&
++        mp_obj_equal(connection,mp_obj_new_int_from_uint(expected.connection_generation)) &&
++        mp_obj_equal(subscription,mp_obj_new_int_from_uint(expected.subscription_generation));
++    portENTER_CRITICAL(&policy_mux);
++    bool allowed=equal && synced && timer_ready && !command_queue.pending && !policy_busy && !fault_pending &&
++        observed.state==HP_CONNECTED && observed.applied_mode==HP_AUTO && observed.hid_ready && observed.connected && observed.encrypted && observed.bonded && observed.connected_id==observed.target_id &&
++        observed.operation_id==expected.operation_id && observed.policy_generation==expected.policy_generation &&
++        observed.connection_generation==expected.connection_generation && observed.subscription_generation==expected.subscription_generation;
++    input_origin_valid=allowed;
++    if (allowed) { input_origin=expected; origin_handle=observed_handle; origin_input_handle=observed_input_handle; }
++    portEXIT_CRITICAL(&policy_mux); return mp_obj_new_bool(allowed);
++}
++bool bleio_host_policy_input_value(uint16_t handle, uint16_t attribute, uint8_t *out, size_t length) {
++    if (length>HP_INPUT_BYTES) { return false; }
++    memset(out,0,length);
++    portENTER_CRITICAL(&policy_mux);
++    bool valid=last_input_valid && !command_queue.pending && !fault_pending && !policy_busy &&
++        observed.hid_ready && observed.connected && observed_handle==handle && observed_input_handle==attribute &&
++        last_input.handle==handle && last_input.attribute==attribute && last_input.length==length &&
++        last_input.connection_generation==observed.connection_generation && last_input.policy_generation==observed.policy_generation &&
++        last_input.subscription_generation==observed.subscription_generation &&
++        last_input.operation==observed.operation_id && last_input.identity==observed.target_id;
++    if (valid) { memcpy(out,last_input.data,length); }
++    portEXIT_CRITICAL(&policy_mux); return true;
++}
++typedef struct { uint8_t rpa[6]; hp_address_t identity; bool found; int error; unsigned checked; } resolution_t;
++static int resolve_saved(int type, union ble_store_value *value, void *cookie) {
++    (void)type; resolution_t *ctx=cookie;
++    if (++ctx->checked>HP_MAX_PEERS) { ctx->error=HP_CAPACITY; return 1; }
++    if (!value->sec.irk_present) { return 0; }
++    uint8_t hash[3]; int rc=ble_hs_pvcy_rpa_ah(value->sec.irk,ctx->rpa+3,hash);
++    if (rc) { ctx->error=rc; return 1; }
++    if (memcmp(hash,ctx->rpa,3)) { return 0; }
++    hp_address_t raw=address(&value->sec.peer_addr), normalized;
++    if (!hp_normalize(&normalized,&raw) || (ctx->found && !hp_address_equal(&ctx->identity,&normalized))) { ctx->error=HP_INVALID; return 1; }
++    ctx->identity=normalized; ctx->found=true; return 0;
++}
++uint32_t bleio_host_policy_connect(uint16_t handle) {
++    portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
++    struct ble_gap_conn_desc desc;
++    if (ble_gap_conn_find(handle,&desc)) { terminate(NULL,handle); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return 0; }
++    hp_address_t a=address(&desc.peer_id_addr);
++    hp_address_t normalized;
++    if (!hp_normalize(&normalized,&a) && desc.peer_ota_addr.type==BLE_ADDR_RANDOM && (desc.peer_ota_addr.val[5]&0xc0)==0x40) {
++        // ENROLL clears the volatile resolving subset. Recognize and refuse an
++        // existing bonded host's RPA before it can latch the new-host slot.
++        // Bounded eight-record native software resolution; no keys leave C.
++        resolution_t ctx; memset(&ctx,0,sizeof(ctx)); memcpy(ctx.rpa,desc.peer_ota_addr.val,6);
++        int rc=ble_store_iterate(BLE_STORE_OBJ_TYPE_PEER_SEC,resolve_saved,&ctx);
++        if (rc || ctx.error) {
++            terminate(NULL,handle); fault(HP_DOMAIN_SECURITY,rc ? rc : ctx.error);
++            portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return 0;
++        }
++        if (ctx.found) { a=ctx.identity; }
++    }
++    uint32_t generation=hp_connect(&core,handle,&a); if (generation) { clear_inputs(); } publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return generation;
++}
++void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
++    if (event->type!=BLE_GAP_EVENT_DISCONNECT && event->type!=BLE_GAP_EVENT_IDENTITY_RESOLVED && event->type!=BLE_GAP_EVENT_ENC_CHANGE && event->type!=BLE_GAP_EVENT_REPEAT_PAIRING) { return; }
++    portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
++    hp_status_t before=core.status;
++    struct ble_gap_conn_desc desc; uint16_t handle=HP_INVALID_HANDLE;
++    switch(event->type) {
++        case BLE_GAP_EVENT_DISCONNECT:
++            hp_disconnect(&core,event->disconnect.conn.conn_handle,generation,event->disconnect.reason); break;
++        case BLE_GAP_EVENT_IDENTITY_RESOLVED:
++            handle=event->identity_resolved.conn_handle;
++            if (!ble_gap_conn_find(handle,&desc)) { hp_address_t a=address(&desc.peer_id_addr); hp_identity(&core,handle,generation,&a); } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
++            break;
++        case BLE_GAP_EVENT_ENC_CHANGE:
++            handle=event->enc_change.conn_handle;
++            if (!ble_gap_conn_find(handle,&desc)) { hp_address_t a=address(&desc.peer_id_addr); hp_identity(&core,handle,generation,&a); hp_security(&core,handle,generation,desc.sec_state.encrypted,desc.sec_state.bonded,event->enc_change.status); } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
++            break;
++        case BLE_GAP_EVENT_REPEAT_PAIRING: fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); break;
++        default: return;
++    }
++    if (before.connection_generation!=core.status.connection_generation || before.connected_id!=core.status.connected_id || before.connected!=core.status.connected || before.encrypted!=core.status.encrypted || before.bonded!=core.status.bonded || before.state!=core.status.state) { clear_inputs(); }
++    publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); schedule();
++}
++void bleio_host_policy_subscription(uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled) {
++    portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
++    uint32_t before=core.status.subscription_generation;
++    hp_subscribe(&core,handle,generation,input_handle,enabled); if (before!=core.status.subscription_generation) { clear_inputs(); } publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); schedule();
++}
++static uint64_t parse_id(mp_obj_t value, bool optional) {
++    if (value==mp_const_none && optional) { return 0; }
++    if (!mp_obj_is_str(value)) { mp_raise_ValueError(MP_ERROR_TEXT("Host id must be text")); }
++    size_t length; const char *text=mp_obj_str_get_data(value,&length);
++    if (length!=16) { mp_raise_ValueError(MP_ERROR_TEXT("Host id must contain 16 lowercase hex digits")); }
++    uint64_t result=0;
++    for (unsigned i=0;i<16;i++) { unsigned digit=text[i]>='0' && text[i]<='9' ? text[i]-'0' : text[i]>='a' && text[i]<='f' ? text[i]-'a'+10 : 16; if (digit>15) { mp_raise_ValueError(MP_ERROR_TEXT("Invalid host id")); } result=(result<<4)|digit; }
++    if (!result) { mp_raise_ValueError(MP_ERROR_TEXT("Invalid host id")); } return result;
++}
++static mp_obj_t id_object(uint64_t id) { if (!id) { return mp_const_none; } char text[17]; snprintf(text,sizeof(text),"%016" PRIx64,id); return mp_obj_new_str(text,16); }
++static mp_obj_t enqueue(policy_request_t *next) {
++    if (!synced || !timer_ready) { mp_raise_RuntimeError(MP_ERROR_TEXT("BLE host policy unavailable")); }
++    portENTER_CRITICAL(&policy_mux);
++    int rc=hp_submit(&command_queue,next);
++    if (rc) { portEXIT_CRITICAL(&policy_mux); mp_raise_RuntimeError(MP_ERROR_TEXT("BLE host policy queue full")); }
++    hp_clear_input(&input_queue);
++    input_origin_valid=false;
++    portEXIT_CRITICAL(&policy_mux); schedule(); return mp_obj_new_int_from_uint(next->operation);
++}
++mp_obj_t bleio_host_policy_request(mp_obj_t mode, mp_obj_t target, mp_int_t timeout_s) {
++    policy_request_t next; memset(&next,0,sizeof(next));
++    if (!mp_obj_is_str(mode)) { mp_raise_ValueError(MP_ERROR_TEXT("Host policy must be text")); }
++    const char *name=mp_obj_str_get_str(mode);
++    if (!strcmp(name,"PAUSED")) { next.mode=HP_PAUSED; }
++    else if (!strcmp(name,"AUTO")) { next.mode=HP_AUTO; }
++    else if (!strcmp(name,"ENROLL")) { next.mode=HP_ENROLL; }
++    else { mp_raise_ValueError(MP_ERROR_TEXT("Unknown BLE host policy")); }
++    next.target=parse_id(target,true);
++    if ((next.mode!=HP_AUTO && next.target) || timeout_s<5 || timeout_s>120) { mp_raise_ValueError(MP_ERROR_TEXT("Invalid host policy target or timeout")); }
++    next.timeout_s=(uint32_t)timeout_s; return enqueue(&next);
++}
++mp_obj_t bleio_host_policy_alias(mp_obj_t target, mp_obj_t alias) {
++    policy_request_t next; memset(&next,0,sizeof(next)); next.alias=true; next.target=parse_id(target,false);
++    if (!mp_obj_is_str(alias)) { mp_raise_ValueError(MP_ERROR_TEXT("Host alias must be text")); }
++    const char *text=mp_obj_str_get_data(alias,&next.length);
++    if (!hp_alias_valid(text,next.length)) { mp_raise_ValueError(MP_ERROR_TEXT("Host alias must be printable UTF-8, at most 24 bytes")); }
++    memcpy(next.text,text,next.length); return enqueue(&next);
++}
++static void put(mp_obj_t dict, qstr key, mp_obj_t value) { mp_obj_dict_store(dict,MP_OBJ_NEW_QSTR(key),value); }
++mp_obj_t bleio_host_policy_peers(void) {
++    hp_peer_t peers_copy[HP_MAX_PEERS]; size_t count; hp_status_t status;
++    portENTER_CRITICAL(&policy_mux); count=observed_count; status=observed; memcpy(peers_copy,observed_peers,sizeof(peers_copy)); portEXIT_CRITICAL(&policy_mux);
++    mp_obj_t items[HP_MAX_PEERS];
++    for (size_t i=0;i<count;i++) {
++        hp_peer_t *peer=&peers_copy[i]; mp_obj_t item=mp_obj_new_dict(0);
++        put(item,MP_QSTR_id,id_object(peer->id)); put(item,MP_QSTR_alias,mp_obj_new_str(peer->alias,strlen(peer->alias)));
++        put(item,MP_QSTR_generation,mp_obj_new_int_from_uint(status.bond_generation));
++        put(item,MP_QSTR_our_sec,mp_obj_new_bool(peer->our_sec)); put(item,MP_QSTR_peer_sec,mp_obj_new_bool(peer->peer_sec));
++        put(item,MP_QSTR_cccd,mp_obj_new_bool(peer->cccd)); put(item,MP_QSTR_resumable,mp_obj_new_bool(peer->our_sec && peer->durable));
++        put(item,MP_QSTR_connected,mp_obj_new_bool(status.connected && status.connected_id==peer->id)); items[i]=item;
++    }
++    return mp_obj_new_tuple(count,items);
++}
++mp_obj_t bleio_host_policy_status(void) {
++    hp_status_t status; bool request_pending;
++    portENTER_CRITICAL(&policy_mux); status=observed; request_pending=command_queue.pending || policy_busy || fault_pending; portEXIT_CRITICAL(&policy_mux);
++    static const char *modes[]={"PAUSED","AUTO","ENROLL"};
++    static const char *states[]={"PAUSED","SWITCHING","WAITING","ENROLLING","CONNECTED","ERROR"};
++    static const char *domains[]={"NONE","POLICY","NVS","NIMBLE","SECURITY"};
++    mp_obj_t result=mp_obj_new_dict(0);
++    put(result,MP_QSTR_version,MP_OBJ_NEW_SMALL_INT(1));
++    put(result,MP_QSTR_requested_mode,mp_obj_new_str(modes[status.requested_mode],strlen(modes[status.requested_mode])));
++    put(result,MP_QSTR_applied_mode,mp_obj_new_str(modes[status.applied_mode],strlen(modes[status.applied_mode])));
++    put(result,MP_QSTR_state,mp_obj_new_str(request_pending ? "SWITCHING" : states[status.state],strlen(request_pending ? "SWITCHING" : states[status.state])));
++    put(result,MP_QSTR_error_domain,mp_obj_new_str(domains[status.error_domain],strlen(domains[status.error_domain])));
++    put(result,MP_QSTR_error_code,mp_obj_new_int(status.error_code));
++    put(result,MP_QSTR_target_id,id_object(status.target_id)); put(result,MP_QSTR_connected_id,id_object(status.connected_id));
++    #define HP_UINT(field) put(result,MP_QSTR_##field,mp_obj_new_int_from_uint(status.field))
++    HP_UINT(operation_id); HP_UINT(policy_generation); HP_UINT(connection_generation); HP_UINT(subscription_generation); HP_UINT(bond_generation); HP_UINT(last_disconnect_generation); HP_UINT(enroll_remaining_s);
++    #undef HP_UINT
++    #define HP_BOOL(field) put(result,MP_QSTR_##field,mp_obj_new_bool(status.field))
++    HP_BOOL(connected); HP_BOOL(encrypted); HP_BOOL(bonded); HP_BOOL(persisted); HP_BOOL(last_disconnect_local);
++    #undef HP_BOOL
++    put(result,MP_QSTR_filter_ready,mp_obj_new_bool(status.filter_ready && !request_pending));
++    put(result,MP_QSTR_hid_ready,mp_obj_new_bool(status.hid_ready && !request_pending));
++    put(result,MP_QSTR_last_disconnect_reason,mp_obj_new_int(status.last_disconnect_reason));
++    #if MYNEWT_VAL(BLE_EXT_ADV)
++    bool advertising=synced && ble_gap_ext_adv_active(0);
++    #else
++    bool advertising=synced && ble_gap_adv_active();
++    #endif
++    put(result,MP_QSTR_advertising,mp_obj_new_bool(advertising));
++    return result;
++}
+diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.h b/ports/espressif/common-hal/_bleio/HostPolicy.h
+new file mode 100644
+index 0000000..55f955c
+--- /dev/null
++++ b/ports/espressif/common-hal/_bleio/HostPolicy.h
+@@ -0,0 +1,29 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include "py/obj.h"
++#include "shared-bindings/_bleio/Adapter.h"
++#include "host/ble_gap.h"
++#include "host/ble_store.h"
++#include "common-hal/_bleio/HostPolicyCore.h"
++void bleio_host_policy_init(int nvs_error);
++void bleio_host_policy_sync(void);
++void bleio_host_policy_install_store_guards(void);
++void bleio_host_policy_disabled(void);
++int bleio_host_policy_advertising_guard(void);
++typedef uint32_t (*hp_raw_advertise_fn)(bleio_adapter_obj_t *, bool, bool, uint32_t, float,
++    const uint8_t *, uint16_t, const uint8_t *, uint16_t, mp_int_t, const bleio_address_obj_t *);
++uint32_t bleio_host_policy_start_advertising(bleio_adapter_obj_t *, bool, bool, uint32_t, float,
++    const uint8_t *, uint16_t, const uint8_t *, uint16_t, mp_int_t, const bleio_address_obj_t *, hp_raw_advertise_fn);
++uint32_t bleio_host_policy_advertising_timeout_ms(uint32_t);
++bool bleio_host_policy_input_guard(uint16_t handle);
++int bleio_host_policy_queue_input(uint16_t, uint16_t, const uint8_t *, size_t);
++bool bleio_host_policy_input_value(uint16_t, uint16_t, uint8_t *, size_t);
++uint32_t bleio_host_policy_connect(uint16_t handle);
++void bleio_host_policy_event(struct ble_gap_event *, uint32_t generation);
++void bleio_host_policy_subscription(uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled);
++int bleio_host_policy_store_status(struct ble_store_status_event *, void *);
++mp_obj_t bleio_host_policy_peers(void);
++mp_obj_t bleio_host_policy_status(void);
++mp_obj_t bleio_host_policy_request(mp_obj_t mode, mp_obj_t target, mp_int_t timeout_s);
++mp_obj_t bleio_host_policy_alias(mp_obj_t target, mp_obj_t alias);
++mp_obj_t bleio_host_policy_arm_input(mp_obj_t, mp_obj_t, mp_obj_t, mp_obj_t);
+diff --git a/ports/espressif/common-hal/_bleio/HostPolicyCore.c b/ports/espressif/common-hal/_bleio/HostPolicyCore.c
+new file mode 100644
+index 0000000..bdb790c
+--- /dev/null
++++ b/ports/espressif/common-hal/_bleio/HostPolicyCore.c
+@@ -0,0 +1,320 @@
++// SPDX-License-Identifier: MIT
++#include "HostPolicyCore.h"
++#include <string.h>
++#define HP_MAGIC 0x31485042u
++int hp_submit(hp_queue_t *queue, hp_command_t *command) {
++    if (queue->pending && (command->alias || command->mode!=HP_PAUSED)) { return HP_QUEUE_FULL; }
++    command->operation=++queue->next_operation;
++    if (!command->operation) { command->operation=++queue->next_operation; }
++    queue->command=*command; queue->pending=true; return 0;
++}
++bool hp_pop(hp_queue_t *queue, hp_command_t *command) {
++    if (!queue->pending) { return false; }
++    *command=queue->command; queue->pending=false; return true;
++}
++void hp_clear_input(hp_input_queue_t *queue) { queue->head=0; queue->count=0; }
++int hp_queue_input(hp_input_queue_t *queue, const hp_status_t *s, uint16_t active_handle,
++    uint16_t actual_input, uint16_t handle, uint16_t attribute, const uint8_t *data, size_t length) {
++    if (length>HP_INPUT_BYTES || !length || s->state!=HP_CONNECTED || s->applied_mode!=HP_AUTO || !s->connected || !s->encrypted || !s->bonded || !s->hid_ready || s->connected_id!=s->target_id || handle!=active_handle || attribute!=actual_input) { return HP_UNAUTHORIZED; }
++    if (queue->count==HP_INPUT_QUEUE_CAPACITY) { return HP_QUEUE_FULL; }
++    unsigned index=(queue->head+queue->count)%HP_INPUT_QUEUE_CAPACITY;
++    hp_input_report_t *report=&queue->reports[index];
++    report->handle=handle; report->attribute=attribute; report->operation=s->operation_id;
++    report->policy_generation=s->policy_generation; report->connection_generation=s->connection_generation;
++    report->subscription_generation=s->subscription_generation;
++    report->identity=s->target_id; report->length=(uint8_t)length; memcpy(report->data,data,length);
++    queue->count++; return 0;
++}
++bool hp_pop_input(hp_input_queue_t *queue, hp_input_report_t *report) {
++    if (!queue->count) { return false; }
++    *report=queue->reports[queue->head]; queue->head=(queue->head+1)%HP_INPUT_QUEUE_CAPACITY; queue->count--; return true;
++}
++bool hp_input_current(const hp_core_t *p, const hp_input_report_t *report) {
++    return hp_input_allowed(p,report->handle) && report->attribute==p->hid_input_handle && report->operation==p->status.operation_id && report->policy_generation==p->status.policy_generation && report->connection_generation==p->status.connection_generation && report->subscription_generation==p->status.subscription_generation && report->identity==p->status.target_id;
++}
++bool hp_normalize(hp_address_t *out, const hp_address_t *in) {
++    *out = *in;
++    if (out->type == 2 || out->type == 3) { out->type -= 2; }
++    if (out->type > 1) { return false; }
++    // Random identity must be static: never publish/use an RPA or NRPA as a host ID.
++    if (out->type == 1 && (out->val[5] & 0xc0) != 0xc0) { return false; }
++    uint8_t any=0, all=0xff;
++    for (unsigned i=0;i<6;i++) { any |= out->val[i]; all &= out->val[i]; }
++    return any != 0 && all != 0xff;
++}
++bool hp_address_equal(const hp_address_t *a, const hp_address_t *b) {
++    hp_address_t x,y;
++    return hp_normalize(&x,a) && hp_normalize(&y,b) && x.type==y.type && memcmp(x.val,y.val,6)==0;
++}
++uint64_t hp_identity_id(const hp_address_t *address) {
++    hp_address_t a;
++    if (!hp_normalize(&a,address)) { return 0; }
++    // An opaque label, NOT authentication. Admission always compares the full identity.
++    uint64_t id=UINT64_C(14695981039346656037);
++    const uint8_t domain[]={ 'B','M','8','3','H','P',1,a.type };
++    for (unsigned i=0;i<sizeof domain;i++) { id=(id^domain[i])*UINT64_C(1099511628211); }
++    for (unsigned i=0;i<6;i++) { id=(id^a.val[i])*UINT64_C(1099511628211); }
++    return id == 0 ? 1 : id;
++}
++uint32_t hp_blob_checksum(const hp_blob_t *blob) {
++    uint32_t crc=0xffffffffu;
++    const uint8_t *bytes=(const uint8_t *)blob;
++    for (size_t i=0;i<offsetof(hp_blob_t,checksum);i++) {
++        crc ^= bytes[i];
++        for (unsigned bit=0;bit<8;bit++) { crc=(crc>>1)^((0u-(crc&1u))&0xedb88320u); }
++    }
++    return ~crc;
++}
++bool hp_alias_valid(const char *text, size_t length) {
++    if (length>HP_ALIAS_BYTES) { return false; }
++    for (size_t i=0;i<length;) {
++        uint8_t first=(uint8_t)text[i++]; uint32_t cp; unsigned continuation;
++        if (first<0x80) { cp=first; continuation=0; }
++        else if (first>=0xc2 && first<=0xdf) { cp=first&0x1f; continuation=1; }
++        else if (first>=0xe0 && first<=0xef) { cp=first&0x0f; continuation=2; }
++        else if (first>=0xf0 && first<=0xf4) { cp=first&7; continuation=3; }
++        else { return false; }
++        if (i+continuation>length) { return false; }
++        for (unsigned j=0;j<continuation;j++) { uint8_t next=(uint8_t)text[i++]; if ((next&0xc0)!=0x80) { return false; } cp=(cp<<6)|(next&0x3f); }
++        if ((continuation==1 && cp<0x80) || (continuation==2 && cp<0x800) || (continuation==3 && cp<0x10000) || cp>0x10ffff || (cp>=0xd800 && cp<=0xdfff) || cp<0x20 || (cp>=0x7f && cp<=0x9f)) { return false; }
++    }
++    return true;
++}
++bool hp_blob_valid(const hp_blob_t *b) {
++    if (b->magic!=HP_MAGIC || b->version!=1 || b->size!=sizeof(*b) || b->mode>HP_AUTO || b->checksum!=hp_blob_checksum(b)) { return false; }
++    hp_address_t a;
++    if (b->mode==HP_AUTO && !hp_normalize(&a,&b->selected)) { return false; }
++    for (unsigned i=0;i<HP_MAX_PEERS;i++) {
++        if (b->aliases[i].alias[HP_ALIAS_BYTES] != 0 || !hp_alias_valid(b->aliases[i].alias,strlen(b->aliases[i].alias))) { return false; }
++        if (b->aliases[i].alias[0] && !hp_normalize(&a,&b->aliases[i].address)) { return false; }
++    }
++    return true;
++}
++static int commit(hp_core_t *p, hp_mode_t mode, const hp_address_t *selected) {
++    hp_blob_t next=p->blob;
++    next.magic=HP_MAGIC; next.version=1; next.size=sizeof(next); next.serial++;
++    next.mode=mode;
++    if (selected) { next.selected=*selected; }
++    next.checksum=hp_blob_checksum(&next);
++    int rc=p->backend.persist(p->backend.context,&next);
++    if (rc) { p->status.persisted=false; return rc; }
++    p->blob=next; p->status.persisted=true; p->status.policy_generation=next.serial;
++    return 0;
++}
++static void terminate_once(hp_core_t *p) {
++    if (p->handle==HP_INVALID_HANDLE || p->terminate_sent) { return; }
++    p->terminate_sent=true;
++    int rc=p->backend.terminate(p->backend.context,p->handle);
++    if (rc==HP_TERMINATE_ABSENT) {
++        // Native lookup confirms absence, but supplied no disconnect EVENT or
++        // reason. Clear live facts without fabricating a terminal reason.
++        p->handle=HP_INVALID_HANDLE; p->status.connected=false; p->status.connected_id=0;
++        p->status.encrypted=false; p->status.bonded=false; p->status.hid_ready=false;
++        p->terminate_sent=false; p->terminate_failed=false;
++    } else if (rc) { p->terminate_failed=true; p->status.error_domain=HP_DOMAIN_NIMBLE; p->status.error_code=rc; p->status.state=HP_ERROR; }
++}
++void hp_fail(hp_core_t *p, hp_domain_t domain, int error) {
++    p->status.filter_ready=false; p->status.hid_ready=false; p->input_subscribed=false;
++    p->status.applied_mode=HP_PAUSED; p->status.state=HP_ERROR;
++    p->status.error_domain=domain; p->status.error_code=error;
++    p->deadline_ms=0; p->status.enroll_remaining_s=0;
++    // An earlier write may have committed even if its readback failed before
++    // updating this RAM blob. Always attempt an explicit durable PAUSED record.
++    if (commit(p,HP_PAUSED,NULL)) { p->status.persisted=false; }
++    int stopped=p->backend.stop_advertising(p->backend.context);
++    if (stopped && !error) { p->status.error_domain=HP_DOMAIN_NIMBLE; p->status.error_code=stopped; }
++    terminate_once(p);
++}
++void hp_init(hp_core_t *p, const hp_backend_t *backend, const hp_blob_t *blob, int load_error) {
++    memset(p,0,sizeof(*p)); p->backend=*backend; p->handle=HP_INVALID_HANDLE;
++    p->status.requested_mode=HP_PAUSED; p->status.applied_mode=HP_PAUSED; p->status.state=HP_STATE_PAUSED;
++    if (blob && hp_blob_valid(blob) && !load_error) {
++        p->blob=*blob; p->status.persisted=true; p->status.policy_generation=blob->serial;
++        p->status.target_id=hp_identity_id(&blob->selected); p->status.requested_mode=(hp_mode_t)blob->mode;
++        if (blob->mode==HP_AUTO) { p->status.state=HP_SWITCHING; }
++    } else if (load_error || blob) {
++        p->status.state=HP_ERROR; p->status.error_domain=HP_DOMAIN_NVS; p->status.error_code=load_error ? load_error : HP_STORAGE;
++    }
++}
++int hp_refresh(hp_core_t *p) {
++    hp_peer_t peers[HP_MAX_PEERS]; size_t count=HP_MAX_PEERS; unsigned cccds=0;
++    memset(peers,0,sizeof(peers));
++    int rc=p->backend.peers(p->backend.context,peers,&count,&cccds);
++    if (rc || count>HP_MAX_PEERS || cccds>24) { return rc ? rc : HP_CAPACITY; }
++    for (size_t i=0;i<count;i++) {
++        hp_address_t normalized;
++        if (!hp_normalize(&normalized,&peers[i].address)) { return HP_INVALID; }
++        peers[i].address=normalized; peers[i].id=hp_identity_id(&normalized);
++        for (size_t j=0;j<i;j++) { if (peers[j].id==peers[i].id) { return HP_INVALID; } }
++        for (unsigned j=0;j<HP_MAX_PEERS;j++) {
++            if (hp_address_equal(&p->blob.aliases[j].address,&normalized)) { memcpy(peers[i].alias,p->blob.aliases[j].alias,HP_ALIAS_BYTES+1); }
++        }
++    }
++    bool changed=count!=p->peer_count;
++    for (size_t i=0;i<count && !changed;i++) {
++        changed=peers[i].id!=p->peers[i].id || peers[i].our_sec!=p->peers[i].our_sec || peers[i].peer_sec!=p->peers[i].peer_sec || peers[i].cccd!=p->peers[i].cccd || peers[i].durable!=p->peers[i].durable || strcmp(peers[i].alias,p->peers[i].alias)!=0;
++    }
++    if (changed) { p->status.bond_generation++; }
++    memcpy(p->peers,peers,sizeof(peers)); p->peer_count=count; p->cccd_count=cccds;
++    return 0;
++}
++static hp_peer_t *find(hp_core_t *p, uint64_t id) {
++    for (size_t i=0;i<p->peer_count;i++) { if (p->peers[i].id==id) { return &p->peers[i]; } }
++    return NULL;
++}
++static bool enrollment_existing(const hp_core_t *p, uint64_t id) {
++    for (size_t i=0;i<p->enrollment_existing_count;i++) { if (p->enrollment_existing[i]==id) { return true; } }
++    return false;
++}
++void hp_request(hp_core_t *p, hp_mode_t mode, uint64_t target, uint32_t operation, uint32_t timeout_s, uint64_t now_ms) {
++    p->status.operation_id=operation; p->status.requested_mode=mode;
++    // A failed submission may be attempted again only for a NEW explicit
++    // intent. Never loop/retry a failed terminate from background ticks.
++    if (p->terminate_failed) { p->terminate_sent=false; p->terminate_failed=false; }
++    p->status.filter_ready=false; p->status.hid_ready=false; p->input_subscribed=false;
++    p->status.error_domain=HP_DOMAIN_NONE; p->status.error_code=0;
++    p->candidate_valid=false; p->deadline_ms=0; p->status.enroll_remaining_s=0;
++    int rc=hp_refresh(p);
++    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
++    hp_peer_t *peer=NULL;
++    if (mode==HP_AUTO) {
++        if (!target) { target=hp_identity_id(&p->blob.selected); }
++        peer=find(p,target);
++        if (!peer || !peer->our_sec || !peer->durable) { hp_fail(p,HP_DOMAIN_POLICY,HP_NO_TARGET); return; }
++    } else if (mode==HP_ENROLL) {
++        if (target || timeout_s<5 || timeout_s>120 || p->peer_count>=HP_MAX_PEERS || p->cccd_count>21) { hp_fail(p,HP_DOMAIN_POLICY,HP_CAPACITY); return; }
++        if (p->backend.reserve_enrollment) {
++            rc=p->backend.reserve_enrollment(p->backend.context);
++            if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
++        }
++        p->deadline_ms=now_ms+(uint64_t)timeout_s*1000;
++        p->enrollment_existing_count=p->peer_count;
++        for (size_t i=0;i<p->peer_count;i++) { p->enrollment_existing[i]=p->peers[i].id; }
++    } else if (mode!=HP_PAUSED || target) { hp_fail(p,HP_DOMAIN_POLICY,HP_INVALID); return; }
++    // ENROLL never survives boot. Preserve old selected identity while durably pausing first.
++    rc=commit(p,mode==HP_AUTO ? HP_AUTO : HP_PAUSED,peer ? &peer->address : NULL);
++    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
++    p->status.target_id=hp_identity_id(&p->blob.selected);
++    rc=p->backend.stop_advertising(p->backend.context);
++    if (rc) { hp_fail(p,HP_DOMAIN_NIMBLE,rc); return; }
++    p->status.state=HP_SWITCHING; p->status.applied_mode=HP_PAUSED;
++    terminate_once(p);
++    hp_tick(p,now_ms);
++}
++void hp_tick(hp_core_t *p, uint64_t now_ms) {
++    if (p->status.requested_mode==HP_ENROLL && p->deadline_ms) {
++        if (now_ms>=p->deadline_ms) {
++            p->status.requested_mode=HP_PAUSED; p->deadline_ms=0; p->status.enroll_remaining_s=0;
++            int stopped=p->backend.stop_advertising(p->backend.context);
++            if (stopped) { hp_fail(p,HP_DOMAIN_NIMBLE,stopped); return; }
++            p->status.filter_ready=false; p->status.hid_ready=false;
++            p->status.applied_mode=HP_PAUSED; p->status.state=HP_STATE_PAUSED;
++            p->status.error_domain=HP_DOMAIN_POLICY; p->status.error_code=HP_TIMEOUT;
++            terminate_once(p); return;
++        }
++        p->status.enroll_remaining_s=(uint32_t)((p->deadline_ms-now_ms+999)/1000);
++    }
++    if (p->status.state==HP_SWITCHING && p->handle==HP_INVALID_HANDLE) {
++        if (p->status.requested_mode==HP_PAUSED) { p->status.state=HP_STATE_PAUSED; return; }
++        int rc=hp_refresh(p);
++        if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
++        hp_peer_t *peer=find(p,p->status.target_id);
++        if (p->status.requested_mode==HP_AUTO && (!peer || !peer->our_sec || !peer->durable)) { hp_fail(p,HP_DOMAIN_POLICY,HP_NO_TARGET); return; }
++        rc=p->backend.filter(p->backend.context,p->status.requested_mode==HP_AUTO ? &peer->address : NULL);
++        if (rc) { hp_fail(p,HP_DOMAIN_NIMBLE,rc); return; }
++        p->status.applied_mode=p->status.requested_mode; p->status.filter_ready=true;
++        p->status.state=p->status.applied_mode==HP_AUTO ? HP_WAITING : HP_ENROLLING;
++    }
++    if (p->handle!=HP_INVALID_HANDLE && !p->status.hid_ready && p->status.encrypted && p->status.bonded && p->input_subscribed) {
++        int rc=hp_refresh(p);
++        if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
++        hp_peer_t *peer=find(p,hp_identity_id(&p->connected_address));
++        if (!peer || !peer->our_sec || !peer->cccd || !peer->durable) { return; }
++        if (p->status.applied_mode==HP_ENROLL) {
++            rc=commit(p,HP_AUTO,&peer->address);
++            if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
++            rc=p->backend.filter(p->backend.context,&peer->address);
++            if (rc) { hp_fail(p,HP_DOMAIN_NIMBLE,rc); return; }
++            p->status.requested_mode=HP_AUTO; p->status.applied_mode=HP_AUTO;
++            p->status.target_id=peer->id; p->deadline_ms=0; p->status.enroll_remaining_s=0;
++        }
++        p->status.hid_ready=true; p->status.state=HP_CONNECTED;
++    }
++}
++uint32_t hp_connect(hp_core_t *p, uint16_t handle, const hp_address_t *address) {
++    if (!hp_advertising_allowed(p) || p->handle!=HP_INVALID_HANDLE) { p->backend.terminate(p->backend.context,handle); return 0; }
++    hp_address_t normalized;
++    bool valid=hp_normalize(&normalized,address);
++    if (p->status.applied_mode==HP_AUTO && (!valid || hp_identity_id(&normalized)!=p->status.target_id || !hp_address_equal(&normalized,&p->blob.selected))) { p->backend.terminate(p->backend.context,handle); return 0; }
++    if (p->status.applied_mode==HP_ENROLL && valid && (enrollment_existing(p,hp_identity_id(&normalized)) || (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate)))) { p->backend.terminate(p->backend.context,handle); return 0; }
++    p->handle=handle; p->terminate_sent=false; p->terminate_failed=false; p->input_subscribed=false;
++    p->status.connection_generation++; if (!p->status.connection_generation) { p->status.connection_generation++; }
++    p->connected_address=*address; p->status.connected=true;
++    p->status.connected_id=valid ? hp_identity_id(&normalized) : 0;
++    p->status.encrypted=false; p->status.bonded=false; p->status.hid_ready=false;
++    if (p->status.applied_mode==HP_ENROLL && valid) { p->candidate=normalized; p->candidate_valid=true; }
++    return p->status.connection_generation;
++}
++void hp_identity(hp_core_t *p, uint16_t handle, uint32_t generation, const hp_address_t *address) {
++    if (handle!=p->handle || generation!=p->status.connection_generation) { return; }
++    hp_address_t normalized;
++    if (!hp_normalize(&normalized,address) || (p->status.applied_mode==HP_AUTO && !hp_address_equal(&normalized,&p->blob.selected))) { hp_fail(p,HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); return; }
++    if (p->status.applied_mode==HP_ENROLL) {
++        if (enrollment_existing(p,hp_identity_id(&normalized)) || (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate))) { hp_fail(p,HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return; }
++        p->candidate=normalized; p->candidate_valid=true;
++    }
++    p->connected_address=normalized; p->status.connected_id=hp_identity_id(&normalized);
++}
++void hp_security(hp_core_t *p, uint16_t handle, uint32_t generation, bool encrypted, bool bonded, int error) {
++    if (handle!=p->handle || generation!=p->status.connection_generation) { return; }
++    p->status.encrypted=encrypted; p->status.bonded=bonded;
++    if (!encrypted || !bonded) { p->status.hid_ready=false; }
++    if (error || !encrypted) { hp_fail(p,HP_DOMAIN_SECURITY,error ? error : HP_UNAUTHORIZED); }
++}
++void hp_subscribe(hp_core_t *p, uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled) {
++    if (handle!=p->handle || generation!=p->status.connection_generation) { return; }
++    if (p->hid_input_handle!=input_handle || p->input_subscribed!=enabled) { p->status.subscription_generation++; p->status.hid_ready=false; }
++    p->hid_input_handle=input_handle; p->input_subscribed=enabled;
++}
++void hp_disconnect(hp_core_t *p, uint16_t handle, uint32_t generation, int reason) {
++    if (handle!=p->handle || generation!=p->status.connection_generation) { return; }
++    p->status.last_disconnect_reason=reason; p->status.last_disconnect_generation=generation;
++    p->status.last_disconnect_local=p->terminate_sent;
++    p->handle=HP_INVALID_HANDLE; p->status.connected=false; p->status.connected_id=0;
++    p->status.encrypted=false; p->status.bonded=false; p->status.hid_ready=false; p->input_subscribed=false;
++    p->terminate_sent=false; p->terminate_failed=false;
++    if (p->status.state!=HP_ERROR) { p->status.state=HP_SWITCHING; }
++}
++bool hp_advertising_allowed(const hp_core_t *p) {
++    return p->status.filter_ready && p->status.state!=HP_ERROR && p->status.applied_mode!=HP_PAUSED && p->handle==HP_INVALID_HANDLE;
++}
++bool hp_input_allowed(const hp_core_t *p, uint16_t handle) {
++    return p->handle==handle && p->status.applied_mode==HP_AUTO && p->status.state==HP_CONNECTED && p->status.hid_ready && p->status.encrypted && p->status.bonded && p->status.connected_id==p->status.target_id;
++}
++bool hp_store_allowed(hp_core_t *p, const hp_address_t *address, bool security, bool exists, bool same_keys) {
++    hp_address_t normalized;
++    if (!hp_normalize(&normalized,address) || p->status.state==HP_ERROR) { return false; }
++    if (exists && security) { return same_keys; } // Never replace a saved peer's keys.
++    if (p->status.applied_mode==HP_AUTO) { return hp_address_equal(&normalized,&p->blob.selected) && (!security || exists); }
++    if (p->status.applied_mode!=HP_ENROLL || p->handle==HP_INVALID_HANDLE || enrollment_existing(p,hp_identity_id(&normalized))) { return false; }
++    if (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate)) { return false; }
++    p->candidate=normalized; p->candidate_valid=true;
++    return true;
++}
++int hp_set_alias(hp_core_t *p, uint64_t id, const char *alias, size_t length) {
++    if (!hp_alias_valid(alias,length)) { return HP_INVALID; }
++    hp_peer_t *peer=find(p,id);
++    if (!peer) { return HP_NO_TARGET; }
++    unsigned slot=HP_MAX_PEERS;
++    for (unsigned i=0;i<HP_MAX_PEERS;i++) {
++        if (hp_address_equal(&p->blob.aliases[i].address,&peer->address)) { slot=i; break; }
++        if (slot==HP_MAX_PEERS && !p->blob.aliases[i].alias[0]) { slot=i; }
++    }
++    if (slot==HP_MAX_PEERS) { return HP_CAPACITY; }
++    hp_blob_t old=p->blob;
++    p->blob.aliases[slot].address=peer->address; memset(p->blob.aliases[slot].alias,0,HP_ALIAS_BYTES+1);
++    memcpy(p->blob.aliases[slot].alias,alias,length);
++    int rc=commit(p,(hp_mode_t)p->blob.mode,NULL);
++    if (rc) { p->blob=old; hp_fail(p,HP_DOMAIN_NVS,rc); return rc; }
++    return hp_refresh(p);
++}
+diff --git a/ports/espressif/common-hal/_bleio/HostPolicyCore.h b/ports/espressif/common-hal/_bleio/HostPolicyCore.h
+new file mode 100644
+index 0000000..ffa7395
+--- /dev/null
++++ b/ports/espressif/common-hal/_bleio/HostPolicyCore.h
+@@ -0,0 +1,111 @@
++// SPDX-License-Identifier: MIT
++// Production policy core; compiled unchanged by the ESP32 port and host harness.
++#pragma once
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#define HP_MAX_PEERS 8
++#define HP_ALIAS_BYTES 24
++#define HP_INPUT_BYTES 32
++#define HP_INPUT_QUEUE_CAPACITY 8
++#define HP_INVALID_HANDLE 0xffff
++#define HP_TERMINATE_ABSENT (-1)
++typedef struct { uint8_t type; uint8_t val[6]; } hp_address_t;
++typedef enum { HP_PAUSED, HP_AUTO, HP_ENROLL } hp_mode_t;
++typedef enum { HP_STATE_PAUSED, HP_SWITCHING, HP_WAITING, HP_ENROLLING, HP_CONNECTED, HP_ERROR } hp_state_t;
++typedef enum { HP_DOMAIN_NONE, HP_DOMAIN_POLICY, HP_DOMAIN_NVS, HP_DOMAIN_NIMBLE, HP_DOMAIN_SECURITY } hp_domain_t;
++enum { HP_INVALID=1, HP_NO_TARGET, HP_CAPACITY, HP_STALE, HP_REPEAT_PAIR, HP_TIMEOUT, HP_STORAGE, HP_UNAUTHORIZED, HP_QUEUE_FULL };
++typedef struct {
++    hp_address_t address;
++    uint64_t id;
++    bool our_sec, peer_sec, cccd, durable;
++    char alias[HP_ALIAS_BYTES+1];
++} hp_peer_t;
++typedef struct { hp_address_t address; char alias[HP_ALIAS_BYTES+1]; } hp_alias_t;
++typedef struct {
++    uint32_t magic, version, size, serial;
++    uint8_t mode;
++    hp_address_t selected;
++    hp_alias_t aliases[HP_MAX_PEERS];
++    uint32_t checksum;
++} hp_blob_t;
++typedef struct {
++    hp_mode_t requested_mode, applied_mode;
++    hp_state_t state;
++    uint64_t target_id, connected_id;
++    uint32_t operation_id, policy_generation, connection_generation, bond_generation, subscription_generation;
++    bool filter_ready, connected, encrypted, bonded, hid_ready, persisted;
++    hp_domain_t error_domain;
++    int error_code, last_disconnect_reason;
++    uint32_t last_disconnect_generation;
++    bool last_disconnect_local;
++    uint32_t enroll_remaining_s;
++} hp_status_t;
++typedef struct {
++    void *context;
++    int (*persist)(void *, const hp_blob_t *);
++    int (*stop_advertising)(void *);
++    int (*terminate)(void *, uint16_t);
++    int (*filter)(void *, const hp_address_t *); // NULL clears admission lists, never starts advertising.
++    int (*peers)(void *, hp_peer_t *, size_t *, unsigned *);
++    int (*reserve_enrollment)(void *); // Other persistent store classes; no eviction.
++} hp_backend_t;
++typedef struct {
++    hp_backend_t backend;
++    hp_blob_t blob;
++    hp_status_t status;
++    hp_address_t connected_address, candidate;
++    bool candidate_valid, terminate_sent, terminate_failed;
++    uint16_t handle, hid_input_handle;
++    bool input_subscribed;
++    uint64_t deadline_ms;
++    hp_peer_t peers[HP_MAX_PEERS];
++    size_t peer_count;
++    unsigned cccd_count;
++    uint64_t enrollment_existing[HP_MAX_PEERS];
++    size_t enrollment_existing_count;
++} hp_core_t;
++typedef struct {
++    bool alias;
++    hp_mode_t mode;
++    uint64_t target;
++    uint32_t operation, timeout_s;
++    char text[HP_ALIAS_BYTES+1];
++    size_t length;
++} hp_command_t;
++typedef struct { bool pending; uint32_t next_operation; hp_command_t command; } hp_queue_t;
++int hp_submit(hp_queue_t *, hp_command_t *); // Caller holds only its short snapshot lock.
++bool hp_pop(hp_queue_t *, hp_command_t *);
++typedef struct {
++    uint16_t handle, attribute;
++    uint32_t operation, policy_generation, connection_generation, subscription_generation;
++    uint64_t identity;
++    uint8_t length, data[HP_INPUT_BYTES];
++} hp_input_report_t;
++typedef struct { hp_input_report_t reports[HP_INPUT_QUEUE_CAPACITY]; unsigned head,count; } hp_input_queue_t;
++int hp_queue_input(hp_input_queue_t *, const hp_status_t *, uint16_t active_handle,
++    uint16_t actual_input, uint16_t handle, uint16_t attribute, const uint8_t *, size_t);
++bool hp_pop_input(hp_input_queue_t *, hp_input_report_t *);
++void hp_clear_input(hp_input_queue_t *);
++bool hp_input_current(const hp_core_t *, const hp_input_report_t *);
++bool hp_normalize(hp_address_t *out, const hp_address_t *in);
++bool hp_address_equal(const hp_address_t *, const hp_address_t *);
++uint64_t hp_identity_id(const hp_address_t *);
++uint32_t hp_blob_checksum(const hp_blob_t *);
++bool hp_blob_valid(const hp_blob_t *);
++bool hp_alias_valid(const char *, size_t);
++void hp_init(hp_core_t *, const hp_backend_t *, const hp_blob_t *, int load_error);
++int hp_refresh(hp_core_t *);
++void hp_request(hp_core_t *, hp_mode_t, uint64_t target, uint32_t operation, uint32_t timeout_s, uint64_t now_ms);
++void hp_tick(hp_core_t *, uint64_t now_ms);
++void hp_fail(hp_core_t *, hp_domain_t, int);
++uint32_t hp_connect(hp_core_t *, uint16_t handle, const hp_address_t *);
++void hp_identity(hp_core_t *, uint16_t, uint32_t, const hp_address_t *);
++void hp_security(hp_core_t *, uint16_t, uint32_t, bool encrypted, bool bonded, int error);
++void hp_subscribe(hp_core_t *, uint16_t, uint32_t, uint16_t input_handle, bool enabled);
++void hp_disconnect(hp_core_t *, uint16_t, uint32_t, int full_reason);
++bool hp_advertising_allowed(const hp_core_t *);
++bool hp_input_allowed(const hp_core_t *, uint16_t handle);
++// No backend calls/deletion: safe inside the stack's store lock.
++bool hp_store_allowed(hp_core_t *, const hp_address_t *, bool security, bool exists, bool same_keys);
++int hp_set_alias(hp_core_t *, uint64_t, const char *, size_t);
+diff --git a/ports/espressif/common-hal/_bleio/__init__.c b/ports/espressif/common-hal/_bleio/__init__.c
+index f29342f..f682e8f 100644
+--- a/ports/espressif/common-hal/_bleio/__init__.c
++++ b/ports/espressif/common-hal/_bleio/__init__.c
+@@ -27,6 +27,7 @@
+ #include "services/gatt/ble_svc_gatt.h"
+ 
+ #include "nvs_flash.h"
++#include "common-hal/_bleio/HostPolicy.h"
+ 
+ static volatile int _completion_status;
+ static uint64_t _timeout_start_time;
+@@ -116,13 +117,9 @@ void common_hal_bleio_init(void) {
+     common_hal_bleio_adapter_obj.base.type = &bleio_adapter_type;
+ 
+     esp_err_t err = nvs_flash_init();
+-    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+-        // NVS partition was truncated and needs to be erased
+-        // Retry nvs_flash_init
+-        ESP_ERROR_CHECK(nvs_flash_erase());
+-        err = nvs_flash_init();
+-    }
+-    ESP_ERROR_CHECK(err);
++    // Never erase existing bonds/local identity to recover an NVS error.
++    // Capability status remains PAUSED/ERROR and every advertiser is refused.
++    bleio_host_policy_init(err);
+ 
+ 
+     bleio_background_callback.fun = bleio_background;
+diff --git a/shared-bindings/_bleio/Adapter.c b/shared-bindings/_bleio/Adapter.c
+index da8537c..134d3d2 100644
+--- a/shared-bindings/_bleio/Adapter.c
++++ b/shared-bindings/_bleio/Adapter.c
+@@ -13,6 +13,9 @@
+ #include "shared-bindings/_bleio/__init__.h"
+ #include "shared-bindings/_bleio/Address.h"
+ #include "shared-bindings/_bleio/Adapter.h"
++#if BM83_BLE_HOST_POLICY
++#include "common-hal/_bleio/HostPolicy.h"
++#endif
+ 
+ #if CIRCUITPY_SETTINGS_TOML
+ #include "supervisor/shared/settings.h"
+@@ -478,7 +481,47 @@ static mp_obj_t bleio_adapter_erase_bonding(mp_obj_t self_in) {
+ }
+ static MP_DEFINE_CONST_FUN_OBJ_1(bleio_adapter_erase_bonding_obj, bleio_adapter_erase_bonding);
+ 
++#if BM83_BLE_HOST_POLICY
++// ESP32 project capability; snapshots are copied before allocating VM objects.
++static mp_obj_t bleio_adapter_host_policy_version(mp_obj_t self) { (void)self; return MP_OBJ_NEW_SMALL_INT(1); }
++static MP_DEFINE_CONST_FUN_OBJ_1(bleio_adapter_host_policy_version_fun, bleio_adapter_host_policy_version);
++MP_PROPERTY_GETTER(bleio_adapter_host_policy_version_obj, (mp_obj_t)&bleio_adapter_host_policy_version_fun);
++static mp_obj_t bleio_adapter_bonded_peers(mp_obj_t self) { (void)self; return bleio_host_policy_peers(); }
++static MP_DEFINE_CONST_FUN_OBJ_1(bleio_adapter_bonded_peers_fun, bleio_adapter_bonded_peers);
++MP_PROPERTY_GETTER(bleio_adapter_bonded_peers_obj, (mp_obj_t)&bleio_adapter_bonded_peers_fun);
++static mp_obj_t bleio_adapter_host_status(mp_obj_t self) { (void)self; return bleio_host_policy_status(); }
++static MP_DEFINE_CONST_FUN_OBJ_1(bleio_adapter_host_status_fun, bleio_adapter_host_status);
++MP_PROPERTY_GETTER(bleio_adapter_host_status_obj, (mp_obj_t)&bleio_adapter_host_status_fun);
++static mp_obj_t bleio_adapter_set_host_policy(size_t n_args, const mp_obj_t *pos_args, mp_map_t *kw_args) {
++    enum { ARG_mode, ARG_target_id, ARG_timeout_s };
++    static const mp_arg_t allowed_args[] = {
++        { MP_QSTR_mode, MP_ARG_REQUIRED | MP_ARG_OBJ, {.u_obj=mp_const_none} },
++        { MP_QSTR_target_id, MP_ARG_OBJ, {.u_obj=mp_const_none} },
++        { MP_QSTR_timeout_s, MP_ARG_INT, {.u_int=60} },
++    };
++    mp_arg_val_t args[MP_ARRAY_SIZE(allowed_args)];
++    mp_arg_parse_all(n_args-1,pos_args+1,kw_args,MP_ARRAY_SIZE(allowed_args),allowed_args,args);
++    return bleio_host_policy_request(args[ARG_mode].u_obj,args[ARG_target_id].u_obj,args[ARG_timeout_s].u_int);
++}
++static MP_DEFINE_CONST_FUN_OBJ_KW(bleio_adapter_set_host_policy_obj, 2, bleio_adapter_set_host_policy);
++static mp_obj_t bleio_adapter_set_host_alias(mp_obj_t self, mp_obj_t target, mp_obj_t alias) { (void)self; return bleio_host_policy_alias(target,alias); }
++static MP_DEFINE_CONST_FUN_OBJ_3(bleio_adapter_set_host_alias_obj, bleio_adapter_set_host_alias);
++static mp_obj_t bleio_adapter_arm_host_input(size_t n_args, const mp_obj_t *args) {
++    (void)n_args;
++    return bleio_host_policy_arm_input(args[1], args[2], args[3], args[4]);
++}
++static MP_DEFINE_CONST_FUN_OBJ_VAR_BETWEEN(bleio_adapter_arm_host_input_obj, 5, 5, bleio_adapter_arm_host_input);
++#endif
++
+ static const mp_rom_map_elem_t bleio_adapter_locals_dict_table[] = {
++    #if BM83_BLE_HOST_POLICY
++    { MP_ROM_QSTR(MP_QSTR_host_policy_version), MP_ROM_PTR(&bleio_adapter_host_policy_version_obj) },
++    { MP_ROM_QSTR(MP_QSTR_bonded_peers), MP_ROM_PTR(&bleio_adapter_bonded_peers_obj) },
++    { MP_ROM_QSTR(MP_QSTR_host_status), MP_ROM_PTR(&bleio_adapter_host_status_obj) },
++    { MP_ROM_QSTR(MP_QSTR_set_host_policy), MP_ROM_PTR(&bleio_adapter_set_host_policy_obj) },
++    { MP_ROM_QSTR(MP_QSTR_set_host_alias), MP_ROM_PTR(&bleio_adapter_set_host_alias_obj) },
++    { MP_ROM_QSTR(MP_QSTR_arm_host_input), MP_ROM_PTR(&bleio_adapter_arm_host_input_obj) },
++    #endif
+     { MP_ROM_QSTR(MP_QSTR_enabled), MP_ROM_PTR(&bleio_adapter_enabled_obj) },
+     { MP_ROM_QSTR(MP_QSTR_address), MP_ROM_PTR(&bleio_adapter_address_obj) },
+     { MP_ROM_QSTR(MP_QSTR_name),    MP_ROM_PTR(&bleio_adapter_name_obj) },

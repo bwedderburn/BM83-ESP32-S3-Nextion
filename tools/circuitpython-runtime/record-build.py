@@ -23,6 +23,18 @@ HASHLIB_FILES = {
     'shared-bindings/hashlib/__init__.c', 'shared-module/hashlib/Hash.c',
     'shared-module/hashlib/Hash.h', 'shared-module/hashlib/__init__.c',
 }
+HOST_POLICY_FILES = {
+    'ports/espressif/Makefile', 'shared-bindings/_bleio/Adapter.c',
+    'ports/espressif/common-hal/_bleio/Adapter.c',
+    'ports/espressif/common-hal/_bleio/Connection.c',
+    'ports/espressif/common-hal/_bleio/Connection.h',
+    'ports/espressif/common-hal/_bleio/Characteristic.c',
+    'ports/espressif/common-hal/_bleio/__init__.c',
+    'ports/espressif/common-hal/_bleio/HostPolicy.c',
+    'ports/espressif/common-hal/_bleio/HostPolicy.h',
+    'ports/espressif/common-hal/_bleio/HostPolicyCore.c',
+    'ports/espressif/common-hal/_bleio/HostPolicyCore.h',
+}
 
 
 def command(*args):
@@ -73,7 +85,7 @@ def check_sources():
     if (ROOT / web_tool).read_text() != expected_web:
         raise ValueError('Unexpected web asset reproducibility patch')
     runtime = pins.get('runtime_patches', {})
-    if set(runtime) != {'hashlib_close'}:
+    if set(runtime) != {'hashlib_close', 'host_policy'}:
         raise ValueError('Missing or unexpected reviewed native runtime patch')
     native = runtime['hashlib_close']
     if (set(native) != {'sha256', 'files'} or set(native['files']) != HASHLIB_FILES
@@ -82,8 +94,15 @@ def check_sources():
     for filename, expected_hash in native['files'].items():
         if sha(ROOT / filename) != expected_hash:
             raise ValueError('Unexpected native hash lifetime source: ' + filename)
+    policy = runtime['host_policy']
+    if (set(policy) != {'sha256', 'files'} or set(policy['files']) != HOST_POLICY_FILES
+            or sha(RECIPE / 'host-policy.patch') != policy['sha256']):
+        raise ValueError('Unexpected native host policy patch provenance')
+    for filename, expected_hash in policy['files'].items():
+        if sha(ROOT / filename) != expected_hash:
+            raise ValueError('Unexpected native host policy source: ' + filename)
     dirty = command('git', '-C', str(ROOT), 'diff', 'HEAD', '--name-only', '--ignore-submodules=none')
-    if set(dirty.splitlines()) != {board, web_tool} | HASHLIB_FILES:
+    if set(dirty.splitlines()) != {board, web_tool} | HASHLIB_FILES | HOST_POLICY_FILES:
         raise ValueError('Unexpected modified source beyond the reviewed build patches')
     if command('git', '-C', str(ROOT), 'ls-files', '--others', '--exclude-standard'):
         raise ValueError('Unexpected untracked source')
@@ -149,9 +168,12 @@ def validate_board():
         raise ValueError('Application exceeds the reviewed stock OTA partition')
     config = (OUTPUT / 'sdkconfig').read_text()
     for setting in ('CONFIG_BT_NIMBLE_MAX_BONDS=8', 'CONFIG_BT_NIMBLE_MAX_CCCDS=24',
-                    'CONFIG_BT_NIMBLE_NVS_PERSIST=y'):
+                    'CONFIG_BT_NIMBLE_NVS_PERSIST=y', 'CONFIG_BT_NIMBLE_HS_PVCY=y'):
         if setting not in config.splitlines():
             raise ValueError('Missing reviewed board setting: ' + setting)
+    for setting in ('CONFIG_BT_NIMBLE_HOST_BASED_PRIVACY', 'CONFIG_BT_NIMBLE_HANDLE_REPEAT_PAIRING_DELETION'):
+        if setting + '=y' in config.splitlines():
+            raise ValueError('Unsafe native host policy setting: ' + setting)
 
 
 def record():
@@ -175,6 +197,7 @@ def record():
                    'patch_sha256': sha(RECIPE / 'bonds8-cccd24.patch'),
                    'web_assets_patch_sha256': sha(RECIPE / 'reproducible-web-assets.patch'),
                    'hashlib_close_patch_sha256': sha(RECIPE / 'hashlib-close.patch'),
+                   'host_policy_patch_sha256': sha(RECIPE / 'host-policy.patch'),
                    'idf_tools_json_sha256': sha(IDF / 'tools/tools.json')},
         'artifacts': artifacts,
     }

@@ -30,6 +30,7 @@ class StatePublisher:
         self._next_snapshot = None
         self._next_frame = None
         self._started = None
+        self._aux_frames = 0
         self._transport = (False, False, False, True)
         self._eq = 0
         self._title = ""
@@ -208,7 +209,8 @@ class StatePublisher:
         if not self._frames:
             # Finish a fragmented BMS2 before allowing auxiliary BLE status.
             # This is an idle boundary, so one BLS2 cannot split a snapshot.
-            if auxiliary is not None and auxiliary.tick():
+            if self._aux_frames < 10 and auxiliary is not None and auxiliary.tick():
+                self._aux_frames += 1
                 self._next_frame = (now + FRAME_GAP_MS) % (1 << 29)
                 return True
             if self._next_snapshot is not None and ticks_diff(now, self._next_snapshot) < 0:
@@ -228,6 +230,7 @@ class StatePublisher:
             self._index += 1
             if self._index == len(self._frames):
                 self._frames = ()
+                self._aux_frames = 0  # Bound status/list floods so audio snapshots cannot starve.
                 self._next_snapshot = (now + SNAPSHOT_PERIOD_MS) % (1 << 29)
         else:
             self._frames = ()

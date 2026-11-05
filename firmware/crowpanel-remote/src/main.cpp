@@ -31,6 +31,7 @@
 #include "espnow_link.h"
 #include "now_playing.h"
 #include "ble_control.h"
+#include "ble_host_ui.h"
 #include "metadata_fonts.h"
 #include "metadata_text.h"
 #include "artwork.h"
@@ -67,7 +68,6 @@ static uint32_t  g_token_count  = 0;
 static now_playing::NowPlayingModel g_now_playing;
 static ble_control::Control g_ble_control;
 static lv_obj_t *g_ble_button = nullptr;
-static lv_obj_t *g_ble_button_label = nullptr;
 static lv_obj_t *g_ble_status_label = nullptr;
 static lv_obj_t *g_page_title = nullptr;
 static lv_obj_t *g_page_button_label = nullptr;
@@ -303,61 +303,17 @@ static void set_label(lv_obj_t *label, const char *text) {
     if (strcmp(lv_label_get_text(label), text) != 0) lv_label_set_text(label, text);
 }
 
-static const char *ble_error_text(uint8_t error) {
-    switch (error) {
-        case 1: return "BLE unavailable";
-        case 2: return "Could not stop advertising";
-        case 3: return "Disconnect failed";
-        case 4: return "Disconnect timed out";
-        case 5: return "Could not stop BLE workflow";
-        case 6: return "BLE state unavailable";
-        case 7: return "Bond operation was busy";
-        default: return "BLE operation failed";
-    }
-}
-
 static void ui_set_ble(uint32_t now) {
     if (!g_ble_button || !g_ble_status_label) return;
     g_ble_control.tick(now);
-    const bool fresh = g_ble_control.status.fresh(now);
-    const auto &state = g_ble_control.status.state;
-    const char *text = "Volume remote unavailable";
-    if (fresh) {
-        if (state.mode == ble_status::MODE_ERROR) text = ble_error_text(state.error);
-        else if (!(state.flags & ble_status::FLAG_READY)) text = "Volume remote unavailable";
-        else if (state.mode == ble_status::MODE_PAUSED) text = "Paused (bonds kept)";
-        else if (state.mode == ble_status::MODE_PAUSING) text = "Pausing volume remote...";
-        else if (state.flags & ble_status::FLAG_CONNECTED) text = "Volume remote connected";
-        else if (state.flags & ble_status::FLAG_ADVERTISING) text = "Available for connection";
-        else text = "Enabling volume remote...";
-    }
-    set_label(g_ble_button_label, fresh && !(state.flags & ble_status::FLAG_INTENT)
-              ? "Enable volume remote" : "Pause volume remote");
-    if (g_ble_control.can_request(now)) lv_obj_clear_state(g_ble_button, LV_STATE_DISABLED);
-    else lv_obj_add_state(g_ble_button, LV_STATE_DISABLED);
-    char message[128];
-    const char *detail = g_ble_control.result == ble_control::WAITING ? "Waiting for confirmation"
-                       : g_ble_control.result == ble_control::TIMED_OUT ? "Request unconfirmed"
-                       : g_ble_control.result == ble_control::RESTARTED ? "Controller restarted"
-                       : "";
-    snprintf(message, sizeof(message), "%s%s%s", text, detail[0] ? "\n" : "", detail);
+    ble_host_ui_tick(now);
+    char message[192]; ble_host_ui_summary(now, message, sizeof(message));
     set_label(g_ble_status_label, message);
     lv_obj_set_style_text_color(g_ble_status_label,
-        lv_color_hex(!fresh || state.mode == ble_status::MODE_ERROR ? COLOR_WARN : 0x9AAAB8), 0);
+        lv_color_hex(ble_host_ui_supported(now) ? 0x9AAAB8 : COLOR_WARN), 0);
 }
 
-static void cb_ble_control(lv_event_t *) {
-    const uint32_t now = millis();
-    if (!g_ble_control.can_request(now)) return;
-    const bool pause = (g_ble_control.status.state.flags & ble_status::FLAG_INTENT) != 0;
-    uint32_t sequence = 0;
-    bool attempted = false;
-    note_token(pause ? "BLE_PAUSE" : "BLE_ENABLE", &sequence, &attempted);
-    // A no-ACK attempt can still reach the controller. Wait for the matching
-    // observed state either way, rather than issuing a second command here.
-    if (attempted) g_ble_control.begin(pause, sequence, now);
-    ui_set_ble(millis());
-}
+static void cb_ble_control(lv_event_t *) { ble_host_ui_show(lv_scr_act()); }
 
 static void cb_network_settings(lv_event_t *) {
     network_setup_show(lv_scr_act());
@@ -747,14 +703,13 @@ static void build_ui() {
                                        512, 140, &lv_font_montserrat_14, 0x9AAAB8);
     lv_obj_set_width(artwork_help, 240);
     lv_label_set_long_mode(artwork_help, LV_LABEL_LONG_WRAP);
-    g_ble_button = make_button(g_settings_page, "Pause volume remote", 0, 218, 312, 48);
-    g_ble_button_label = lv_obj_get_child(g_ble_button, 0);
+    g_ble_button = make_button(g_settings_page, "Volume hosts", 0, 218, 312, 48);
     lv_obj_add_event_cb(g_ble_button, cb_ble_control, LV_EVENT_CLICKED, nullptr);
     g_ble_status_label = make_label(g_settings_page, "Volume remote unavailable",
                                     328, 220, &lv_font_montserrat_14, 0x9AAAB8);
     lv_obj_set_width(g_ble_status_label, 424);
     lv_label_set_long_mode(g_ble_status_label, LV_LABEL_LONG_WRAP);
-    make_label(g_settings_page, "Bonds stay saved. Enable allows a saved host to reconnect.",
+    make_label(g_settings_page, "Choose a saved volume host without clearing pairings.",
                 0, 282, &lv_font_montserrat_14, 0x9AAAB8);
 
     build_transport_controls(scr);
@@ -807,6 +762,7 @@ void setup() {
     // can already transmit. Init failure is logged and non-fatal — the
     // panel keeps working as a serial-only remote.
     espnow_link_init(rlog);
+    ble_host_ui_init(rlog);
     network_setup_set_retry_callback(retry_network_both);
     network_setup_set_export_hooks(artwork_prepare_sleep, artwork_resume);
     network_setup_begin();
@@ -885,6 +841,7 @@ void loop() {
                         espnow_link_init(rlog);
                         g_now_playing.reset();
                         g_ble_control.reset();
+                        ble_host_ui_invalidate_link();
                         network_setup_resume_after_sleep();
                         network_prepared = false;
                         artwork_resume();
@@ -900,6 +857,7 @@ void loop() {
                         espnow_link_init(rlog);
                         g_now_playing.reset();
                         g_ble_control.reset();
+                        ble_host_ui_invalidate_link();
                         network_setup_resume_after_sleep();
                         network_prepared = false;
                         if (!network_setup_serial_busy()) artwork_resume();
@@ -924,9 +882,12 @@ void loop() {
     size_t rx_len;
     bool snapshot_changed = false;
     bool ble_changed = false;
+    bool host_changed = false;
     while ((rx_len = espnow_link_poll(rx_frame, sizeof(rx_frame))) != 0) {
         if (rx_len >= 4 && memcmp(rx_frame, "BLS2", 4) == 0) {
             if (g_ble_control.status.accept(rx_frame, rx_len, millis())) ble_changed = true;
+        } else if (rx_len >= 4 && memcmp(rx_frame, "BHP1", 4) == 0) {
+            if (ble_host_ui_accept(rx_frame, rx_len, millis())) host_changed = true;
         } else if (g_now_playing.accept(rx_frame, rx_len, millis())) snapshot_changed = true;
     }
 
@@ -939,6 +900,7 @@ void loop() {
     if (network_setup_take_rescan_request()) {
         g_now_playing.reset();
         g_ble_control.reset();
+        ble_host_ui_invalidate_link();
         ui_set_now_playing(millis());
         ui_set_ble(millis());
         espnow_link_rescan();
@@ -946,14 +908,16 @@ void loop() {
     // Process validated RX first. A fresh BMS2 or BLS2 holds its channel; only
     // actual hops discard partial decodes, never each tick of the 3s hold.
     if (espnow_link_idle_recovery_tick(network_setup_idle_discovery_allowed() &&
-                                     !preparing_sleep && g_ble_control.result != ble_control::WAITING)) {
+                                     !preparing_sleep && g_ble_control.result != ble_control::WAITING &&
+                                     !ble_host_ui_holding())) {
         network_setup_note_idle_channel_change();
         g_now_playing.reset();
         g_ble_control.reset();
+        ble_host_ui_invalidate_link();
         snapshot_changed = ble_changed = true;
     }
     static uint32_t last_playback_refresh = 0;
-    if (snapshot_changed || ble_changed || now - last_playback_refresh >= 250) {
+    if (snapshot_changed || ble_changed || host_changed || now - last_playback_refresh >= 250) {
         last_playback_refresh = now;
         ui_set_now_playing(now);
         ui_set_ble(now);

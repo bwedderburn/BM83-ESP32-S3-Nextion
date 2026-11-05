@@ -96,6 +96,8 @@ def main(phase1_timing=False):
 
     ble = BleHid(BLE_ENABLED, BLE_NAME)
     ble.setup()
+    ble_input_generation = getattr(ble, "input_generation", lambda: 0)
+    last_ble_input_generation = ble_input_generation()
 
     # Never raises: a missing espnow module or a radio bring-up failure
     # just leaves the remote off and the panel working as before.
@@ -644,6 +646,10 @@ def main(phase1_timing=False):
             dprint("[NX] Token:", tok)
             if tok == b"NET_RETRY":
                 retry_artwork_wifi()
+            elif tok == b"BLE_HOST":
+                if ble_status.request_host(remote.take_host_request()):
+                    vol_hold_active = None
+                    vol_repeat_count = 0
             elif tok in (b"BLE_PAUSE", b"BLE_ENABLE"):
                 request_seq = remote.take_ble_request(tok)
                 badge_request = None
@@ -831,6 +837,11 @@ def main(phase1_timing=False):
 
         # BLE handoff work runs only after UART events and controls are serviced.
         ble_tick()
+        current_ble_input_generation = ble_input_generation()
+        if current_ble_input_generation != last_ble_input_generation:
+            last_ble_input_generation = current_ble_input_generation
+            vol_hold_active = None
+            vol_repeat_count = 0
 
         # Publish cached observations only: no extra AVRCP polling, and at
         # most one small ESP-NOW frame is queued after UART/input servicing.

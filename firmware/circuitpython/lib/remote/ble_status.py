@@ -8,6 +8,7 @@ import os
 
 from utils.ticks import ticks_add, ticks_diff, ticks_ms
 from .now_playing import crc16
+from .host_policy import HostPolicyPublisher
 
 FRAME_SIZE = 21
 PERIOD_MS = 1000
@@ -47,21 +48,26 @@ class BleStatusPublisher:
         self._remote = remote
         self._ble = ble
         self._clock = ticks_ms if clock is None else clock
-        self._session = int.from_bytes(os.urandom(4), "big") if session is None else session
+        self._session = (int.from_bytes(os.urandom(4), "big") or 1) if session is None else session
         self._sequence = 0
         self._request_sequence = 0
         self._next_send = None
         self._log = log
         self._observation_error = False
+        self._hosts = HostPolicyPublisher(remote, ble, self._session, self._clock)
 
     def request(self, token, sequence):
         """Apply a validated control frame without performing BLE radio work."""
         if token not in BLE_TOKENS or type(sequence) is not int or not 0 <= sequence <= 0xFFFFFFFF:
             return False
         self._request_sequence = sequence
+        self._hosts.note_legacy_request()
         if token == b"BLE_PAUSE":
             return self._ble.request_pause()
         return self._ble.request_enable()
+
+    def request_host(self, command):
+        return self._hosts.request_host(command)
 
     def tick(self):
         """Called only at the shared publisher's idle frame boundary."""
@@ -69,7 +75,7 @@ class BleStatusPublisher:
             return False
         now = self._clock()
         if self._next_send is not None and ticks_diff(now, self._next_send) < 0:
-            return False
+            return self._hosts.tick()
         if not self._remote.state_tx_ready():
             return False
         sequence = (self._sequence + 1) & 0xFFFFFFFF

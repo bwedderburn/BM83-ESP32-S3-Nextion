@@ -19,7 +19,8 @@ CHUNK_BYTES = 1024 * 1024
 SOURCE_KEYS = {"circuitpython", "esp_idf", "esp_nimble"}
 TOOL_KEYS = {"python", "cmake", "ninja", "gcc", "cryptography", "builder_image"}
 HASH_INPUTS = {"constraints_sha256", "requirements_sha256", "patch_sha256",
-               "idf_tools_json_sha256", "web_assets_patch_sha256", "hashlib_close_patch_sha256"}
+               "idf_tools_json_sha256", "web_assets_patch_sha256", "hashlib_close_patch_sha256",
+               "host_policy_patch_sha256"}
 ARTIFACTS = {"app", "elf", "sdkconfig", "sdkconfig_h", "partition_table",
              "distro_manifest", "python_packages"}
 TOP_KEYS = {"schema_version", "sources", "toolchain", "inputs", "artifacts"}

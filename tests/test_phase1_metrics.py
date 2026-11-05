@@ -454,7 +454,13 @@ def test_enabled_main_wires_real_uart_parsers_crypto_and_radio_to_one_observer(m
         assert snapshot["timing"]["hmac"]["samples"] == 3
         assert snapshot["timing"]["sha256"]["samples"] == 6
         assert snapshot["espnow_callbacks"]["success_observed"] > 0
-        assert all(frame.startswith((b"BMS2", b"BLS2")) for frame in radio.frames)
+        assert all(frame.startswith((b"BMS2", b"BLS2", b"BHP1")) for frame in radio.frames)
+        from remote.host_policy import decode_fragment
+        host_frames = [frame for frame in radio.frames if frame.startswith(b"BHP1")]
+        assert host_frames and all(decode_fragment(frame) is not None for frame in host_frames)
+        # The host-only main fixture has no native policy capability. It must
+        # advertise unsupported, while every new RF send still uses this observer.
+        assert decode_fragment(host_frames[0])[-1][0] == 0
         assert captured["nextion"].current_page == 1
     finally:
         badge_remote.set_phase1_metrics(None)

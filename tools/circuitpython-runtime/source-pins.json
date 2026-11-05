@@ -48,6 +48,22 @@
         "shared-module/hashlib/Hash.h": "84f6053baff9174de3cdadc3d7e44dfd7c957124076541eddbef90b4fef04e8f",
         "shared-module/hashlib/__init__.c": "6178e3efb49d3cf0a913678bb9ebd89acc92c4b66a3ed99269e2f82c486092e7"
       }
+    },
+    "host_policy": {
+      "sha256": "58f092d89ade5366bc11ec68e09d04fc89ddb1587be0cc5c1a136bf955099984",
+      "files": {
+        "ports/espressif/Makefile": "7ee98b8279c99228c74083c93869c4eddfccbb97aeae0a23e895b691de60b6e6",
+        "ports/espressif/common-hal/_bleio/Adapter.c": "c5006f7a115378629e13859b52bea25bfec1258538cf63a9dd5a17573a044099",
+        "ports/espressif/common-hal/_bleio/Characteristic.c": "fd076883a83cd5b425b46081aaf57b5b9a926cdf6f7611acc7e7a0021b732f93",
+        "ports/espressif/common-hal/_bleio/Connection.c": "92220d83c519690ef064ad7dafe48005382ea10fa0fff2d936718ff1ca5df9a7",
+        "ports/espressif/common-hal/_bleio/Connection.h": "82d462c59522996be26e7e06d2f87ee8dd37a59b05b232f63394081a203a5811",
+        "ports/espressif/common-hal/_bleio/HostPolicy.c": "259acaa60fbf477576e13e00520eead2ca9e5700cf6ba15778bd91510c04eead",
+        "ports/espressif/common-hal/_bleio/HostPolicy.h": "8528a9894650ce9189fa2afa0613cbeacf2dec477e851309d9deb4b4f0fc1161",
+        "ports/espressif/common-hal/_bleio/HostPolicyCore.c": "4f552c524111c6834d2e27c173db433551825da92b2a0280378457577c2248a6",
+        "ports/espressif/common-hal/_bleio/HostPolicyCore.h": "0930e1d473742831951e8f367d39825ae6a3eae4665e52f4028f3e1796a2addd",
+        "ports/espressif/common-hal/_bleio/__init__.c": "9948f853dfec7fefa5e855fca23167e9a8278d1799799ab33c8fa2f2479e7bf8",
+        "shared-bindings/_bleio/Adapter.c": "46edc1d3d848911284adfc928ea577fde9ac7dbfdfa75bb93e494e6a8fc98d79"
+      }
     }
   }
 }

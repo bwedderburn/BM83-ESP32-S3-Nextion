@@ -35,6 +35,7 @@ except ImportError:  # host Python, or a CircuitPython build without espnow
     _espnow = None
 
 from nextion.display import TOKENS as NEXTION_TOKENS
+from .host_policy import decode_command, decode_fragment
 
 # Retry only an already-provisioned profile. Credentials never use ESP-NOW.
 BLE_TOKENS = (b"BLE_PAUSE", b"BLE_ENABLE")
@@ -186,10 +187,13 @@ class EspNowRemote:
         self._tx_peer = None
         self.state_tx_enabled = False
         self._tx_pending = False
+        self.last_tx_ticket = 0
+        self._tx_receipts = []
         self._tx_counts = None
         self._tx_backoff_until = 0.0
         self.tx_frames = 0
         self._ble_requests = []
+        self._host_requests = []
         self._phase1_metrics = phase1_metrics
         self._tx_metric_started = None
 
@@ -258,6 +262,12 @@ class EspNowRemote:
             if self._tx_pending:
                 if counts == self._tx_counts:
                     return False
+                okay = (isinstance(counts, tuple) and isinstance(self._tx_counts, tuple)
+                        and ((counts[0]-self._tx_counts[0]) & MAX_SEQ) == 1
+                        and ((counts[1]-self._tx_counts[1]) & MAX_SEQ) == 0)
+                self._tx_receipts.append((self.last_tx_ticket, bool(okay)))
+                if len(self._tx_receipts) > 16:
+                    self._tx_receipts.pop(0)
                 self._tx_pending = False
                 if self._phase1_metrics is not None and self._tx_metric_started is not None:
                     from utils.phase1_metrics import ESPNOW_COMPLETION
@@ -284,6 +294,12 @@ class EspNowRemote:
             return False
         return self._send_frame(frame)
 
+    def send_host_policy_frame(self, frame):
+        """Versioned extension uses the existing one-outstanding-send slot."""
+        if decode_fragment(frame) is None:
+            return False
+        return self._send_frame(frame)
+
     def _send_frame(self, frame):
         """Shared completion/backoff guard; no second radio send queue."""
         if not self.state_tx_ready():
@@ -292,6 +308,7 @@ class EspNowRemote:
             self._tx_counts = ((self._radio.send_success, self._radio.send_failure)
                                if self._phase1_metrics is None else self._observed_tx_counts())
             self._native_send(frame, self._tx_peer)
+            self.last_tx_ticket = (self.last_tx_ticket + 1) & MAX_SEQ or 1
             self._tx_pending = True
             self.tx_frames += 1
             return True
@@ -299,6 +316,16 @@ class EspNowRemote:
             self._tx_backoff_until = self._clock() + ERROR_BACKOFF_S
             self._log("[REMOTE] state TX back-off: %r" % (e,))
             return False
+
+    def tx_completion(self, ticket):
+        """Observed native completion; enqueue/transport acceptance is not success."""
+        self.state_tx_ready()
+        for saved, okay in self._tx_receipts:
+            if saved == ticket:
+                return okay
+        if self._tx_pending and ticket == self.last_tx_ticket:
+            return None
+        return False
 
     def _observed_tx_counts(self):
         """Observe only native reads already needed by the existing send guard."""
@@ -366,6 +393,9 @@ class EspNowRemote:
         self.enabled = False
         self.state_tx_enabled = False
         self._tx_peer = None
+        if self._tx_pending:
+            self._tx_receipts.append((self.last_tx_ticket, False))
+            self._tx_receipts = self._tx_receipts[-16:]
         self._tx_pending = False
         if self._phase1_metrics is not None and self._tx_metric_started is not None:
             self._phase1_metrics.event("espnow_pending_cancelled")
@@ -456,6 +486,14 @@ class EspNowRemote:
         if msg == PROBE_FRAME:
             self.rx_probe += 1
             return None
+        if isinstance(msg, (bytes, bytearray)) and msg[:4] == b"BHC1":
+            command = decode_command(msg)
+            if self.peer_mac is None or command is None or len(self._host_requests) >= 4:
+                self.rx_bad += 1
+                return None
+            self._host_requests.append(command)
+            self.rx_ok += 1
+            return b"BLE_HOST"  # Not a public ASCII/Nextion token.
         parsed = parse_frame(msg, self.vocabulary)
         if parsed is None:
             self.rx_bad += 1
@@ -485,6 +523,9 @@ class EspNowRemote:
                 self._ble_requests.pop(index)
                 return sequence
         return None
+
+    def take_host_request(self):
+        return self._host_requests.pop(0) if self._host_requests else None
 
     def _seen_recently(self, seq, now):
         # Expire entries older than the window first, so a remote reboot

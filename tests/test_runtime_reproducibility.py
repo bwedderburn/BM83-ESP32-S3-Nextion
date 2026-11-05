@@ -122,6 +122,7 @@ def test_each_legitimate_but_different_output_fails_raw_comparison(builds, name)
     ("inputs", "idf_tools_json_sha256", "c" * 64),
     ("inputs", "web_assets_patch_sha256", "c" * 64),
     ("inputs", "hashlib_close_patch_sha256", "c" * 64),
+    ("inputs", "host_policy_patch_sha256", "c" * 64),
     ("inputs", "source_date_epoch", 1789146569),
 ])
 def test_every_recorded_provenance_input_must_match(builds, field, key, value):

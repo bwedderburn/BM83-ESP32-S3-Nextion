@@ -43,6 +43,7 @@ import time
 import gc
 from utils.common import dprint
 from utils.ticks import ticks_add, ticks_less, ticks_ms, ticks_recent
+from .host_policy import NativeHostPolicy
 
 
 # NimBLE on ESP32-S3 can hard-crash if heavy BLE operations run back to
@@ -213,6 +214,8 @@ class BleHid:
         "_pause_attempted",
         "_intentional_disconnect_at",
         "_enable_pending",
+        "_host_policy",
+        "_host_stop_attempted",
     )
 
     def __init__(self, enabled, name):
@@ -249,6 +252,8 @@ class BleHid:
         self._pause_attempted = []
         self._intentional_disconnect_at = None
         self._enable_pending = False
+        self._host_policy = None
+        self._host_stop_attempted = False
 
         # Advertising backoff — Nimble can fail with out-of-memory under
         # pressure; hold off for a bit when that happens and grow the
@@ -395,9 +400,20 @@ class BleHid:
             self._adv = _named_advertisement(self._hid, self.name)
             self._cc = ConsumerControl(self._hid.devices)
             self._CCC = CCC
+            # The project native boundary loads persisted policy before any
+            # advertiser can run. Missing capability keeps the legacy path;
+            # a claimed but broken/newer capability never falls back to it.
+            try:
+                import _bleio
+            except ImportError:  # Host doubles; real CircuitPython BLERadio requires _bleio.
+                policy = None
+            else:
+                policy = NativeHostPolicy(_bleio.adapter)
+            self._host_policy = policy if policy is not None and policy.claimed else None
             self._ready = True
             print("[BLE] Ready:", self.name)
-            self._start_adv(force=True)
+            if self._host_policy is None:
+                self._start_adv(force=True)
         except Exception as e:
             print("[BLE] Disabled:", e)
             self._ready = False
@@ -412,6 +428,9 @@ class BleHid:
 
     def request_pause(self):
         """Queue a bond-preserving release; never call the stack from a UI callback."""
+        if self._host_policy is not None:
+            self._erase_pending = False
+            return self._host_policy.request("PAUSED")
         if self._erase_stage != _ERASE_IDLE:
             self._handoff_mode = MODE_ERROR
             self._handoff_error = ERROR_BUSY
@@ -435,6 +454,8 @@ class BleHid:
 
     def request_enable(self):
         """Queue normal advertising; the previous host may reconnect first."""
+        if self._host_policy is not None:
+            return self._host_policy.request("AUTO")  # Saved selection only; native refuses missing selection.
         if self._erase_stage != _ERASE_IDLE:
             self._handoff_mode = MODE_ERROR
             self._handoff_error = ERROR_BUSY
@@ -461,6 +482,27 @@ class BleHid:
 
     def snapshot_status(self):
         """Return actual observations, never a radio-ACK-based success claim."""
+        if self._host_policy is not None:
+            s = self._host_policy.snapshot()
+            connected, advertising = bool(s.get("connected")), bool(s.get("advertising"))
+            enabled = s.get("requested_mode") in ("AUTO", "ENROLL")
+            error = ERROR_NONE
+            observed = s.get("state") is not None
+            if s.get("owner_error") or not observed or s.get("state") == "ERROR":
+                mode, error = MODE_ERROR, ERROR_OBSERVATION
+            elif not s["ready"]:
+                mode, enabled = MODE_PAUSING, False  # In-flight native work is not an observation error.
+            elif (s.get("state") == "PAUSED" and s.get("applied_mode") == "PAUSED"
+                  and s.get("persisted") and not connected and not advertising):
+                mode, enabled = MODE_PAUSED, False
+            elif not enabled:
+                mode = MODE_PAUSING
+            else:
+                mode = MODE_ENABLED
+            # BLS2 'ready' retains its historical module-ready meaning. The
+            # extension's separate ready bit gates native operation completion.
+            return {"ready": self._ready and observed and not error, "intent_enabled": enabled,
+                    "connected": connected, "advertising": advertising, "mode": mode, "error": error}
         state = self._observed_state() if self._ready and self._ble else None
         mode, error = self._handoff_mode, self._handoff_error
         if state is None:
@@ -473,6 +515,24 @@ class BleHid:
         return {"ready": self._ready, "intent_enabled": self._intent_enabled,
                 "connected": state[0], "advertising": state[1],
                 "mode": mode, "error": error}
+
+    def snapshot_host_status(self):
+        """Versioned native observations; old runtimes explicitly report version 0."""
+        return self._host_policy.snapshot() if self._host_policy is not None else {"version": 0, "ready": False}
+
+    def request_host_policy(self, mode, target=None, timeout_s=60):
+        if self._host_policy is None or self._erase_stage != _ERASE_IDLE:
+            return False
+        self._erase_pending = False
+        return self._host_policy.request(mode, target, timeout_s)
+
+    def request_host_alias(self, identity, alias):
+        return bool(self._host_policy is not None and self._erase_stage == _ERASE_IDLE
+                    and self._host_policy.alias(identity, alias))
+
+    def input_generation(self):
+        """Changes on ownership/connection/readiness transitions to cancel old holds."""
+        return self._host_policy.input_generation if self._host_policy is not None else 0
 
     def _handoff_fail(self, error):
         changed = self._handoff_mode != MODE_ERROR or self._handoff_error != error
@@ -561,6 +621,8 @@ class BleHid:
             return False
 
     def _start_adv(self, force=False):
+        if self._host_policy is not None and not self._host_policy.allows_advertising():
+            return
         if not self._intent_enabled or not self._ready or not self._ble or not self._adv:
             return
         now = time.monotonic()
@@ -766,6 +828,17 @@ class BleHid:
     def tick(self):
         if not self._ready or not self._ble:
             return
+        if self._host_policy is not None:
+            self._host_policy.tick()
+            self._intent_enabled = self._host_policy.allows_input() or self._host_policy.allows_advertising()
+            if self._host_policy.allows_advertising():
+                self._host_stop_attempted = False
+                if not self._is_advertising():
+                    self._start_adv()
+            elif not self._host_policy.ready() and not self._host_stop_attempted:
+                self._host_stop_attempted = True
+                self._stop_adv()
+            return  # No legacy disconnect edge, generic advertising or pairing path.
         if self._erase_stage != _ERASE_IDLE:
             # A staged bond wipe owns the radio until it finishes: no
             # advertising kicks and no edge handling mid-sequence. Edges
@@ -831,6 +904,9 @@ class BleHid:
         range — tick() will service the request as soon as the link
         is down.
         """
+        if self._host_policy is not None:
+            print("[BLE] Bond erase disabled during host-policy ownership")
+            return
         if not self._ready:
             print("[BLE] erase_bonds: BLE not ready")
             return
@@ -984,6 +1060,8 @@ class BleHid:
     # ---- HID sends ------------------------------------------------------
 
     def _send_ccc(self, code):
+        if self._host_policy is not None and not self._host_policy.validate_input():
+            return
         if not self._intent_enabled or not self._ready or not self._ble or not self._cc:
             return
         if not getattr(self._ble, "connected", False):
@@ -995,6 +1073,8 @@ class BleHid:
         if self._need_pairing_check:
             self._ensure_paired()
         try:
+            if self._host_policy is not None and not self._host_policy.arm_input():
+                return
             self._cc.send(code)
         except Exception as e:
             print("[BLE] send fail:", e)

@@ -86,6 +86,10 @@ def source_tree(tmp_path, monkeypatch):
         target = root / filename
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("/* synthetic pinned hash source */\n")
+    for filename in record.HOST_POLICY_FILES:
+        target = root / filename
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("/* synthetic pinned host policy source */\n")
     (root / ".gitignore").write_text("build-*/\nmpy-cross/build/\n")
     git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q",
         str(idf_origin), "ports/espressif/esp-idf")
@@ -95,6 +99,8 @@ def source_tree(tmp_path, monkeypatch):
     web_tool.write_text(PATCHED_WEB_TOOL)
     for filename in record.HASHLIB_FILES:
         (root / filename).write_text("/* synthetic exact reviewed hash lifetime source */\n")
+    for filename in record.HOST_POLICY_FILES:
+        (root / filename).write_text("/* synthetic exact reviewed native host policy */\n")
     idf = root / "ports/espressif/esp-idf"
 
     recipe = tmp_path / "recipe"
@@ -107,6 +113,8 @@ def source_tree(tmp_path, monkeypatch):
     (recipe / "reproducible-web-assets.patch").write_bytes(web_patch)
     native_patch = b"synthetic reviewed native hash lifetime patch\n"
     (recipe / "hashlib-close.patch").write_bytes(native_patch)
+    policy_patch = b"synthetic reviewed native host policy patch\n"
+    (recipe / "host-policy.patch").write_bytes(policy_patch)
     sources = {name: git(path, "rev-parse", "HEAD") for name, path in (
         ("circuitpython", root), ("esp_idf", idf), ("esp_nimble", idf / nimble_relative))}
     pins = {
@@ -123,6 +131,9 @@ def source_tree(tmp_path, monkeypatch):
         "runtime_patches": {"hashlib_close": {
             "sha256": digest(native_patch),
             "files": {name: digest((root / name).read_bytes()) for name in record.HASHLIB_FILES},
+        }, "host_policy": {
+            "sha256": digest(policy_patch),
+            "files": {name: digest((root / name).read_bytes()) for name in record.HOST_POLICY_FILES},
         }},
     }
     pins_path = recipe / "source-pins.json"
@@ -180,6 +191,24 @@ def test_native_hash_source_allowlist_cannot_be_expanded(source_tree):
         (source_tree.root / "native.c").read_bytes())
     source_tree.pins_path.write_text(json.dumps(source_tree.pins))
     with pytest.raises(ValueError, match="native hash lifetime patch provenance"):
+        record.check_sources()
+
+
+@pytest.mark.parametrize("filename", sorted(record.HOST_POLICY_FILES))
+@pytest.mark.parametrize("staged", [False, True])
+def test_entire_native_host_policy_source_must_match_reviewed_output(source_tree, filename, staged):
+    target = source_tree.root / filename
+    target.write_text(target.read_text() + "/* unreviewed additional policy code */\n")
+    if staged:
+        git(source_tree.root, "add", filename)
+    with pytest.raises(ValueError, match="Unexpected native host policy source"):
+        record.check_sources()
+
+
+def test_native_host_policy_patch_and_allowlist_are_pinned(source_tree):
+    path = source_tree.recipe / "host-policy.patch"
+    path.write_bytes(path.read_bytes() + b"unreviewed modification\n")
+    with pytest.raises(ValueError, match="native host policy patch provenance"):
         record.check_sources()
 
 
@@ -406,13 +435,14 @@ def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_bound
         "bonds8-cccd24.patch": b"synthetic reviewed board patch\n",
         "reproducible-web-assets.patch": b"synthetic reviewed gzip mtime=0 patch\n",
         "hashlib-close.patch": b"synthetic reviewed native hash lifetime patch\n",
+        "host-policy.patch": b"synthetic reviewed native host policy patch\n",
     }
     for name, data in recipes.items():
         (recipe / name).write_bytes(data)
     idf = fixture.root / "ports/espressif/esp-idf"
     (idf / "tools").mkdir(parents=True)
     (idf / "tools/tools.json").write_text('{"synthetic": "toolchain"}\n')
-    config = "CONFIG_BT_NIMBLE_MAX_BONDS=8\nCONFIG_BT_NIMBLE_MAX_CCCDS=24\nCONFIG_BT_NIMBLE_NVS_PERSIST=y\n"
+    config = "CONFIG_BT_NIMBLE_MAX_BONDS=8\nCONFIG_BT_NIMBLE_MAX_CCCDS=24\nCONFIG_BT_NIMBLE_NVS_PERSIST=y\nCONFIG_BT_NIMBLE_HS_PVCY=y\n"
     (fixture.build / "esp-idf/sdkconfig").write_text(config)
     sources = dict.fromkeys(("circuitpython", "esp_idf", "esp_nimble"), "a" * 40)
 
@@ -444,6 +474,7 @@ def test_recorded_manifest_captures_actual_web_patch_and_preserves_offline_bound
     assert manifest["inputs"]["web_assets_patch_sha256"] == digest(recipes["reproducible-web-assets.patch"])
     assert manifest["inputs"]["patch_sha256"] == digest(recipes["bonds8-cccd24.patch"])
     assert manifest["inputs"]["hashlib_close_patch_sha256"] == digest(recipes["hashlib-close.patch"])
+    assert manifest["inputs"]["host_policy_patch_sha256"] == digest(recipes["host-policy.patch"])
     assert manifest["sources"] == sources
     image_contract = json.loads((fixture.output / "artifact-manifest.json").read_text())
     assert image_contract["hardware_accepted"] is False

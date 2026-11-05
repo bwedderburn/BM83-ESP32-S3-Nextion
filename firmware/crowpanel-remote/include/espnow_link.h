@@ -53,6 +53,10 @@ bool espnow_link_suspend();
 // Neither this return value nor a MAC ACK confirms the requested BLE state.
 bool espnow_send_token(const char *token, uint32_t *sequence = nullptr);
 
+// BHC1 host-policy request. Bounded retries reuse the exact request bytes.
+// Does not discover channels, reset a radio, or confirm policy completion.
+bool espnow_send_host_request(const uint8_t *frame, size_t length);
+
 // Delivery status of the last token: "ok" (an attempt was ACKed),
 // "no-ack" (every attempt failed), "off" (not initialised / failed).
 const char *espnow_link_status_str();

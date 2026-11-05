@@ -15,8 +15,11 @@ the BLE name for ordinary disconnect/reconnect.
 
 The pinned source/configuration recipe, constraints snapshot and reference
 package versions are in [tools/circuitpython-runtime](../../tools/circuitpython-runtime/README.md).
-The recipe reproduces the reviewed configuration; it does not promise identical
-image bytes across build hosts or timestamps.
+The recipe records the reviewed inputs and checks two clean builds for identical
+raw artifacts. Recreating a builder later against changing package metadata can
+produce a different builder; preserve the actual image ID and manifests. The
+new [host-selection candidate](../reliability/phase2-host-selection.md) additionally
+requires its native policy patch and separate physical acceptance.
 
 ## Validate an artifact without accessing hardware
 
@@ -49,22 +52,30 @@ configuration and artifact manifest before approving a write.
 
 ## Explicit app-only write
 
+The historical CLI writer is not the live Windows procedure for the new
+host-selection candidate. Review identified pinned esptool retry and stub-exit
+behavior that the CLI's `no-reset` flags alone do not exclude. Its offline image
+validator remains useful. The candidate's live procedure must use a reviewed
+single-open ROM/stub session with no reconnect/reset, exact scoped approval,
+private Windows ACL checks, two independent full backup transactions, validated
+rollback and exact full-flash readback. That procedure remains pending until its
+tests, concrete artifact and approval record are ready; do not substitute an
+unreviewed CLI invocation.
+
 First finish the artifact review, stop processes using the target serial port,
 and place the expected unit in its ROM download loader manually. The tool does
 not enter/reset the loader automatically. Use the observed chip **base MAC**
 from the verified unit, not its derived BLE address.
 
-```sh
-python3 tools/update_circuitpython_runtime.py /absolute/artifacts/artifact-manifest.json \
-  --write --esptool /absolute/reviewed/environment/bin/esptool \
-  --port /dev/cu.EXACT-ROM-PORT --expected-mac AA:BB:CC:DD:EE:FF \
-  --backup-dir /absolute/private/bm83-runtime-backups
-```
+The retained CLI interface requires `--write`, the exact `--esptool`, `--port`,
+`--expected-mac`, private `--backup-dir` and the separately reviewed
+`--approval-file`. See the complete [approval schema and consumption rules](../reliability/RUNTIME-FLASH-GUARDS.md).
+This describes the interface, not approval to execute the historical writer.
 
 The operator must substitute the observed port, base MAC and reviewed official
 esptool 5.6.0 executable. The tool uses fixed argument lists without a shell,
-no hard reset or automatic application boot, and bounded command timeouts.
-Esptool may soft-return its RAM stub to the ROM loader between commands.
+bounded command timeouts, and explicit no-reset flags. Those flags are not proof
+against the retry/stub-exit behavior identified above.
 It permits esptool's packaged
 temporary RAM stub for efficient bulk transfers; loading that stub does not
 erase flash. ROM-only reads use small transactions and are unsuitable for the
@@ -87,8 +98,9 @@ their contents.
 
 On a pre-write guard failure there is no app write. A write/readback failure retains
 the private backup for review and does not attempt an automatic restore.
-The unit remains in download-loader mode (possibly running the RAM stub);
-after successful verification, use the
+The live procedure must leave the unit in download-loader mode, possibly running
+the RAM stub, without automatically booting it. After successful verification,
+use the
 physical RESET button and verify the runtime/version and BLE reconnection.
 Do not substitute the combined `firmware.bin`, erase flash, rewrite address
 zero, or change the partition layout.
