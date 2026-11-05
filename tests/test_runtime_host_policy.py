@@ -88,6 +88,40 @@ def test_native_patch_preserves_admission_and_no_deletion_guards():
         assert destructive not in added
 
 
+def test_peripheral_admission_precedes_circuitpython_connection_publication():
+    patch = (RECIPE / "host-policy.patch").read_text()
+
+    def postimage(name):
+        target = "ports/espressif/common-hal/_bleio/" + name
+        section = patch.split(f"diff --git a/{target} b/{target}\n", 1)[1].split("diff --git ", 1)[0]
+        return "\n".join(line[1:] for line in section.splitlines()
+                         if line.startswith((" ", "+")) and not line.startswith("+++"))
+
+    # An unadmitted provisional link may get CONNECT failure and no DISCONNECT.
+    # It cannot leave a stale CircuitPython handle that prevents advertising.
+    adapter = postimage("Adapter.c")
+    gate = adapter.index("bleio_host_policy_connect(conn_handle)")
+    attach = adapter.index("ble_gap_set_event_cb(conn_handle")
+    attach_failure = adapter.index("bleio_host_policy_connection_attach_failed(")
+    publish = adapter.index("connection->conn_handle = conn_handle")
+    exchange = adapter.index("ble_gattc_exchange_mtu(conn_handle")
+    assert gate < attach < attach_failure < publish < exchange
+    assert "return BLE_HS_EREJECT;" in adapter[gate:attach]
+    assert "return rc;" in adapter[attach_failure:publish]
+
+    # When an admitted provisional link fails early, CircuitPython must release
+    # the matching wrapper as well as letting native policy close the generation.
+    connection = postimage("Connection.c")
+    identity_guard = connection.index("event->connect.conn_handle != connection->conn_handle")
+    native_event = connection.index("bleio_host_policy_event(event, connection->host_generation)")
+    connect_failure = connection.index("case BLE_GAP_EVENT_CONNECT:")
+    invalidation = connection.index("connection->conn_handle = BLEIO_HANDLE_INVALID")
+    assert identity_guard < native_event < connect_failure < invalidation
+    assert "event->connect.status != 0" in connection[:identity_guard]
+    assert "MP_FALLTHROUGH;" in connection[connect_failure:invalidation]
+    assert "connection->host_generation = 0" in connection
+
+
 def test_native_hid_identity_and_gatt_descriptor_are_not_patch_targets():
     pins = json.loads((RECIPE / "source-pins.json").read_text())
     assert pins["sources"]["circuitpython"]["commit"] == "c9dee12beed76e4ffa11d2d6d99ff104fc976c3a"

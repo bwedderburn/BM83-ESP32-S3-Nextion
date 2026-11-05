@@ -781,13 +781,29 @@ uint32_t bleio_host_policy_connect(uint16_t handle) {
     }
     uint32_t generation=hp_connect(&core,handle,&a); if (generation) { clear_inputs(); } publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return generation;
 }
+void bleio_host_policy_connection_attach_failed(uint16_t handle, uint32_t generation, int error) {
+    if (handle!=core.handle || !generation || generation!=core.status.connection_generation) { return; }
+    clear_inputs();
+    if (error==BLE_HS_ENOTCONN) {
+        // Callback registration confirms the raw link is already absent.
+        hp_disconnect(&core,handle,generation,error);
+    } else {
+        hp_fail(&core,HP_DOMAIN_NIMBLE,error);
+    }
+    publish();
+}
 void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
-    if (event->type!=BLE_GAP_EVENT_DISCONNECT && event->type!=BLE_GAP_EVENT_IDENTITY_RESOLVED && event->type!=BLE_GAP_EVENT_ENC_CHANGE && event->type!=BLE_GAP_EVENT_REPEAT_PAIRING) { return; }
-    if (!check_store_guards() && event->type!=BLE_GAP_EVENT_DISCONNECT) { return; }
+    bool connect_failed=event->type==BLE_GAP_EVENT_CONNECT && event->connect.status!=0;
+    if (!connect_failed && event->type!=BLE_GAP_EVENT_DISCONNECT && event->type!=BLE_GAP_EVENT_IDENTITY_RESOLVED && event->type!=BLE_GAP_EVENT_ENC_CHANGE && event->type!=BLE_GAP_EVENT_REPEAT_PAIRING) { return; }
+    if (!check_store_guards() && !connect_failed && event->type!=BLE_GAP_EVENT_DISCONNECT) { return; }
     portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
     hp_status_t before=core.status;
     struct ble_gap_conn_desc desc; uint16_t handle=HP_INVALID_HANDLE;
     switch(event->type) {
+        case BLE_GAP_EVENT_CONNECT:
+            // NimBLE reports an early peripheral link loss as CONNECT failure
+            // and suppresses DISCONNECT until its first successful CONNECT.
+            hp_disconnect(&core,event->connect.conn_handle,generation,event->connect.status); break;
         case BLE_GAP_EVENT_DISCONNECT:
             hp_disconnect(&core,event->disconnect.conn.conn_handle,generation,event->disconnect.reason); break;
         case BLE_GAP_EVENT_IDENTITY_RESOLVED:

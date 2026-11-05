@@ -20,7 +20,7 @@ index b772e38..14d4c74 100644
  
  ifneq ($(CIRCUITPY_DOTCLOCKFRAMEBUFFER),0)
 diff --git a/ports/espressif/common-hal/_bleio/Adapter.c b/ports/espressif/common-hal/_bleio/Adapter.c
-index e97c84b..ceebd1e 100644
+index e97c84b..b4442ea 100644
 --- a/ports/espressif/common-hal/_bleio/Adapter.c
 +++ b/ports/espressif/common-hal/_bleio/Adapter.c
 @@ -38,6 +38,7 @@
@@ -71,15 +71,110 @@ index e97c84b..ceebd1e 100644
              nimble_port_deinit();
          }
      }
-@@ -395,6 +400,7 @@ static void _new_connection(uint16_t conn_handle, bool user_owned) {
+@@ -365,36 +370,42 @@ static int _mtu_reply(uint16_t conn_handle,
+     return 0;
+ }
  
-     // Change the callback for the connection.
-     ble_gap_set_event_cb(conn_handle, bleio_connection_event_cb, connection);
-+    connection->host_generation = bleio_host_policy_connect(conn_handle);
+-static void _new_connection(uint16_t conn_handle, bool user_owned) {
+-    // Set the tx_power for the connection higher than the advertisement.
+-    esp_ble_tx_power_set(conn_handle, ESP_PWR_LVL_N0);
+-
+-    // Find an empty connection. One should always be available because the SD has the same
+-    // total connection limit.
++static int _new_connection(uint16_t conn_handle, bool user_owned) {
+     bleio_connection_internal_t *connection = NULL;
+     for (size_t i = 0; i < BLEIO_TOTAL_CONNECTION_COUNT; i++) {
+-        connection = &bleio_connections[i];
+-        if (connection->conn_handle == BLEIO_HANDLE_INVALID) {
++        if (bleio_connections[i].conn_handle == BLEIO_HANDLE_INVALID) {
++            connection = &bleio_connections[i];
+             break;
+         }
+     }
+-
+-    // Shouldn't happen, but just return if no connection available.
+     if (!connection) {
+-        return;
++        ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
++        return BLE_HS_ENOMEM;
++    }
++
++    // Extended advertising can report a tentative link before CONNECT. Do
++    // not publish a wrapper or start MTU traffic for a rejected host.
++    uint32_t generation = bleio_host_policy_connect(conn_handle);
++    if (!generation) {
++        return BLE_HS_EREJECT;
++    }
++    int rc = ble_gap_set_event_cb(conn_handle, bleio_connection_event_cb, connection);
++    if (rc != NIMBLE_OK) {
++        bleio_host_policy_connection_attach_failed(conn_handle, generation, rc);
++        return rc;
+     }
+
+-    connection->conn_handle = conn_handle;
+     connection->connection_obj = mp_const_none;
+     connection->pair_status = PAIR_NOT_PAIRED;
+     connection->indicate_outstanding = false;
+     connection->mtu = 0;
+     connection->user_owned = user_owned;
++    connection->host_generation = generation;
++    connection->conn_handle = conn_handle;
+
++    esp_ble_tx_power_set(conn_handle, ESP_PWR_LVL_N0);
+     ble_gattc_exchange_mtu(conn_handle, _mtu_reply, connection);
+-
+-    // Change the callback for the connection.
+-    ble_gap_set_event_cb(conn_handle, bleio_connection_event_cb, connection);
++    return NIMBLE_OK;
  }
  
  static int _connect_event(struct ble_gap_event *event, void *self_in) {
-@@ -562,12 +568,17 @@ static int _advertising_event(struct ble_gap_event *event, void *self_in) {
+@@ -408,10 +419,12 @@ static int _connect_event(struct ble_gap_event *event, void *self_in) {
+             if (event->connect.status == 0) {
+                 // This triggers an MTU exchange. Its reply will exit the loop waiting for a connection.
+                 // Only user code connects in the central role.
+-                _new_connection(event->connect.conn_handle, true);
+-                // Set connections objs back to NULL since we have a new
+-                // connection and need a new tuple.
+-                self->connection_objs = NULL;
++                int rc = _new_connection(event->connect.conn_handle, true);
++                if (rc == NIMBLE_OK) {
++                    self->connection_objs = NULL;
++                } else {
++                    _connection_status = -rc;
++                }
+             } else {
+                 // The loop waiting for the connection to be completed will stop when _connection_status changes.
+                 _connection_status = -event->connect.status;
+@@ -528,10 +541,9 @@ static int _advertising_event(struct ble_gap_event *event, void *self_in) {
+             #if !MYNEWT_VAL(BLE_EXT_ADV)
+             if (event->connect.status == NIMBLE_OK) {
+                 // The connection belongs to whoever started the advertising it answered.
+-                _new_connection(event->connect.conn_handle, self->user_advertising);
+-                // Set connections objs back to NULL since we have a new
+-                // connection and need a new tuple.
+-                self->connection_objs = NULL;
++                if (_new_connection(event->connect.conn_handle, self->user_advertising) == NIMBLE_OK) {
++                    self->connection_objs = NULL;
++                }
+             }
+             common_hal_bleio_adapter_stop_advertising(self);
+             #endif
+@@ -542,10 +554,9 @@ static int _advertising_event(struct ble_gap_event *event, void *self_in) {
+             #if MYNEWT_VAL(BLE_EXT_ADV)
+             if (event->adv_complete.reason == NIMBLE_OK) {
+                 // The connection belongs to whoever started the advertising it answered.
+-                _new_connection(event->adv_complete.conn_handle, self->user_advertising);
+-                // Set connections objs back to NULL since we have a new
+-                // connection and need a new tuple.
+-                self->connection_objs = NULL;
++                if (_new_connection(event->adv_complete.conn_handle, self->user_advertising) == NIMBLE_OK) {
++                    self->connection_objs = NULL;
++                }
+             }
+             #endif
+             // Other statuses indicate timeout or preemption.
+@@ -562,12 +573,17 @@ static int _advertising_event(struct ble_gap_event *event, void *self_in) {
      return 0;
  }
  
@@ -98,7 +193,7 @@ index e97c84b..ceebd1e 100644
      if (ble_gap_adv_active() && !self->user_advertising) {
          return BLE_HS_EBUSY;
      }
-@@ -576,7 +587,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -576,7 +592,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
  
      uint32_t rc;
  
@@ -107,7 +202,7 @@ index e97c84b..ceebd1e 100644
      if (directed_to != NULL) {
          _convert_address(directed_to, &peer);
      }
-@@ -591,7 +602,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -591,7 +607,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
  
      bool high_duty_directed = directed_to != NULL && interval <= 3.5 && timeout <= 1; // Really 1.3, but it's an int
  
@@ -116,7 +211,7 @@ index e97c84b..ceebd1e 100644
  
      #if MYNEWT_VAL(BLE_EXT_ADV)
      bool extended = advertising_data_len > BLE_ADV_LEGACY_DATA_MAX_LEN ||
-@@ -618,7 +629,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -618,7 +634,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
          .channel_map = 0,
          .own_addr_type = own_addr_type,
          .peer = peer,
@@ -125,24 +220,22 @@ index e97c84b..ceebd1e 100644
          .primary_phy = BLE_HCI_LE_PHY_1M,
          .secondary_phy = BLE_HCI_LE_PHY_1M,
          .tx_power = tx_power,
-@@ -653,8 +664,12 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -653,8 +669,12 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
          }
      }
--
+
 -    // If timeout_ms is zero, it means advertise forever. This is different than ble_gap_adv_start().
 -    rc = ble_gap_ext_adv_start(0, timeout_ms, 0);
--
-+
 +    // LE Set Extended Advertising Enable takes 10 ms units. Zero is unlimited.
 +    uint32_t duration = timeout_ms / 10 + (timeout_ms % 10 != 0);
 +    if (duration > UINT16_MAX) {
 +        return BLE_HS_EINVAL;
 +    }
 +    rc = ble_gap_ext_adv_start(0, duration, 0);
-+
+
      #else
      // Extended advertising not enabled.
-@@ -670,7 +685,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -670,7 +690,7 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
          .itvl_min = SEC_TO_UNITS(interval, UNIT_0_625_MS) + 0.5f,
          .itvl_max = SEC_TO_UNITS(interval, UNIT_0_625_MS) + 0.5f,
          .channel_map = 0,
@@ -151,7 +244,7 @@ index e97c84b..ceebd1e 100644
          .high_duty_cycle = high_duty_directed,
      };
  
-@@ -696,6 +711,16 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
+@@ -696,6 +716,16 @@ uint32_t _common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self,
      return rc;
  }
  
@@ -168,7 +261,7 @@ index e97c84b..ceebd1e 100644
  static void check_data_fit(size_t data_len, bool connectable) {
      if (data_len > MYNEWT_VAL(BLE_EXT_ADV_MAX_SIZE) ||
          (connectable && data_len > MYNEWT_VAL(BLE_EXT_ADV_MAX_SIZE))) {
-@@ -737,14 +762,17 @@ void common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self, bool
+@@ -737,14 +767,17 @@ void common_hal_bleio_adapter_start_advertising(bleio_adapter_obj_t *self, bool
              BLE_HS_FOREVER / 1000 - 1);
      }
  
@@ -189,7 +282,7 @@ index e97c84b..ceebd1e 100644
  }
  
  void common_hal_bleio_adapter_stop_advertising(bleio_adapter_obj_t *self) {
-@@ -808,18 +836,8 @@ mp_obj_t common_hal_bleio_adapter_get_connections(bleio_adapter_obj_t *self) {
+@@ -808,18 +841,8 @@ mp_obj_t common_hal_bleio_adapter_get_connections(bleio_adapter_obj_t *self) {
  // Implement bonding control ourselves when the adapter isn't enabled so that it
  // can run when BLE is off.
  void common_hal_bleio_adapter_erase_bonding(bleio_adapter_obj_t *self) {
@@ -275,7 +368,7 @@ index 9436376..cac7216 100644
                      self->current_value,
                      self->current_value_len);
 diff --git a/ports/espressif/common-hal/_bleio/Connection.c b/ports/espressif/common-hal/_bleio/Connection.c
-index a063f3e..dc14791 100644
+index a063f3e..6f68cfd 100644
 --- a/ports/espressif/common-hal/_bleio/Connection.c
 +++ b/ports/espressif/common-hal/_bleio/Connection.c
 @@ -35,6 +35,7 @@
@@ -286,26 +379,48 @@ index a063f3e..dc14791 100644
  
  // Uncomment to turn on debug logging just in this file.
  // #undef CIRCUITPY_VERBOSE_BLE
-@@ -43,6 +44,9 @@
+@@ -43,19 +44,37 @@
  int bleio_connection_event_cb(struct ble_gap_event *event, void *connection_in) {
      bleio_connection_internal_t *connection = (bleio_connection_internal_t *)connection_in;
  
++    if (connection == NULL) {
++        return event->type == BLE_GAP_EVENT_REPEAT_PAIRING ? BLE_GAP_REPEAT_PAIRING_IGNORE : 0;
++    }
++    bool early_failure = event->type == BLE_GAP_EVENT_CONNECT && event->connect.status != 0;
++    if ((early_failure && event->connect.conn_handle != connection->conn_handle) ||
++        (event->type == BLE_GAP_EVENT_DISCONNECT && event->disconnect.conn.conn_handle != connection->conn_handle)) {
++        return 0;
++    }
 +    // Record full-domain reasons/security before wrappers/handles are cleared.
-+    bleio_host_policy_event(event, connection == NULL ? 0 : connection->host_generation);
-+    if (connection == NULL) { return event->type == BLE_GAP_EVENT_REPEAT_PAIRING ? BLE_GAP_REPEAT_PAIRING_IGNORE : 0; }
++    bleio_host_policy_event(event, connection->host_generation);
      switch (event->type) {
++        case BLE_GAP_EVENT_CONNECT:
++            if (!early_failure) {
++                break;
++            }
++            // NimBLE reports loss before the first successful CONNECT here.
++            MP_FALLTHROUGH;
          case BLE_GAP_EVENT_DISCONNECT: {
++            int reason = early_failure ? event->connect.status : event->disconnect.reason;
              connection->conn_handle = BLEIO_HANDLE_INVALID;
-@@ -52,7 +56,7 @@ int bleio_connection_event_cb(struct ble_gap_event *event, void *connection_in)
-             mp_printf(&mp_plat_print, "event->disconnect.reason: 0x%x\n", event->disconnect.reason);
++            connection->host_generation = 0;
+             connection->pair_status = PAIR_NOT_PAIRED;
+
+             #if CIRCUITPY_VERBOSE_BLE
+-            mp_printf(&mp_plat_print, "event->disconnect.reason: 0x%x\n", event->disconnect.reason);
++            mp_printf(&mp_plat_print, "BLE link ended: 0x%x\n", reason);
              #endif
  
 -            if (connection->connection_obj != mp_const_none) {
 +            if (connection->connection_obj != MP_OBJ_NULL && connection->connection_obj != mp_const_none) {
                  bleio_connection_obj_t *obj = connection->connection_obj;
                  obj->connection = NULL;
-                 obj->disconnect_reason = event->disconnect.reason;
-@@ -83,20 +87,8 @@ int bleio_connection_event_cb(struct ble_gap_event *event, void *connection_in)
+-                obj->disconnect_reason = event->disconnect.reason;
++                obj->disconnect_reason = reason;
+             }
+
+             break;
+@@ -83,20 +102,8 @@ int bleio_connection_event_cb(struct ble_gap_event *event, void *connection_in)
              break;
          }
          case BLE_GAP_EVENT_REPEAT_PAIRING: {
@@ -351,10 +466,10 @@ index 8d8e727..31f7cec 100644
  void bleio_connection_clear(bleio_connection_internal_t *self);
 diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.c b/ports/espressif/common-hal/_bleio/HostPolicy.c
 new file mode 100644
-index 0000000..618ef89
+index 0000000..0b8d78f
 --- /dev/null
 +++ b/ports/espressif/common-hal/_bleio/HostPolicy.c
-@@ -0,0 +1,897 @@
+@@ -0,0 +1,913 @@
 +// SPDX-License-Identifier: MIT
 +// BM83 ESP32-only capability. No key material is exposed to Python or logging.
 +#include "common-hal/_bleio/HostPolicy.h"
@@ -1138,13 +1253,29 @@ index 0000000..618ef89
 +    }
 +    uint32_t generation=hp_connect(&core,handle,&a); if (generation) { clear_inputs(); } publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return generation;
 +}
++void bleio_host_policy_connection_attach_failed(uint16_t handle, uint32_t generation, int error) {
++    if (handle!=core.handle || !generation || generation!=core.status.connection_generation) { return; }
++    clear_inputs();
++    if (error==BLE_HS_ENOTCONN) {
++        // Callback registration confirms the raw link is already absent.
++        hp_disconnect(&core,handle,generation,error);
++    } else {
++        hp_fail(&core,HP_DOMAIN_NIMBLE,error);
++    }
++    publish();
++}
 +void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
-+    if (event->type!=BLE_GAP_EVENT_DISCONNECT && event->type!=BLE_GAP_EVENT_IDENTITY_RESOLVED && event->type!=BLE_GAP_EVENT_ENC_CHANGE && event->type!=BLE_GAP_EVENT_REPEAT_PAIRING) { return; }
-+    if (!check_store_guards() && event->type!=BLE_GAP_EVENT_DISCONNECT) { return; }
++    bool connect_failed=event->type==BLE_GAP_EVENT_CONNECT && event->connect.status!=0;
++    if (!connect_failed && event->type!=BLE_GAP_EVENT_DISCONNECT && event->type!=BLE_GAP_EVENT_IDENTITY_RESOLVED && event->type!=BLE_GAP_EVENT_ENC_CHANGE && event->type!=BLE_GAP_EVENT_REPEAT_PAIRING) { return; }
++    if (!check_store_guards() && !connect_failed && event->type!=BLE_GAP_EVENT_DISCONNECT) { return; }
 +    portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
 +    hp_status_t before=core.status;
 +    struct ble_gap_conn_desc desc; uint16_t handle=HP_INVALID_HANDLE;
 +    switch(event->type) {
++        case BLE_GAP_EVENT_CONNECT:
++            // NimBLE reports an early peripheral link loss as CONNECT failure
++            // and suppresses DISCONNECT until its first successful CONNECT.
++            hp_disconnect(&core,event->connect.conn_handle,generation,event->connect.status); break;
 +        case BLE_GAP_EVENT_DISCONNECT:
 +            hp_disconnect(&core,event->disconnect.conn.conn_handle,generation,event->disconnect.reason); break;
 +        case BLE_GAP_EVENT_IDENTITY_RESOLVED:
@@ -1254,10 +1385,10 @@ index 0000000..618ef89
 +}
 diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.h b/ports/espressif/common-hal/_bleio/HostPolicy.h
 new file mode 100644
-index 0000000..c03638d
+index 0000000..8b1d30d
 --- /dev/null
 +++ b/ports/espressif/common-hal/_bleio/HostPolicy.h
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,31 @@
 +// SPDX-License-Identifier: MIT
 +#pragma once
 +#include "py/obj.h"
@@ -1280,6 +1411,7 @@ index 0000000..c03638d
 +int bleio_host_policy_queue_input(uint16_t, uint16_t, const uint8_t *, size_t);
 +bool bleio_host_policy_input_value(uint16_t, uint16_t, uint8_t *, size_t);
 +uint32_t bleio_host_policy_connect(uint16_t handle);
++void bleio_host_policy_connection_attach_failed(uint16_t handle, uint32_t generation, int error);
 +void bleio_host_policy_event(struct ble_gap_event *, uint32_t generation);
 +void bleio_host_policy_subscription(uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled);
 +int bleio_host_policy_store_status(struct ble_store_status_event *, void *);

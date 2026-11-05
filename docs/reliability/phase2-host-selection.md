@@ -73,7 +73,7 @@ guarantee.
 | Installation and rollback | Fresh paused state, verified safe/ROM mode, exact scoped native approval, private backups and protected-range readback | Both native app-slot writes passed full 8 MiB verification after separate exact approvals; every byte outside the app slot matched its prewrite backup |
 | Persistent Disconnect | Saved bonds unchanged; no connection or advertising through reset, with other hosts' Bluetooth on | Pending physical test |
 | Selected AUTO | Correct host after explicit Select, unexpected loss, controller restart and target absence; competitors cannot take ownership | B-Intel trials stopped at saved-record verification before advertising; no Windows BLE handshake was observed |
-| Enrollment | New-host success, expiry, cancel, stale requests, capacity and storage failure without old-bond deletion | Pending; destructive capacity cases require a spare fixture or an explicit untested boundary |
+| Enrollment | New-host success, expiry, cancel, stale requests, capacity and storage failure without old-bond deletion | Live advertising and timeout observed. A rejected attempt interrupted advertising and later windows could not restart it. The early link failure correction still needs a bench test. |
 | Live regression | Audio, Nextion, CrowPanel, badge, artwork, controls and measured UART/radio service during a new stability window | B-Intel audio, displays and artwork passed while the volume handle stayed disconnected; selected-host controls and qualified timing remain pending |
 
 The first live Select exposed a CircuitPython builtin incompatibility: the
@@ -92,6 +92,18 @@ category without exposing keys or addresses. The corrected runtime reported
 NVS `-20531`: it found a matching peer and CCCD characteristic but the RAM and
 saved values differed. The controller was paused, had no connection, and did
 not advertise. The result does not test whether Windows can reuse its bond.
+
+The next runtime entered ENROLL and advertised on the unit. B-Intel saw the
+device and attempted to pair while its old bond was still saved on the unit.
+The connection was not admitted. Advertising stopped after approximately
+15 seconds, before the countdown expired, and stayed off during later
+requests. Windows still reported the volume device unpaired, with the BM83
+audio connected. The pinned NimBLE stack can signal early peripheral link
+loss as a CONNECT failure. Publish a CircuitPython connection only after
+policy admission and successful callback registration, and release the
+matching native and CircuitPython state on that failure event. The capture
+did not include raw HCI events, so it cannot identify the exact termination
+reason.
 
 Use a verified clean B-Intel pairing as the first functional acceptance test.
 Keep retained-bond migration as a separate test:

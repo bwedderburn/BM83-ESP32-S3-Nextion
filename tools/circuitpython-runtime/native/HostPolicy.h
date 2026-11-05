@@ -20,6 +20,7 @@ bool bleio_host_policy_input_guard(uint16_t handle);
 int bleio_host_policy_queue_input(uint16_t, uint16_t, const uint8_t *, size_t);
 bool bleio_host_policy_input_value(uint16_t, uint16_t, uint8_t *, size_t);
 uint32_t bleio_host_policy_connect(uint16_t handle);
+void bleio_host_policy_connection_attach_failed(uint16_t handle, uint32_t generation, int error);
 void bleio_host_policy_event(struct ble_gap_event *, uint32_t generation);
 void bleio_host_policy_subscription(uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled);
 int bleio_host_policy_store_status(struct ble_store_status_event *, void *);

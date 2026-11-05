@@ -49,7 +49,7 @@ static const ble_addr_t test_any_address;
 static inline int ble_addr_cmp(const ble_addr_t *a, const ble_addr_t *b) {
     return a->type == b->type ? memcmp(a->val, b->val, sizeof(a->val)) : a->type - b->type;
 }
-enum { BLE_HS_ENOENT=5,BLE_HS_ENOMEM=6,BLE_HS_ENOTCONN=7,BLE_HS_EINVAL=3,BLE_HS_EBUSY=15,BLE_HS_EREJECT=16,BLE_HS_ETIMEOUT=13,BLE_HS_EALREADY=2,BLE_HS_ESTORE_CAP=27,BLE_HS_ESTORE_FAIL=28 };
+enum { BLE_HS_EAGAIN=1,BLE_HS_ENOENT=5,BLE_HS_ENOMEM=6,BLE_HS_ENOTCONN=7,BLE_HS_EINVAL=3,BLE_HS_EBUSY=15,BLE_HS_EREJECT=16,BLE_HS_ETIMEOUT=13,BLE_HS_EALREADY=2,BLE_HS_ESTORE_CAP=27,BLE_HS_ESTORE_FAIL=28 };
 #define BLE_ERR_REM_USER_CONN_TERM 0x13
 #define BLE_HCI_OP(group,command) (((group)<<10)|(command))
 #define BLE_HCI_OGF_LE 8
@@ -89,8 +89,8 @@ int ble_hs_locked_by_cur_task(void);
 void ble_hs_lock(void);
 void ble_hs_unlock(void);
 struct ble_gap_conn_desc { uint16_t conn_handle; ble_addr_t peer_id_addr,peer_ota_addr; struct { unsigned encrypted:1; unsigned bonded:1; } sec_state; };
-enum { BLE_GAP_EVENT_DISCONNECT=1,BLE_GAP_EVENT_IDENTITY_RESOLVED,BLE_GAP_EVENT_ENC_CHANGE,BLE_GAP_EVENT_REPEAT_PAIRING };
-struct ble_gap_event { int type; union { struct {struct ble_gap_conn_desc conn; int reason;} disconnect; struct {uint16_t conn_handle;} identity_resolved; struct {uint16_t conn_handle; int status;} enc_change; struct {uint16_t conn_handle;} repeat_pairing;}; };
+enum { BLE_GAP_EVENT_DISCONNECT=1,BLE_GAP_EVENT_IDENTITY_RESOLVED,BLE_GAP_EVENT_ENC_CHANGE,BLE_GAP_EVENT_REPEAT_PAIRING,BLE_GAP_EVENT_CONNECT };
+struct ble_gap_event { int type; union { struct {struct ble_gap_conn_desc conn; int reason;} disconnect; struct {uint16_t conn_handle;} identity_resolved; struct {uint16_t conn_handle; int status;} enc_change; struct {uint16_t conn_handle;} repeat_pairing; struct {int status; uint16_t conn_handle;} connect;}; };
 struct os_mbuf { uint8_t data[HP_INPUT_BYTES]; uint16_t length; };
 struct ble_npl_event { int unused; };
 struct ble_npl_eventq { int unused; };

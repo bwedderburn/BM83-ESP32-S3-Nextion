@@ -428,6 +428,81 @@ static void test_fresh_private_enrollment(void) {
     assert(terminations == 0);
 }
 
+static void test_failed_peripheral_establishment(void) {
+    reset();
+    hp_request(&core, HP_ENROLL, 0, 25, 60, 0);
+    test_connection = (struct ble_gap_conn_desc){
+        .conn_handle = 50, .peer_id_addr = test_address(6),
+    };
+    // A retained host can answer an open advertisement before the user
+    // selects the new one. Reject it without admitting a policy connection.
+    assert(!bleio_host_policy_connect(50));
+    assert(!core.status.connected && !core.status.connection_generation && terminations == 1);
+    assert(bleio_host_policy_advertising_guard() == HP_ENROLL);
+
+    test_connection.peer_id_addr = test_address(7);
+    uint32_t generation = bleio_host_policy_connect(50);
+    assert(generation && core.status.connected);
+    struct ble_gap_event event = {
+        .type = BLE_GAP_EVENT_CONNECT, .connect = {.conn_handle = 50, .status = 0},
+    };
+    bleio_host_policy_event(&event, generation);
+    assert(core.status.connected);
+    event.connect.status = BLE_HS_EAGAIN;
+    event.connect.conn_handle = 51;
+    bleio_host_policy_event(&event, generation);
+    assert(core.status.connected);
+    event.connect.conn_handle = 50;
+    bleio_host_policy_event(&event, generation - 1);
+    assert(core.status.connected);
+
+    // Pinned NimBLE reports CONNECT failure, rather than DISCONNECT, if its
+    // remote-version/feature handshake ends before application establishment.
+    bleio_host_policy_event(&event, generation);
+    assert(!core.status.connected && core.status.last_disconnect_generation == generation);
+    assert(!core.status.last_disconnect_local && core.status.last_disconnect_reason == BLE_HS_EAGAIN);
+    service(NULL);
+    assert(bleio_host_policy_advertising_guard() == HP_ENROLL && core.status.state == HP_ENROLLING);
+
+    uint32_t replacement = bleio_host_policy_connect(50);
+    assert(replacement && replacement != generation);
+    bleio_host_policy_event(&event, generation);
+    assert(core.status.connected && core.status.connection_generation == replacement);
+
+    hp_request(&core, HP_PAUSED, 0, 26, 60, 0);
+    assert(terminations == 2 && stored_policy.mode == HP_PAUSED);
+    bleio_host_policy_event(&event, replacement);
+    service(NULL);
+    assert(core.status.state == HP_STATE_PAUSED && !core.status.connected);
+    assert(core.status.last_disconnect_generation == replacement && core.status.last_disconnect_local);
+    assert(bleio_host_policy_advertising_guard() < 0);
+}
+
+static void test_failed_connection_callback_registration(void) {
+    reset();
+    hp_request(&core, HP_ENROLL, 0, 27, 60, 0);
+    test_connection = (struct ble_gap_conn_desc){
+        .conn_handle = 50, .peer_id_addr = test_address(7),
+    };
+    uint32_t generation = bleio_host_policy_connect(50);
+    assert(generation && core.status.connected);
+
+    bleio_host_policy_connection_attach_failed(50, generation - 1, BLE_HS_ENOTCONN);
+    bleio_host_policy_connection_attach_failed(51, generation, BLE_HS_ENOTCONN);
+    assert(core.status.connected && !core.status.last_disconnect_generation);
+    bleio_host_policy_connection_attach_failed(50, generation, BLE_HS_ENOTCONN);
+    assert(!core.status.connected && !terminations && core.status.last_disconnect_generation == generation);
+    assert(core.status.last_disconnect_reason == BLE_HS_ENOTCONN);
+    service(NULL);
+    assert(bleio_host_policy_advertising_guard() == HP_ENROLL);
+
+    generation = bleio_host_policy_connect(50);
+    assert(generation && core.status.connected);
+    bleio_host_policy_connection_attach_failed(50, generation, BLE_HS_EINVAL);
+    assert(core.status.state == HP_ERROR && core.status.error_code == BLE_HS_EINVAL);
+    assert(stored_policy.mode == HP_PAUSED && terminations == 1 && bleio_host_policy_advertising_guard() < 0);
+}
+
 int main(void){
     reset();ready();unsigned before=records[BLE_STORE_OBJ_TYPE_OUR_SEC][0].ram.sec.bond_count;union ble_store_value sec=records[BLE_STORE_OBJ_TYPE_OUR_SEC][0].ram;assert(!nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&sec));assert(!fault_pending&&records[BLE_STORE_OBJ_TYPE_OUR_SEC][0].nvs.sec.bond_count==before+1);
     // This is deliberately a SMALLER object than union ble_store_value; ASan
@@ -461,6 +536,8 @@ int main(void){
     test_marker_store_boundaries();
     test_rpa_mappings_preserve_existing_rows();
     test_fresh_private_enrollment();
+    test_failed_peripheral_establishment();
+    test_failed_connection_callback_registration();
     test_unexpected_callback_drift();
     puts("PASS production ESP32 bridge bodies: NVS, small CCCD, privacy rebind, marker, drift, expiry, FIFO, reuse, ENOMEM, timer and asymmetric snapshots");return 0;
 }
