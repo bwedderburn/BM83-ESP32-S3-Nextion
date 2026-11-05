@@ -51,7 +51,7 @@ struct ble_store_key_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle; uint8
 struct ble_store_key_csfc { ble_addr_t peer_addr; uint8_t idx; };
 struct ble_store_key_local_irk { ble_addr_t addr; uint8_t idx; };
 struct ble_store_key_rpa_rec { ble_addr_t peer_rpa_addr; uint8_t idx; };
-struct ble_store_value_sec { ble_addr_t peer_addr; uint16_t bond_count; uint8_t key_size; uint16_t ediv; uint64_t rand_num; uint8_t ltk[16]; bool ltk_present; uint8_t irk[16]; bool irk_present; uint8_t csrk[16]; bool csrk_present; uint32_t sign_counter; unsigned authenticated:1; uint8_t sc:1; };
+struct ble_store_value_sec { ble_addr_t peer_addr; uint16_t bond_count; uint8_t key_size; uint16_t ediv; uint64_t rand_num; uint8_t ltk[16]; uint8_t ltk_present:1; uint8_t irk[16]; uint8_t irk_present:1; uint8_t csrk[16]; uint8_t csrk_present:1; uint32_t sign_counter; unsigned authenticated:1; uint8_t sc:1; };
 struct ble_store_value_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle,flags; unsigned value_changed:1; };
 struct ble_store_value_csfc { ble_addr_t peer_addr; uint8_t csfc[1]; };
 struct ble_store_value_local_irk { ble_addr_t addr; uint8_t irk[16]; };

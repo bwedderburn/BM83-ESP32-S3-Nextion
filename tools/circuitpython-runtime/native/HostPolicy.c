@@ -173,6 +173,42 @@ static const char *store_prefix(int type) {
         default: return NULL;
     }
 }
+// A stored value's padding and unused bitfield bits are not part of its
+// contract. NimBLE copies typed records into iterator storage and the NVS
+// blobs can have different padding from those in-memory copies.
+static bool same_store_address(const ble_addr_t *a, const ble_addr_t *b) {
+    return a->type==b->type && memcmp(a->val,b->val,sizeof(a->val))==0;
+}
+static bool same_store_record(int type, const union ble_store_value *a, const union ble_store_value *b) {
+    switch (type) {
+        case BLE_STORE_OBJ_TYPE_OUR_SEC:
+        case BLE_STORE_OBJ_TYPE_PEER_SEC:
+            return same_store_address(&a->sec.peer_addr,&b->sec.peer_addr) &&
+                a->sec.bond_count==b->sec.bond_count && a->sec.key_size==b->sec.key_size &&
+                a->sec.ediv==b->sec.ediv && a->sec.rand_num==b->sec.rand_num &&
+                a->sec.sign_counter==b->sec.sign_counter && a->sec.authenticated==b->sec.authenticated &&
+                a->sec.sc==b->sec.sc && a->sec.ltk_present==b->sec.ltk_present &&
+                a->sec.irk_present==b->sec.irk_present && a->sec.csrk_present==b->sec.csrk_present &&
+                (!a->sec.ltk_present || memcmp(a->sec.ltk,b->sec.ltk,sizeof(a->sec.ltk))==0) &&
+                (!a->sec.irk_present || memcmp(a->sec.irk,b->sec.irk,sizeof(a->sec.irk))==0) &&
+                (!a->sec.csrk_present || memcmp(a->sec.csrk,b->sec.csrk,sizeof(a->sec.csrk))==0);
+        case BLE_STORE_OBJ_TYPE_CCCD:
+            return same_store_address(&a->cccd.peer_addr,&b->cccd.peer_addr) &&
+                a->cccd.chr_val_handle==b->cccd.chr_val_handle && a->cccd.flags==b->cccd.flags &&
+                a->cccd.value_changed==b->cccd.value_changed;
+        case BLE_STORE_OBJ_TYPE_CSFC:
+            return same_store_address(&a->csfc.peer_addr,&b->csfc.peer_addr) &&
+                memcmp(a->csfc.csfc,b->csfc.csfc,sizeof(a->csfc.csfc))==0;
+        case BLE_STORE_OBJ_TYPE_LOCAL_IRK:
+            return same_store_address(&a->local_irk.addr,&b->local_irk.addr) &&
+                memcmp(a->local_irk.irk,b->local_irk.irk,sizeof(a->local_irk.irk))==0;
+        case BLE_STORE_OBJ_TYPE_PEER_ADDR:
+            return same_store_address(&a->rpa_rec.peer_rpa_addr,&b->rpa_rec.peer_rpa_addr) &&
+                same_store_address(&a->rpa_rec.peer_addr,&b->rpa_rec.peer_addr);
+        default:
+            return false;
+    }
+}
 static int persistent_match(int type, const union ble_store_value *value) {
     const char *prefix=store_prefix(type);
     if (!prefix) { return 0; }
@@ -188,7 +224,7 @@ static int persistent_match(int type, const union ble_store_value *value) {
         rc=nvs_get_blob(handle,key,&saved,&size);
         if (rc==ESP_ERR_NVS_NOT_FOUND) { continue; }
         if (rc || size!=store_size(type)) { result=rc ? rc : BLE_HS_ESTORE_FAIL; break; }
-        if (!memcmp(&saved,value,size)) { result=0; break; }
+        if (same_store_record(type,&saved,value)) { result=0; break; }
     }
     nvs_close(handle); return result;
 }
@@ -293,7 +329,7 @@ static int guarded_write(int type, const union ble_store_value *value) {
         memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
         ble_store_key_from_value(type,&key,value);
         int found=original_read(type,&key,&existing);
-        if (found==0 && memcmp(&existing,value,store_size(type))) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
+        if (found==0 && !same_store_record(type,&existing,value)) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
         if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
     }
     int rc=original_write(type,value);
@@ -309,7 +345,7 @@ static int guarded_write(int type, const union ble_store_value *value) {
         // union pointer. Never read sizeof(union) bytes from that argument.
         memcpy(&expected,value,store_size(type));
         if (type==BLE_STORE_OBJ_TYPE_OUR_SEC || type==BLE_STORE_OBJ_TYPE_PEER_SEC) { expected.sec.bond_count=canonical.sec.bond_count; }
-        if (!rc && memcmp(&expected,&canonical,store_size(type))) { rc=BLE_HS_ESTORE_FAIL; }
+        if (!rc && !same_store_record(type,&expected,&canonical)) { rc=BLE_HS_ESTORE_FAIL; }
         if (!rc) { rc=persistent_match(type,&canonical); }
         memset(&canonical,0,sizeof(canonical)); memset(&expected,0,sizeof(expected));
     }
