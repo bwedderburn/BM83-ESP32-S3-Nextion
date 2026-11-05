@@ -320,10 +320,10 @@ index 8d8e727..31f7cec 100644
  void bleio_connection_clear(bleio_connection_internal_t *self);
 diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.c b/ports/espressif/common-hal/_bleio/HostPolicy.c
 new file mode 100644
-index 0000000..bdc05b2
+index 0000000..e0b9dc7
 --- /dev/null
 +++ b/ports/espressif/common-hal/_bleio/HostPolicy.c
-@@ -0,0 +1,717 @@
+@@ -0,0 +1,750 @@
 +// SPDX-License-Identifier: MIT
 +// BM83 ESP32-only capability. No key material is exposed to Python or logging.
 +#include "common-hal/_bleio/HostPolicy.h"
@@ -535,23 +535,53 @@ index 0000000..bdc05b2
 +            return false;
 +    }
 +}
-+static int persistent_match(int type, const union ble_store_value *value) {
++static bool same_store_key(int type, const union ble_store_value *a, const union ble_store_value *b) {
++    switch (type) {
++        case BLE_STORE_OBJ_TYPE_OUR_SEC:
++        case BLE_STORE_OBJ_TYPE_PEER_SEC:
++            return same_store_address(&a->sec.peer_addr,&b->sec.peer_addr);
++        case BLE_STORE_OBJ_TYPE_CCCD:
++            return same_store_address(&a->cccd.peer_addr,&b->cccd.peer_addr) &&
++                a->cccd.chr_val_handle==b->cccd.chr_val_handle;
++        case BLE_STORE_OBJ_TYPE_CSFC:
++            return same_store_address(&a->csfc.peer_addr,&b->csfc.peer_addr);
++        case BLE_STORE_OBJ_TYPE_LOCAL_IRK:
++            return same_store_address(&a->local_irk.addr,&b->local_irk.addr);
++        case BLE_STORE_OBJ_TYPE_PEER_ADDR:
++            return same_store_address(&a->rpa_rec.peer_rpa_addr,&b->rpa_rec.peer_rpa_addr);
++        default:
++            return false;
++    }
++}
++// Report only family and reason in our policy status. Return the original
++// NimBLE/ESP error to the store caller; never emit addresses or record bytes.
++enum { DURABLE_SIZE=1, DURABLE_NO_KEY, DURABLE_VALUE_DIFF, DURABLE_CANONICAL_DIFF };
++static int durable_error_code(int type, int reason) {
++    return -(0x5000 + 16*type + reason);
++}
++static int persistent_match(int type, const union ble_store_value *value, int *detail) {
++    *detail=0;
 +    const char *prefix=store_prefix(type);
 +    if (!prefix) { return 0; }
 +    nvs_handle_t handle;
 +    int rc=nvs_open("nimble_bond",NVS_READONLY,&handle);
 +    if (rc) { return rc; }
 +    unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
-+    int result=BLE_HS_ESTORE_FAIL;
++    int result=BLE_HS_ESTORE_FAIL, reason=DURABLE_NO_KEY;
 +    for (unsigned i=1;i<=limit;i++) {
 +        char key[16]; snprintf(key,sizeof(key),"%s_%u",prefix,i);
 +        union ble_store_value saved; memset(&saved,0,sizeof(saved));
 +        size_t size=store_size(type);
 +        rc=nvs_get_blob(handle,key,&saved,&size);
 +        if (rc==ESP_ERR_NVS_NOT_FOUND) { continue; }
-+        if (rc || size!=store_size(type)) { result=rc ? rc : BLE_HS_ESTORE_FAIL; break; }
-+        if (same_store_record(type,&saved,value)) { result=0; break; }
++        if (rc || size!=store_size(type)) {
++            reason=(!rc || rc==ESP_ERR_NVS_INVALID_LENGTH) ? DURABLE_SIZE : 0;
++            result=rc ? rc : BLE_HS_ESTORE_FAIL; break;
++        }
++        if (same_store_record(type,&saved,value)) { result=0; reason=0; break; }
++        if (same_store_key(type,&saved,value)) { reason=DURABLE_VALUE_DIFF; }
 +    }
++    if (reason) { *detail=durable_error_code(type,reason); }
 +    nvs_close(handle); return result;
 +}
 +typedef struct { hp_peer_t *peers; size_t count; unsigned cccds; int error; } peer_collect_t;
@@ -572,8 +602,9 @@ index 0000000..bdc05b2
 +        ctx->cccds++;
 +        if ((value->cccd.flags&1) && (!core.hid_input_handle || core.hid_input_handle==value->cccd.chr_val_handle)) { peer->cccd=true; }
 +    }
-+    int durable_error=persistent_match(type,value);
-+    if (durable_error) { peer->durable=false; ctx->error=durable_error; return durable_error; }
++    int detail;
++    int durable_error=persistent_match(type,value,&detail);
++    if (durable_error) { peer->durable=false; ctx->error=detail ? detail : durable_error; return durable_error; }
 +    return 0;
 +}
 +static int peers(void *unused, hp_peer_t *out, size_t *count, unsigned *cccds) {
@@ -658,7 +689,7 @@ index 0000000..bdc05b2
 +        if (found==0 && !same_store_record(type,&existing,value)) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
 +        if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
 +    }
-+    int rc=original_write(type,value);
++    int rc=original_write(type,value), detail=0;
 +    if (!rc && prefix) {
 +        // The pinned store assigns bond_count during OUR_SEC/PEER_SEC writes.
 +        // Verify the canonical POST-write record, never the caller's old count.
@@ -671,12 +702,14 @@ index 0000000..bdc05b2
 +        // union pointer. Never read sizeof(union) bytes from that argument.
 +        memcpy(&expected,value,store_size(type));
 +        if (type==BLE_STORE_OBJ_TYPE_OUR_SEC || type==BLE_STORE_OBJ_TYPE_PEER_SEC) { expected.sec.bond_count=canonical.sec.bond_count; }
-+        if (!rc && !same_store_record(type,&expected,&canonical)) { rc=BLE_HS_ESTORE_FAIL; }
-+        if (!rc) { rc=persistent_match(type,&canonical); }
++        if (!rc && !same_store_record(type,&expected,&canonical)) {
++            rc=BLE_HS_ESTORE_FAIL; detail=durable_error_code(type,DURABLE_CANONICAL_DIFF);
++        }
++        if (!rc) { rc=persistent_match(type,&canonical,&detail); }
 +        memset(&canonical,0,sizeof(canonical)); memset(&expected,0,sizeof(expected));
 +    }
 +    store_generation++;
-+    if (rc) { fault(HP_DOMAIN_NVS,rc); }
++    if (rc) { fault(HP_DOMAIN_NVS,detail ? detail : rc); }
 +    schedule(); return rc;
 +}
 +static int guarded_delete(int type, const union ble_store_key *key) {
