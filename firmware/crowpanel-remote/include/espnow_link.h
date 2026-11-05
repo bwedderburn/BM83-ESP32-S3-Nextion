@@ -60,13 +60,20 @@ const char *espnow_link_status_str();
 // Lifetime counters for the heartbeat line.
 void espnow_link_heartbeat(uint32_t *sent, uint32_t *acked);
 
-// Channel the audio unit was found on; 0 while it has not been found.
+// Current channel selection; during passive recovery this is a listening
+// channel, not proof that the peer has been found. Zero means unknown.
 uint8_t espnow_link_channel();
 
 // Re-run channel discovery now (blocks ~0.3 s, up to ~2.5 s with the unit
 // absent). Used after the remote wakes from light sleep, so the first tap
 // does not land on a channel the unit has left. No-op before init.
 void espnow_link_rescan();
+
+// Non-waiting idle recovery. At most one set-channel call per tick; returns
+// true only on an actual successful change, so the caller can discard partial
+// decodes across channels. No frames/tokens are sent. Fresh peer data cancels
+// allowed and holds the current channel for the existing stability check.
+bool espnow_link_idle_recovery_tick(bool allowed);
 
 // Extra send attempts beyond the first, lifetime (link-quality signal).
 uint32_t espnow_link_retries();

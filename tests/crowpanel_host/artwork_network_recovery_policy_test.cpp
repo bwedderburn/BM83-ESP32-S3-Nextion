@@ -6,6 +6,8 @@
 #include <stdint.h>
 
 using network_recovery::Policy;
+using network_recovery::IdleChannelSweep;
+using network_recovery::PostHopReceiptGuard;
 
 static void unavailable(Policy &policy, uint32_t now) {
     policy.peer(false, now);
@@ -208,6 +210,168 @@ static void bounded_committed_identity_checks() {
     assert(cache.due(true, 2, before_wrap + 1000));
 }
 
+static void passive_sweep_bounds_and_wrap() {
+    IdleChannelSweep sweep;
+    assert(sweep.tick(true, 0) == 1);
+    assert(sweep.tick(true, 0) == 0);  // Never more than one channel per tick.
+    for (uint8_t channel = 2; channel <= 13; ++channel) {
+        const uint32_t due = (channel - 1) * IdleChannelSweep::DWELL_MS;
+        assert(sweep.tick(true, due - 1) == 0);
+        assert(sweep.tick(true, due) == channel);
+    }
+    assert(sweep.tick(true, 32500) == 0);  // End dwell, then a real cooldown.
+    assert(sweep.tick(true, 42499) == 0);
+    assert(sweep.tick(true, 42500) == 1);  // Repeats; not a finite three-scan budget.
+    assert(sweep.tick(true, 100000) == 2);  // Delayed service never catches up in a loop.
+    assert(sweep.tick(true, 100000) == 0);
+    assert(sweep.tick(true, 102499) == 0);
+    assert(sweep.tick(true, 102500) == 3);
+
+    IdleChannelSweep wrapped;
+    const uint32_t near_wrap = UINT32_MAX - 1000;
+    assert(wrapped.tick(true, near_wrap) == 1);
+    assert(wrapped.tick(true, near_wrap + 2499) == 0);
+    assert(wrapped.tick(true, near_wrap + 2500) == 2);
+    wrapped.postpone(near_wrap + 2501);
+    assert(wrapped.tick(true, near_wrap + 12500) == 0);
+    assert(wrapped.tick(true, near_wrap + 12501) == 1);
+}
+
+static void passive_cancellation_and_ap_budget() {
+    IdleChannelSweep sweep;
+    assert(sweep.tick(false, 0) == 0);  // Busy/export/trial/sleep is not permission.
+    assert(sweep.tick(true, 100) == 1);
+    assert(sweep.tick(false, 101) == 0);
+    assert(!sweep.active());
+    assert(sweep.tick(true, 10100) == 0);
+    assert(sweep.tick(true, 10101) == 1);
+    sweep.postpone(10102);  // A control request owns the radio first.
+    assert(sweep.tick(true, 20101) == 0);
+    assert(sweep.tick(true, 20102) == 1);
+
+    Policy policy;
+    assert(!policy.idle_discovery_allowed(100000));  // Disabled/trial never starts it.
+    policy.enable(0);
+    policy.peer(true, 0);
+    policy.pause(Policy::PauseReason::ApUnavailable, 20000);
+    assert(policy.begin_local_join(25000));
+    policy.pause(Policy::PauseReason::ApUnavailable, 45000);
+    assert(policy.begin_local_join(75000));
+    policy.pause(Policy::PauseReason::ApUnavailable, 95000);
+    assert(policy.begin_local_join(155000));
+    policy.pause(Policy::PauseReason::ApUnavailable, 175000);
+    policy.peer(false, 175000);
+    assert(policy.idle_discovery_allowed(185000));
+    for (uint32_t now = 185000; now < 400000; now += 100)
+        sweep.tick(policy.idle_discovery_allowed(now), now);
+    assert(policy.attempts() == 3 && policy.exhausted());
+    policy.peer(true, 400000);
+    assert(!policy.idle_discovery_allowed(400000));
+    assert(!policy.begin_local_join(403000));  // Listening did not rearm AP attempts.
+    policy.suspend();
+    assert(!policy.idle_discovery_allowed(500000));
+    policy.resume(500000);
+    policy.peer(false, 500000);
+    assert(policy.idle_discovery_allowed(510000));
+    policy.disable();
+    assert(!policy.idle_discovery_allowed(1000000));
+}
+
+static void late_controller_without_input_closes_circular_wait() {
+    // Legacy behavior: its one scan runs while the controller is absent,
+    // leaves home channel1, and no received frames can authorize AP rejoin.
+    Policy legacy;
+    legacy.enable(0);
+    legacy.peer(false, 0);
+    legacy.pause(Policy::PauseReason::PeerMissing, 10000);
+    for (uint32_t now = 10000; now <= 120000; now += 100) {
+        legacy.peer(false, now);  // Peer returns on ch11 at60s; home ch1 cannot hear it.
+        assert(!legacy.begin_local_join(now));
+    }
+
+    Policy policy;
+    IdleChannelSweep sweep;
+    PostHopReceiptGuard receipts;
+    ble_status::Decoder status;
+    policy.enable(0);
+    policy.peer(false, 0);
+    policy.pause(Policy::PauseReason::PeerMissing, 10000);
+    uint8_t channel = 1;
+    unsigned hops = 0, completed_sweeps = 0;
+    uint32_t first_received = 0, joined_at = 0, last_hop = 0;
+    // No BMS2 and no button/semantic token: only real validated BLS2 frames
+    // become available once a controller returning after60s is being heard.
+    for (uint32_t now = 10000; now <= 120000; now += 100) {
+        bool newly_received = false;
+        if (now >= 60000 && channel == 11 && now % 1000 == 0) {
+            uint8_t frame[] = {0x42, 0x4c, 0x53, 0x32, 0x12, 0x34, 0x56, 0x78,
+                0, 0, 0, 0, 0, 0x0b, 1, 2, 3, 4, 0, 0, 0};
+            const uint32_t sequence = now / 1000;
+            frame[8] = sequence >> 24; frame[9] = sequence >> 16;
+            frame[10] = sequence >> 8; frame[11] = sequence;
+            const uint16_t crc = ble_status::crc16(frame, 19);
+            frame[19] = crc >> 8; frame[20] = crc;
+            assert(status.accept(frame, sizeof(frame), now));
+            newly_received = true;
+            if (!first_received) first_received = now;
+        }
+        policy.peer(false, status.fresh(now), now);  // Paused/no playback is sufficient.
+        receipts.observe(status.fresh(now), newly_received, now);
+        policy.connected(false, now);
+        if (receipts.ready() && policy.begin_local_join(now)) { joined_at = now; break; }
+        const uint8_t next = sweep.tick(policy.idle_discovery_allowed(now), now);
+        if (next) {
+            if (hops) assert(now - last_hop >= IdleChannelSweep::DWELL_MS);
+            if (next == 1) ++completed_sweeps;
+            ++hops; last_hop = now;
+            if (channel != next) { receipts.require(); status.reset(); }
+            channel = next;
+        }
+    }
+    assert(completed_sweeps >= 2);  // Survived the first complete offline sweep.
+    assert(first_received >= 60000 && first_received < 85000);
+    assert(joined_at >= first_received + 3000 && joined_at < 90000);
+    assert(channel == 11);  // Fresh frames held the found channel through stability.
+    assert(policy.attempts() == 1);
+}
+
+static void cached_post_hop_snapshot_cannot_spend_an_ap_attempt() {
+    Policy policy;
+    PostHopReceiptGuard receipts;
+    policy.enable(0);
+    unavailable(policy, 0);
+    receipts.require();
+    // A delayed native BMS2 completed after a hop. Its decoder TTL can remain
+    // fresh for6s; that alone is not3s of progressing on-channel reception.
+    policy.peer(true, 20000);
+    receipts.observe(true, true, 20000);
+    for (uint32_t now = 20100; now <= 23000; now += 100) {
+        policy.peer(true, now);
+        receipts.observe(true, false, now);
+        assert(!receipts.ready());
+    }
+    assert(policy.local_join_due(23000));  // Legacy freshness-only gate was open.
+    assert(policy.attempts() == 0);
+    receipts.observe(true, true, 23100);  // A new validated publication spans the hold.
+    assert(receipts.ready());
+    assert(policy.begin_local_join(23100));
+    receipts.observe(true, false, 23200);
+    assert(!receipts.ready());  // Each deferred attempt needs an actual new receipt.
+    receipts.observe(false, false, 30000);
+    receipts.observe(true, true, 40000);
+    assert(!receipts.ready());
+    receipts.observe(true, true, 43000);
+    assert(receipts.ready());
+
+    receipts.require();
+    const uint32_t near_wrap = UINT32_MAX - 1000;
+    receipts.observe(true, true, near_wrap);
+    receipts.observe(true, true, near_wrap + 2999);
+    assert(!receipts.ready());
+    receipts.observe(true, true, near_wrap + 3000);
+    assert(receipts.ready());
+}
+
 int main() {
     startup_orders_and_health();
     bounded_ap_failures_and_rearm();
@@ -216,4 +380,8 @@ int main() {
     wrap_safe();
     validated_status_without_playback();
     bounded_committed_identity_checks();
+    passive_sweep_bounds_and_wrap();
+    passive_cancellation_and_ap_budget();
+    late_controller_without_input_closes_circular_wait();
+    cached_post_hop_snapshot_cannot_spend_an_ap_attempt();
 }

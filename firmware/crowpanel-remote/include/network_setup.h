@@ -12,7 +12,9 @@ void network_setup_tick();
 void network_setup_show(_lv_obj_t *parent);
 bool network_setup_ready();
 // Pass only freshness from the validated BMS2/BLS2 decoders, not radio ACKs.
-void network_setup_peer_fresh(bool playback_fresh, bool status_fresh);
+void network_setup_peer_fresh(bool playback_fresh, bool status_fresh, bool newly_received);
+// Arm progressing-receipt confirmation only after an actual passive channel hop.
+void network_setup_note_idle_channel_change();
 bool network_setup_take_rescan_request();
 void network_setup_set_retry_callback(void (*callback)());
 // Credential export must quiesce the artwork/TLS worker first. prepare may
@@ -29,6 +31,8 @@ void network_setup_resume_after_sleep();
 bool network_setup_serial_busy();
 // Channel changes are forbidden while the station is scanning or joining.
 bool network_setup_radio_busy();
+// Committed, automatically paused/missing peer only; excludes trial/export/sleep.
+bool network_setup_idle_discovery_allowed();
 
 namespace network_setup_protocol {
 

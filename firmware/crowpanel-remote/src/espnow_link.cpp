@@ -8,6 +8,7 @@
 
 #include "espnow_link.h"
 #include "network_setup.h"
+#include "network_recovery_policy.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -54,6 +55,7 @@ uint32_t      g_seq         = 0;
 uint8_t       g_channel     = 0;  // 0 = peer not found yet
 uint8_t       g_fail_streak = 0;
 uint32_t      g_last_scan_ms = 0;
+network_recovery::IdleChannelSweep g_idle_sweep;
 
 volatile bool g_waiting   = false;
 volatile bool g_wait_ack  = false;
@@ -121,6 +123,7 @@ uint8_t score_channel(uint8_t ch) {
 // when it is absent. Called at boot and, rate-limited, after repeated
 // undelivered tokens in case the unit's channel moved.
 void discover_channel() {
+    g_idle_sweep.postpone(millis());
     g_last_scan_ms = millis();
     if (WiFi.status() == WL_CONNECTED) {
         // Associated peers follow their common AP; channel hopping breaks it.
@@ -233,6 +236,7 @@ bool espnow_link_init(espnow_log_fn logf) {
 }
 
 bool espnow_link_suspend() {
+    g_idle_sweep.postpone(millis());
     g_ready = false;
     g_waiting = g_wait_ack = false;
     g_fail_streak = 0;
@@ -249,6 +253,9 @@ bool espnow_link_suspend() {
 
 bool espnow_send_token(const char *token, uint32_t *sequence) {
     if (!g_ready || token == nullptr) return false;
+    // Controls own the radio first. Passive recovery has no send callback in
+    // flight and cannot be mistaken for this token's delivery acknowledgement.
+    g_idle_sweep.postpone(millis());
     // Undelivered tokens in a row: the unit may have rebooted onto another
     // channel (or been off at boot). Rescan before sending this one.
     if (g_fail_streak >= RESCAN_AFTER_FAILS &&
@@ -302,6 +309,38 @@ void espnow_link_rescan() {
     // A waking display must await a new snapshot instead of treating frames
     // buffered before light sleep as current source data.
     clear_rx();
+}
+
+bool espnow_link_idle_recovery_tick(bool allowed) {
+    const uint32_t now = millis();
+    const uint8_t channel = g_idle_sweep.tick(allowed && g_ready &&
+        WiFi.status() != WL_CONNECTED && !network_setup_radio_busy(), now);
+    if (!channel) return false;
+    uint8_t current = 0;
+    wifi_second_chan_t secondary;
+    const esp_err_t current_result = esp_wifi_get_channel(&current, &secondary);
+    if (current_result != ESP_OK) {
+        g_idle_sweep.postpone(millis());
+        if (g_log) g_log("[espnow] passive recovery channel read failed: %d", (int)current_result);
+        return false;
+    }
+    if (current == channel && secondary == WIFI_SECOND_CHAN_NONE) {
+        g_channel = channel;
+        return false;  // Same-channel listening does not invalidate any RX state.
+    }
+    // Drain-before-hop is done by the main task. Drop queued bytes on both
+    // sides of the channel change; its caller also clears partial assemblies.
+    clear_rx();
+    const esp_err_t result = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+    clear_rx();
+    if (result != ESP_OK) {
+        g_idle_sweep.postpone(millis());  // Cooldown starts after the failed API returns.
+        if (g_log) g_log("[espnow] passive recovery channel change failed: %d", (int)result);
+        return false;
+    }
+    g_channel = channel;
+    if (g_log) g_log("[espnow] passive recovery listening ch%u", (unsigned)channel);
+    return true;
 }
 
 uint32_t espnow_link_retries() { return g_retries; }

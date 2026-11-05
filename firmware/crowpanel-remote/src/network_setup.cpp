@@ -50,6 +50,7 @@ uint32_t g_connect_started = 0, g_retry_at = 0;
 bool g_network_enabled = false;
 network_recovery::Policy g_recovery;
 network_recovery::CommittedTargetCheck g_target_check;
+network_recovery::PostHopReceiptGuard g_post_hop_receipts;
 bool g_suspended = false, g_resume_network = false;
 bool g_rescan_requested = false;
 void (*g_retry_callback)() = nullptr;
@@ -219,6 +220,7 @@ enum class JoinOrigin : uint8_t { Explicit, Automatic, Resume };
 
 void begin_join(const Profile &profile, bool applying, JoinOrigin origin = JoinOrigin::Explicit) {
     g_target_check.clear();
+    g_post_hop_receipts.reset();
     g_target = profile;
     g_applying = applying;
     g_retry_pending = false;
@@ -609,7 +611,9 @@ void network_setup_tick() {
         g_recovery.pause(network_recovery::Policy::PauseReason::PeerMissing, now);
         WiFi.setAutoReconnect(false);
         WiFi.disconnect(false, false);
-        g_rescan_requested = true;
+        // A trial retains its existing explicit one-shot recovery. Committed
+        // recovery listens cooperatively below instead of a blocking scan.
+        if (g_trial) g_rescan_requested = true;
         if (g_trial) {
             g_trial_connected = false;
             snprintf(g_apply_result, sizeof(g_apply_result), "FAILED_PEER_LINK");
@@ -622,7 +626,7 @@ void network_setup_tick() {
     }
     if (!g_network_enabled && !g_connecting && !g_scanning && !g_retry_pending && !g_trial &&
         !g_export_open && !network_setup_serial_busy() && g_active.valid &&
-        g_recovery.begin_local_join(now)) {
+        g_post_hop_receipts.ready() && g_recovery.begin_local_join(now)) {
         // Local AP association only: never NET_RETRY or a controller restart.
         begin_join(g_active, false, JoinOrigin::Automatic);
         set_status("Audio-unit link restored. Reconnecting this panel to its saved network...");
@@ -680,9 +684,21 @@ bool network_setup_radio_busy() {
     return !g_suspended && (g_connecting || g_scanning || g_retry_pending);
 }
 
-void network_setup_peer_fresh(bool playback_fresh, bool status_fresh) {
+bool network_setup_idle_discovery_allowed() {
+    return g_started && !g_suspended && !g_network_enabled && !g_connecting &&
+           !g_scanning && !g_retry_pending && !g_trial && !g_applying &&
+           !g_export_open && !g_export_secret_tx && !g_export_release_pending &&
+           !g_completion_pending && !network_setup_serial_busy() && g_active.valid &&
+           WiFi.status() != WL_CONNECTED && g_recovery.idle_discovery_allowed(millis());
+}
+
+void network_setup_note_idle_channel_change() { g_post_hop_receipts.require(); }
+
+void network_setup_peer_fresh(bool playback_fresh, bool status_fresh, bool newly_received) {
     if (g_suspended) return;
-    g_recovery.peer(playback_fresh, status_fresh, millis());
+    const uint32_t now = millis();
+    g_recovery.peer(playback_fresh, status_fresh, now);
+    g_post_hop_receipts.observe(playback_fresh || status_fresh, newly_received, now);
 }
 
 bool network_setup_take_rescan_request() {

@@ -124,6 +124,9 @@ public:
     }
 
     bool auto_paused() const { return enabled_ && paused_; }
+    // Finding a returning peer must not itself depend on receiving that peer.
+    // Listening never consumes/rearms the separate bounded AP-join budget.
+    bool idle_discovery_allowed(uint32_t now) const { return auto_paused() && peer_missing(now); }
     bool exhausted() const { return auto_paused() && attempts_ >= MAX_ATTEMPTS; }
     uint8_t attempts() const { return attempts_; }
     PauseReason reason() const { return reason_; }
@@ -141,6 +144,77 @@ private:
     uint32_t retry_wait_ms() const {
         return attempts_ == 0 ? 5000 : attempts_ == 1 ? 30000 : 60000;
     }
+};
+
+// Cooperative passive listening: no probe sends, waits or semantic commands.
+// The caller performs at most the single returned channel change per tick.
+class IdleChannelSweep {
+public:
+    static const uint32_t DWELL_MS = 2500;
+    static const uint32_t COOLDOWN_MS = 10000;
+    static const uint8_t CHANNELS = 13;
+
+    IdleChannelSweep() : channel_(0), cooling_(false), changed_at_(0) {}
+
+    uint8_t tick(bool allowed, uint32_t now) {
+        if (!allowed) { cancel(now); return 0; }
+        if (!channel_) {
+            if (cooling_ && static_cast<uint32_t>(now - changed_at_) < COOLDOWN_MS) return 0;
+            channel_ = 1;
+            cooling_ = false;
+            changed_at_ = now;
+            return channel_;
+        }
+        if (static_cast<uint32_t>(now - changed_at_) < DWELL_MS) return 0;
+        changed_at_ = now;  // Never catch up with multiple hops after a delayed tick.
+        if (channel_ < CHANNELS) return ++channel_;
+        channel_ = 0;
+        cooling_ = true;
+        return 0;
+    }
+
+    void cancel(uint32_t now) {
+        if (channel_) postpone(now);
+    }
+
+    // User controls and native errors defer background listening, even between sweeps.
+    void postpone(uint32_t now) { channel_ = 0; cooling_ = true; changed_at_ = now; }
+    bool active() const { return channel_ != 0; }
+
+private:
+    uint8_t channel_;
+    bool cooling_;
+    uint32_t changed_at_;
+};
+
+// Software queue clearing cannot fence a delayed native callback. After a hop,
+// require newly validated publications spanning the stability window, and spend
+// an AP attempt only on a new receipt, never on TTL-retained freshness alone.
+class PostHopReceiptGuard {
+public:
+    PostHopReceiptGuard() { reset(); }
+    void reset() { required_ = have_ = received_ = false; first_ = last_ = 0; }
+    void require() { reset(); required_ = true; }
+
+    void observe(bool fresh, bool newly_received, uint32_t now) {
+        received_ = false;
+        if (!required_) return;
+        if (!fresh) { have_ = false; return; }
+        if (newly_received) {
+            if (!have_) { first_ = now; have_ = true; }
+            last_ = now;
+            received_ = true;
+        }
+    }
+
+    bool ready() const {
+        return !required_ || (have_ && received_ &&
+            static_cast<uint32_t>(last_ - first_) >= Policy::PEER_STABLE_MS);
+    }
+
+private:
+    bool required_, have_, received_;
+    uint32_t first_, last_;
 };
 
 }  // namespace network_recovery

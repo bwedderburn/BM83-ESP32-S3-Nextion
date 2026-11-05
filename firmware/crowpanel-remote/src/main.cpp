@@ -933,7 +933,8 @@ void loop() {
     const uint32_t now = millis();
     // Validated transport health is separate from playback-data freshness.
     // Fresh BLE status proves the peer is present even if BMS2 is delayed.
-    network_setup_peer_fresh(g_now_playing.fresh(now), g_ble_control.status.fresh(now));
+    network_setup_peer_fresh(g_now_playing.fresh(now), g_ble_control.status.fresh(now),
+                             snapshot_changed || ble_changed);
     network_setup_tick();
     if (network_setup_take_rescan_request()) {
         g_now_playing.reset();
@@ -941,6 +942,15 @@ void loop() {
         ui_set_now_playing(millis());
         ui_set_ble(millis());
         espnow_link_rescan();
+    }
+    // Process validated RX first. A fresh BMS2 or BLS2 holds its channel; only
+    // actual hops discard partial decodes, never each tick of the 3s hold.
+    if (espnow_link_idle_recovery_tick(network_setup_idle_discovery_allowed() &&
+                                     !preparing_sleep && g_ble_control.result != ble_control::WAITING)) {
+        network_setup_note_idle_channel_change();
+        g_now_playing.reset();
+        g_ble_control.reset();
+        snapshot_changed = ble_changed = true;
     }
     static uint32_t last_playback_refresh = 0;
     if (snapshot_changed || ble_changed || now - last_playback_refresh >= 250) {
