@@ -20,7 +20,8 @@ STUBS = r"""
 
 enum { BLE_STORE_OBJ_TYPE_OUR_SEC = 1, BLE_STORE_OBJ_TYPE_PEER_SEC, BLE_STORE_OBJ_TYPE_CCCD,
        BLE_STORE_OBJ_TYPE_PEER_ADDR = 6, BLE_STORE_OBJ_TYPE_LOCAL_IRK, BLE_STORE_OBJ_TYPE_CSFC };
-enum { NVS_READONLY, ESP_ERR_NVS_NOT_FOUND = 0x1102, BLE_HS_ESTORE_FAIL = 28 };
+enum { NVS_READONLY, ESP_ERR_NVS_NOT_FOUND = 0x1102, ESP_ERR_NVS_INVALID_HANDLE = 0x1107,
+       ESP_ERR_NVS_INVALID_LENGTH = 0x110c, BLE_HS_ESTORE_FAIL = 28 };
 typedef unsigned nvs_handle_t;
 typedef struct { uint8_t type, val[6]; } ble_addr_t;
 struct ble_store_value_sec {
@@ -54,6 +55,7 @@ union ble_store_value {
 
 static union ble_store_value nvs_records[2];
 static size_t nvs_sizes[2];
+static int nvs_errors[2];
 static unsigned opened, closed;
 
 static int nvs_open(const char *name, int mode, nvs_handle_t *handle) {
@@ -65,6 +67,7 @@ static int nvs_get_blob(nvs_handle_t handle, const char *key, void *out, size_t 
     assert(handle == opened && closed + 1 == opened);
     int index = !strcmp(key, "our_sec_1") ? 0 : !strcmp(key, "our_sec_2") ? 1 : -1;
     if (index < 0 || !nvs_sizes[index]) { return ESP_ERR_NVS_NOT_FOUND; }
+    if (nvs_errors[index]) { return nvs_errors[index]; }
     assert(*size >= nvs_sizes[index]);
     *size = nvs_sizes[index];
     memcpy(out, &nvs_records[index], *size);
@@ -114,14 +117,31 @@ int main(void) {
     b.sec.ltk[0] ^= 1;
     memcpy(&nvs_records[1], &b, sizeof(b));
     nvs_sizes[0] = nvs_sizes[1] = sizeof(a.sec);
-    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a) == 0);
+    int detail = -1;
+    // The first slot has the same key but a different LTK. A later semantic
+    // match succeeds and discards the earlier diagnostic candidate.
+    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a, &detail) == 0);
+    assert(detail == 0);
     assert(opened == 1 && closed == 1);
     nvs_records[1].sec.authenticated = 0;
-    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a) == BLE_HS_ESTORE_FAIL);
+    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a, &detail) == BLE_HS_ESTORE_FAIL);
+    assert(detail == -(0x5000 + 16 + 3));
+    nvs_records[0].sec.peer_addr.type ^= 1;
+    nvs_records[1].sec.peer_addr.val[0] ^= 1;
+    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a, &detail) == BLE_HS_ESTORE_FAIL);
+    assert(detail == -(0x5000 + 16 + 2));
     nvs_sizes[0]--;
     memcpy(&nvs_records[1], &b, sizeof(b));
-    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a) == BLE_HS_ESTORE_FAIL);
-    assert(opened == 3 && closed == 3);
+    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a, &detail) == BLE_HS_ESTORE_FAIL);
+    assert(detail == -(0x5000 + 16 + 1));
+    nvs_sizes[0]++;
+    nvs_errors[0] = ESP_ERR_NVS_INVALID_LENGTH;
+    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a, &detail) == ESP_ERR_NVS_INVALID_LENGTH);
+    assert(detail == -(0x5000 + 16 + 1));
+    nvs_errors[0] = ESP_ERR_NVS_INVALID_HANDLE;
+    assert(persistent_match(BLE_STORE_OBJ_TYPE_OUR_SEC, &a, &detail) == ESP_ERR_NVS_INVALID_HANDLE);
+    assert(detail == 0);
+    assert(opened == 6 && closed == 6);
 
     b.sec.csrk[0] ^= 1;
     assert(!same_store_record(BLE_STORE_OBJ_TYPE_PEER_SEC, &a, &b));
@@ -184,7 +204,11 @@ def test_production_nvs_matching_uses_semantic_records(tmp_path):
         pytest.skip("Production persistence test requires the established Linux/WSL GCC builder")
     source = SOURCE.read_text()
     bodies = []
-    for name in ("store_size", "store_prefix", "same_store_address", "same_store_record", "persistent_match"):
+    detail_enum = re.search(r"^enum \{ DURABLE_SIZE[^\n]+\};$", source, re.M)
+    assert detail_enum is not None
+    bodies.append(detail_enum.group())
+    for name in ("store_size", "store_prefix", "same_store_address", "same_store_record", "same_store_key",
+                 "durable_error_code", "persistent_match"):
         definition = re.search(rf"^static [^\n]*\b{name}\([^\n]*\).*?^\}}", source, re.M | re.S)
         assert definition is not None, name
         bodies.append(definition.group())
