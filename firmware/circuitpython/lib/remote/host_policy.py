@@ -251,6 +251,15 @@ class HostPolicyPublisher:
         if status.get("version") != 1:
             self.error = 1
             return False
+        try:
+            return self._request_action(command, status)
+        except Exception:
+            # A host-control failure must not stop the media and UART loop.
+            self.result, self.error = 2, 10
+            self._policy_request = self._alias_pending = False
+            return False
+
+    def _request_action(self, command, status):
         opcode, target = command["opcode"], command["target"]
         peers = status.get("peers", ())
         if opcode in (2, 4):
@@ -261,7 +270,12 @@ class HostPolicyPublisher:
                     or command["bond_generation"] != status.get("bond_generation")):
                 self.error = 4
                 return False
-            peer = next((p for p in peers if p["id"] == target), None)
+            # CircuitPython's next() accepts no default argument.
+            peer = None
+            for candidate in peers:
+                if candidate["id"] == target:
+                    peer = candidate
+                    break
             if peer is None or opcode == 2 and not peer["resumable"]:
                 self.error = 5
                 return False

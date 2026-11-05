@@ -148,6 +148,46 @@ def test_paired_sender_dispatch_cancels_hold_but_never_touches_audio_or_calls_na
     assert backend.adapter.calls == [("PAUSED", None, 60)]
 
 
+def test_saved_peer_selection_supports_circuitpython_next_arity(monkeypatch):
+    # CircuitPython has next(iterator), unlike CPython's optional default.
+    def circuitpython_next(iterator):
+        return next(iterator)
+
+    monkeypatch.setattr("remote.host_policy.next", circuitpython_next, raising=False)
+    backend, sink, clock = Backend(), Sink(), Clock()
+    publisher = HostPolicyPublisher(sink, backend, 1, clock)
+    admit(publisher, sink)
+    missing = decode_command(encode_command(1, 2, 1, 2, 1, "0000000000000001"))
+    assert not publisher.request_host(missing)
+    assert (publisher.result, publisher.error) == (2, 5)
+    backend.owner.tick()
+    assert backend.adapter.calls == []
+
+    select = decode_command(encode_command(1, 2, 2, 2, 1, OTHER))
+    assert publisher.request_host(select)
+    backend.owner.tick()
+    assert backend.adapter.calls == [("AUTO", OTHER, 60)]
+
+
+def test_host_action_exception_rejects_current_request_and_accepts_next(monkeypatch):
+    backend, sink, clock = Backend(), Sink(), Clock()
+    publisher = HostPolicyPublisher(sink, backend, 1, clock)
+    admit(publisher, sink)
+    select = decode_command(encode_command(1, 2, 1, 2, 1, HOST))
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "request_host_policy", mock.Mock(side_effect=TypeError("adapter error")))
+        assert not publisher.request_host(select)
+    _, body = drain_one(publisher, sink)
+    assert body[1:3] == bytes((2, 10)) and body[3:11] == number(2)+number(1)
+    backend.owner.tick()
+    assert backend.adapter.calls == []
+
+    select = decode_command(encode_command(1, 2, 2, 2, 1, HOST))
+    assert publisher.request_host(select)
+    backend.owner.tick()
+    assert backend.adapter.calls == [("AUTO", HOST, 60)]
+
+
 def test_replay_session_and_generation_checks_never_mutate_native_or_retarget():
     backend, sink, clock = Backend(), Sink(), Clock()
     publisher = HostPolicyPublisher(sink, backend, 1, clock)
