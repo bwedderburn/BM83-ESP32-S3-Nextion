@@ -43,9 +43,12 @@ source mute state to synchronize. There is also no verified absolute-volume
 feedback: counting HID requests cannot produce a trustworthy volume percentage.
 
 The optional [Universe badge add-on](addons/universe-badge/README.md) and matching
-authenticated receiver source are included. Their integration and reliability
-work remain subject to the [physical acceptance gates](docs/reliability/README.md).
-Host tests do not establish stable radio, audio or screen behavior.
+authenticated receiver source are included. The
+[November 4 B-Intel Phase 1 run](docs/reliability/phase1-bintel-2026-11-04.md)
+passed its agreed measured, physical and restoration/recovery scope. Other
+platforms and power-order cases remain subject to the
+[acceptance gates](docs/reliability/README.md). Host tests do not establish stable
+radio, audio or screen behavior.
 
 ## Start here
 

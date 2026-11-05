@@ -3,8 +3,12 @@
 [Private Project](https://github.com/users/bwedderburn/projects/3) |
 [Milestone](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/milestone/1)
 
-Owner: @bwedderburn. This is a host-only investigation, not hardware authorization
-or Phase 1 acceptance. Codex now delivers validated work by direct commit/push;
+Owner: @bwedderburn. The separately authorized November 4 B-Intel hardware run
+completed its agreed Phase 1 scope; see the
+[dated acceptance record](phase1-bintel-2026-11-04.md). Phase 2 Disconnect + Select
+host source work may now proceed, with its own build and physical-test gates.
+Other hosts, power orders and native-failure cases are not accepted by that result.
+Codex delivers validated work by direct commit/push;
 see [the current maintenance handoff](DIRECT-MAINTENANCE.md). Historical drafts:
 [BM83 #189](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/pull/189) and
 [Universe #10](https://github.com/bwedderburn/github-universe-2026/pull/10).
@@ -21,10 +25,11 @@ see [the current maintenance handoff](DIRECT-MAINTENANCE.md). Historical drafts:
 | Hash/PSA lifetime hazard in pinned source | Conditional on actual native backend; deployed binary/configuration and causality unproven |
 | Host tests and simulator cases passed | Neither proves current physical screens, live metadata, controls or safe runtime teardown |
 
-The last verified restore used the original application with new receiver files
-inert, and the badge was confirmed at its launcher. Candidates, exact private
-manifests and raw captures stay outside Git. Do not operate the device to refresh
-this record during repository work.
+The historical observations above retain their original classifications. The
+November 4 B-Intel run later passed its scoped measured and physical checks,
+restored the exact original 127 controller files, and verified CrowPanel recovery
+without manual reconnect. Candidates, private manifests and raw captures stay
+outside Git. Repository work itself does not authorize device operation.
 
 ## Work graph
 
@@ -151,9 +156,10 @@ DMA availability. Unsupported queue/socket counters are unavailable, not zero.
 | --- | --- | --- |
 | macOS / Apple Music / helper off | Real track correlation; native origin or honest unsupported result | Not accepted |
 | macOS / Apple Music / helper on | Fresh receiver/badge title/artist; controls and advancing link | Not accepted |
-| Windows / claimed audio + BLE HID stack | Exact OS/stack/runtime, supported paths, reconnect and physical controls | Not tested |
+| Windows / B-Intel Apple Music + separate BLE HID | Qualified measured window, owner screens/buttons, exact restoration and automatic CrowPanel recovery | [Accepted scoped run, 2026-11-04](phase1-bintel-2026-11-04.md); BM83 audio power-cycle wedge remains separate |
 | Linux / claimed audio + BLE HID stack | Exact OS/stack/runtime, supported paths, reconnect and physical controls | Not tested |
 
 Record exact versions privately and publish only sanitized coverage/results.
-Do not infer Windows/Linux support from macOS. Phase 2 needs its own complete
-bond-preserving disconnect/re-enable matrix after Phase 1 acceptance.
+Do not infer another platform or power-order result from the accepted B-Intel
+case. Phase 2 needs its own complete bond-preserving disconnect/select-host
+matrix; the dated B-Intel acceptance supplies its agreed Phase 1 prerequisite.

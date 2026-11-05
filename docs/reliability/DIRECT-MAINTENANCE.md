@@ -1,5 +1,22 @@
 # Direct maintenance handoff — 2026-11-01
 
+## Dated update — B-Intel acceptance, 2026-11-04
+
+The owner subsequently authorized the B-Intel hardware run and accepted its
+agreed Phase 1 scope after the measured window, physical controls, exact original
+restoration and automatic CrowPanel recovery passed. See the
+[sanitized acceptance record](phase1-bintel-2026-11-04.md) for all ten gates,
+measured limits and remaining native/platform/power-order caveats. That dated
+result supersedes this historical handoff's offline-only and Phase-2-blocked
+status for the agreed B-Intel scope. It does not change repository approvals,
+branch/security policy, or authorize unrelated device operations. Phase 2
+Disconnect + Select host source work may now begin while preserving pairings
+and leaving host Bluetooth on; its own builds and physical matrix remain required.
+
+The sections below retain the November 1 maintenance history and its evidence
+boundaries. They are not a claim that the later authorized hardware run did not
+occur or that all other hardware cases have passed.
+
 The owner has paused Copilot usage because the monthly allowance is exhausted
 and authorized Codex to finish applicable work in both repositories and the Mac
 editor using tested direct commits and normal pushes to `origin/main`, without
