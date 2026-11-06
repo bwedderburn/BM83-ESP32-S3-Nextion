@@ -63,6 +63,90 @@ def ble_state(**changes):
     return value
 
 
+HOST = "0123456789abcdef"
+OTHER_HOST = "fedcba9876543210"
+
+
+def host_state(**changes):
+    value = {"state": "PAUSED", "requested": "PAUSED", "applied": "PAUSED", "flags": 65,
+             "target": None, "connected": None, "generation": 7, "operation": 10,
+             "request_operation": 0, "req_client": None, "req_seq": None, "remaining": 0,
+             "error_domain": "NONE", "error_code": 0, "peers": [[HOST, "B-Intel", True]],
+             "launch": "READY", "launch_ready": True, "launch_client": None, "launch_seq": None}
+    value.update(changes)
+    return value
+
+
+class HostControlTests(unittest.TestCase):
+    def test_disconnect_requires_correlated_new_operation_persisted_and_off_air(self):
+        control = models.HostControls()
+        self.assertTrue(control.accept(host_state(), 0))
+        control.begin("disconnect", None, 1, 2, 1)
+        control.accept(host_state(req_client=1, req_seq=2, request_operation=10), 2)
+        self.assertTrue(control.busy)
+        control.accept(host_state(req_client=1, req_seq=2, request_operation=11, operation=11, flags=67), 3)
+        self.assertTrue(control.busy)
+        control.accept(host_state(req_client=1, req_seq=2, request_operation=11, operation=11), 4)
+        self.assertEqual(control.result, "Disconnected. Pairings kept.")
+        self.assertEqual(control.state["peers"], [{"id": HOST, "alias": "B-Intel", "resumable": True}])
+
+    def test_select_does_not_confirm_other_host_or_missing_hid_subscription(self):
+        control = models.HostControls()
+        control.accept(host_state(), 0)
+        control.begin("select", HOST, 1, 3, 1)
+        ready = models.HID_READY_FLAGS | models.READY
+        state = host_state(state="CONNECTED", requested="AUTO", applied="AUTO", flags=ready,
+                           target=OTHER_HOST, connected=OTHER_HOST,
+                           req_client=1, req_seq=3, request_operation=11, operation=11)
+        control.accept(state, 2)
+        self.assertTrue(control.busy)
+        state.update(target=HOST, connected=HOST, flags=ready & ~32)
+        control.accept(state, 3)
+        self.assertTrue(control.busy)
+        state["flags"] = ready
+        control.accept(state, 4)
+        self.assertEqual(control.result, "Volume host connected")
+
+    def test_enrollment_and_launch_have_distinct_confirmations(self):
+        control = models.HostControls()
+        control.accept(host_state(), 0)
+        control.begin("enroll", None, 1, 4, 1)
+        control.accept(host_state(state="ENROLLING", requested="ENROLL", applied="ENROLL", flags=3,
+                                  remaining=59, operation=11, request_operation=11, req_client=1, req_seq=4), 2)
+        self.assertEqual(control.result, "Pairing window open")
+        control.accept(host_state(operation=11, request_operation=11, req_client=1, req_seq=4,
+                                  error_domain="POLICY", error_code=6), 3)
+        self.assertEqual(control.result, "Pairing window closed")
+        control.begin("open_windows", None, 1, 5, 4)
+        control.accept(host_state(launch="OPENED", launch_client=1, launch_seq=3), 5)
+        self.assertTrue(control.busy)
+        control.accept(host_state(launch="OPENED", launch_client=1, launch_seq=5), 6)
+        self.assertEqual(control.result, "BM83 Volume Remote opened")
+
+    def test_host_snapshot_rejects_malformed_or_duplicate_saved_rows(self):
+        for peers in ([[HOST, "line\nbreak", True]], [[HOST, "A", True], [HOST, "B", True]],
+                      [[HOST, "é" * 13, True]], [[HOST, "A", 1]], [[HOST, "\ud800", True]]):
+            with self.subTest(peers=peers):
+                self.assertFalse(models.valid_hosts(host_state(peers=peers)))
+
+    def test_host_select_wire_keeps_selected_generation_and_offline_drops_retry(self):
+        wire = FakeSocket()
+        with patch.object(transport.socket, "socket", return_value=wire):
+            remote = transport.Remote(*PEER, KEY)
+        remote.unit, remote.client = "aabbccdd", 1
+        remote.hosts.accept(host_state(), 0)
+        self.assertTrue(remote.queue_host("select", 1, HOST))
+        remote.step(1)
+        sent, peer = wire.sent[0]
+        message = protocol.decode(KEY, sent)
+        self.assertEqual((peer, message["token"], message["target"], message["generation"]),
+                         (PEER, "HOST_SELECT", HOST, 7))
+        remote.step(151, connected=False)
+        remote.step(152, connected=True)
+        self.assertEqual([protocol.decode(KEY, frame)["token"] for frame, _ in wire.sent],
+                         ["HOST_SELECT", "STATUS"])
+
+
 class FakeSocket:
     def __init__(self):
         self.incoming = []

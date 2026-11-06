@@ -1,6 +1,8 @@
 """Ensure the production UI uses the tested model and preserves radio ownership."""
+import ast
 from pathlib import Path
 import re
+import string
 
 ROOT = Path(__file__).resolve().parents[1]
 CPP = ROOT / "firmware/crowpanel-remote/src"
@@ -69,3 +71,17 @@ def test_startup_and_recovery_only_retry_the_readonly_handshake():
     assert "espnow_send_host_request(frame, length)" in tick
     assert "send_request(" not in tick and "hp::SELECT" not in tick and "hp::ENROLL" not in tick
     assert "g_control.admitted(now)" in source
+
+
+def test_rename_keys_keep_digits_visible_in_both_letter_cases():
+    source = (CPP / "ble_host_ui.cpp").read_text(encoding="utf-8")
+    punctuation = set()
+    for mode, letters, case_key in (("LOWER", string.ascii_lowercase, "ABC"),
+                                    ("UPPER", string.ascii_uppercase, "abc")):
+        layout = section(source, f"ALIAS_{mode}_KEYS[]", "};")
+        keys = [ast.literal_eval(label) for label in re.findall(r'"(?:[^"\\]|\\.)*"', layout)]
+        assert keys[:10] == list("1234567890")
+        assert set(letters) <= set(keys)
+        assert case_key in keys and "Space" in keys and "1#" not in keys
+        punctuation.update(keys)
+    assert set(string.punctuation) <= punctuation

@@ -45,10 +45,12 @@ def method_class(names=("_wifi", "input"), **globals_):
                     if isinstance(node, ast.ClassDef) and node.name == "BM83Remote")
     helpers = [node for node in tree.body
                if isinstance(node, ast.FunctionDef) and node.name in ("fit_text", "wrap_text")]
+    constants = [node for node in tree.body if isinstance(node, ast.Assign)
+                 and getattr(node.targets[0], "id", None) in ("MENU_ROWS", "VOLUME_HOST_ACTIONS")]
     methods = [node for node in original.body
                if isinstance(node, ast.FunctionDef) and node.name in names]
     minimal_class = ast.ClassDef(name="BM83Remote", bases=[], keywords=[], body=methods, decorator_list=[])
-    isolated = ast.fix_missing_locations(ast.Module(body=helpers + [minimal_class], type_ignores=[]))
+    isolated = ast.fix_missing_locations(ast.Module(body=constants + helpers + [minimal_class], type_ignores=[]))
     namespace = dict(BUTTONS)
     namespace.update(globals_)
     exec(compile(isolated, str(APP / "__init__.py"), "exec"), namespace)
@@ -323,6 +325,41 @@ class MissingNetworkSupportTests(unittest.TestCase):
 
 
 
+class HeaderBatteryTests(unittest.TestCase):
+    def app(self, battery_level):
+        screen = Mock()
+        screen.measure_text.return_value = (80, 12)
+        app = method_class(names=("draw", "_draw_battery"), screen=screen,
+                           badge=SimpleNamespace(battery_level=battery_level), elapsed=models.elapsed,
+                           BATTERY_REFRESH_MS=10000,
+                           BG="BG", WHITE="WHITE", MUTED="MUTED", ACCENT="ACCENT", GREEN="GREEN",
+                           RED="RED")()
+        app.battery_read_at = app.battery_percent = None
+        app.config_error = False
+        app.page = "now"
+        app.unit_status = "Authenticated"
+        app._draw_now = Mock()
+        return app, screen
+
+    def test_battery_fill_sits_above_status_and_reuses_recent_reading(self):
+        reading = Mock(return_value=50)
+        app, screen = self.app(reading)
+        app.draw(100)
+        screen.text.assert_any_call("Authenticated", 210, 13)
+        screen.rectangle.assert_any_call(285, 2, 22, 9)
+        screen.rectangle.assert_any_call(287, 4, 9, 5)
+        app.draw(10099)
+        reading.assert_called_once_with()
+        app.draw(10100)
+        self.assertEqual(reading.call_count, 2)
+
+    def test_unavailable_battery_keeps_the_header_visible(self):
+        app, screen = self.app(Mock(side_effect=OSError))
+        app.draw(100)
+        screen.rectangle.assert_called_once_with(screen.clip)
+        screen.text.assert_any_call("Authenticated", 210, 13)
+
+
 class HeaderStatusTests(unittest.TestCase):
     def app(self, connected, remote, remote_class=None):
         app = method_class(names=("step",), Remote=remote_class)()
@@ -485,6 +522,95 @@ class LocalRetryTests(unittest.TestCase):
         app.artwork.retry.assert_not_called()
         self.assertTrue(app.artwork_retry_pending)
         self.assertEqual(app.feedback, self.constant())
+
+
+class VolumeHostMenuTests(unittest.TestCase):
+    def setUp(self):
+        self.badge = FakeBadge()
+        self.screen = FakeScreen()
+        self.app = method_class(
+            names=("input", "_settings", "_host_state", "_saved_hosts", "_saved_index", "_volume_input",
+                   "_draw_menu", "_host_name", "_draw_saved_hosts", "_draw_volume"),
+            badge=self.badge, screen=self.screen, shape=SimpleNamespace(rounded_rectangle=lambda *args: args),
+            clamp_setting_index=models.clamp_setting_index, display_text=models.display_text,
+            HID_READY_FLAGS=models.HID_READY_FLAGS,
+            **{name: name for name in ("ACCENT", "BG", "MUTED", "PANEL", "WHITE")},
+        )()
+        self.app.page, self.app.setting_index, self.app.hold_action = "settings", 5, None
+        self.app.erase_confirm, self.app.sample_mode, self.app.wifi_ready = False, False, True
+        self.app.ble = models.BleControl()
+        self.state = {"state": "PAUSED", "flags": 65, "connected": None, "target": None,
+                      "remaining": 0, "launch_ready": True, "launch": "READY", "peers": []}
+        self.hosts = SimpleNamespace(fresh=Mock(return_value=True), state=self.state, result="")
+        self.remote = SimpleNamespace(hosts=self.hosts, host_menu=Mock(), queue_host=Mock(return_value=True))
+        self.app.remote = self.remote
+
+    def press(self, *buttons):
+        self.badge.frame(pressed=buttons)
+        self.app.input(100)
+
+    def test_opens_menu_and_queues_only_explicit_actions(self):
+        self.press("select")
+        self.remote.host_menu.assert_called_once_with(True)
+        self.app._draw_volume(100)
+        labels = {text.strip().removeprefix("> ") for text, *_ in self.screen.texts}
+        self.assertTrue({"Disconnect", "Select saved host", "Pair new host", "Open Windows app"} <= labels)
+        self.remote.queue_host.assert_not_called()
+        self.press("select")
+        self.press("up")
+        self.press("select")
+        self.press("up")
+        self.press("select")
+        self.assertEqual([call.args for call in self.remote.queue_host.call_args_list],
+                         [("disconnect", 100), ("open_windows", 100), ("enroll", 100)])
+        self.press("back")
+        self.assertEqual(self.app.page, "settings")
+        self.remote.host_menu.assert_called_with(False)
+
+    def test_selects_last_saved_id_even_when_the_list_reorders(self):
+        target = "00112233902412ad"
+        ids = ["%016x" % (i + 1) for i in range(7)] + [target]
+        self.state["peers"] = [{"id": value, "alias": "", "resumable": True} for value in ids]
+        self.press("select")
+        self.press("down")
+        self.press("select")
+        self.assertEqual(self.app.page, "saved_hosts")
+        self.app._draw_saved_hosts(100)
+        for _ in range(7):
+            self.press("down")
+        self.screen.texts.clear()
+        self.app._draw_saved_hosts(100)
+        self.assertIn("> Saved host 902412ad", [text for text, *_ in self.screen.texts])
+        self.state["peers"].reverse()
+        self.press("select")
+        self.remote.queue_host.assert_called_once_with("select", 100, host=target)
+        self.assertEqual(self.app.page, "volume")
+
+    def test_stale_or_removed_row_never_selects_a_different_host(self):
+        self.state["peers"] = [{"id": "00112233902412ad", "alias": "", "resumable": True}]
+        self.press("select")
+        self.press("down")
+        self.press("select")
+        self.app._draw_saved_hosts(100)
+        self.hosts.fresh.return_value = False
+        self.press("select")
+        self.hosts.fresh.return_value = True
+        self.state["peers"][0] = {"id": "00112233aabbccdd", "alias": "Other", "resumable": True}
+        self.press("select")
+        self.remote.queue_host.assert_not_called()
+
+    def test_draws_pairing_countdown_and_windows_acknowledgement(self):
+        self.press("select")
+        self.state.update(state="ENROLLING", remaining=41)
+        self.hosts.result = "Pairing window open"
+        self.app._draw_volume(100)
+        labels = [text for text, *_ in self.screen.texts]
+        self.assertIn("Pairing window: 41 seconds left", labels)
+        self.assertIn("Pairing window open", labels)
+        self.state.update(state="PAUSED", remaining=0)
+        self.hosts.result = "BM83 Volume Remote opened"
+        self.app._draw_volume(100)
+        self.assertIn("BM83 Volume Remote opened", [text for text, *_ in self.screen.texts])
 
 
 if __name__ == "__main__":

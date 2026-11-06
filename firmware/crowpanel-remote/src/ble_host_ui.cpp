@@ -1,6 +1,7 @@
 #include "ble_host_ui.h"
 #include "ble_host_policy.h"
 #include "metadata_fonts.h"
+#include "windows_launch.h"
 #include <Arduino.h>
 #include <esp_system.h>
 #include <stdio.h>
@@ -12,9 +13,53 @@ espnow_log_fn g_log = nullptr;
 lv_obj_t *g_modal = nullptr, *g_status = nullptr, *g_hosts = nullptr;
 lv_obj_t *g_hint = nullptr;
 lv_obj_t *g_disconnect = nullptr, *g_connect = nullptr, *g_enroll = nullptr, *g_rename = nullptr;
+lv_obj_t *g_open_windows = nullptr, *g_launch_status = nullptr;
 lv_obj_t *g_alias_modal = nullptr, *g_alias_text = nullptr, *g_alias_error = nullptr;
 bool g_refreshing = false;
 char g_options[440] = {};
+
+const char *ALIAS_LOWER_KEYS[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", LV_SYMBOL_BACKSPACE, "\n",
+    "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "-", "_", "\n",
+    "a", "s", "d", "f", "g", "h", "j", "k", "l", ".", "@", ":", "\n",
+    "z", "x", "c", "v", "b", "n", "m", "/", "'", "\"", "?", "\n",
+    "!", "#", "$", "%", "&", "*", "(", ")", "+", "=", "\n",
+    "ABC", ",", ";", "[", LV_SYMBOL_LEFT, "Space", LV_SYMBOL_RIGHT, "]", "\\", ""
+};
+
+const char *ALIAS_UPPER_KEYS[] = {
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", LV_SYMBOL_BACKSPACE, "\n",
+    "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "-", "_", "\n",
+    "A", "S", "D", "F", "G", "H", "J", "K", "L", ".", "@", ":", "\n",
+    "Z", "X", "C", "V", "B", "N", "M", "/", "'", "\"", "?", "\n",
+    "<", ">", "{", "}", "^", "|", "~", "`", "(", ")", "\n",
+    "abc", ",", ";", "[", LV_SYMBOL_LEFT, "Space", LV_SYMBOL_RIGHT, "]", "\\", ""
+};
+
+void alias_keymap(lv_obj_t *keyboard, const char **keys) {
+    lv_btnmatrix_set_map(keyboard, keys);
+    lv_btnmatrix_set_btn_ctrl_all(keyboard, LV_BTNMATRIX_CTRL_CLICK_TRIG | LV_BTNMATRIX_CTRL_NO_REPEAT);
+    uint16_t index = 0;
+    for (const char * const *key = keys; **key; ++key) {
+        if (!strcmp(*key, "\n")) continue;
+        if (!strcmp(*key, "Space")) lv_btnmatrix_set_btn_width(keyboard, index, 4);
+        else if (!strcmp(*key, "ABC") || !strcmp(*key, "abc") || !strcmp(*key, LV_SYMBOL_BACKSPACE))
+            lv_btnmatrix_set_btn_width(keyboard, index, 2);
+        ++index;
+    }
+}
+
+void alias_key_pressed(lv_event_t *event) {
+    lv_obj_t *keyboard = lv_event_get_target(event);
+    const char *key = lv_btnmatrix_get_btn_text(keyboard, lv_btnmatrix_get_selected_btn(keyboard));
+    if (!key || !g_alias_text) return;
+    if (!strcmp(key, "ABC")) alias_keymap(keyboard, ALIAS_UPPER_KEYS);
+    else if (!strcmp(key, "abc")) alias_keymap(keyboard, ALIAS_LOWER_KEYS);
+    else if (!strcmp(key, LV_SYMBOL_LEFT)) lv_textarea_cursor_left(g_alias_text);
+    else if (!strcmp(key, LV_SYMBOL_RIGHT)) lv_textarea_cursor_right(g_alias_text);
+    else if (!strcmp(key, LV_SYMBOL_BACKSPACE)) lv_textarea_del_char(g_alias_text);
+    else lv_textarea_add_text(g_alias_text, !strcmp(key, "Space") ? " " : key);
+}
 
 void text(lv_obj_t *label, const char *value) {
     if (label && strcmp(lv_label_get_text(label), value)) lv_label_set_text(label, value);
@@ -107,6 +152,7 @@ void close_alias(lv_event_t *) {
 void close_modal(lv_event_t *) {
     if (g_modal) lv_obj_del(g_modal);
     g_modal = g_status = g_hosts = g_hint = g_disconnect = g_connect = g_enroll = g_rename = nullptr;
+    g_open_windows = g_launch_status = nullptr;
     g_alias_modal = g_alias_text = g_alias_error = nullptr;
     g_options[0] = 0;
     // Closing a page does not issue a policy command or cancel native work.
@@ -119,6 +165,12 @@ void choose(lv_event_t *) {
 }
 void disconnect(lv_event_t *) { send_request(hp::DISCONNECT); }
 void connect(lv_event_t *) { if (g_control.can_connect(millis())) send_request(hp::SELECT); }
+void open_windows(lv_event_t *) {
+    const uint32_t now = millis();
+    windows_launch::request(now);
+    enabled(g_open_windows, windows_launch::available(now));
+    text(g_launch_status, windows_launch::status(now));
+}
 void enroll(lv_event_t *) {
     const uint32_t now = millis();
     if (g_control.decoder.coherent_list(now) && g_control.decoder.list.count < hp::MAX_PEERS && !g_control.holding()) send_request(hp::ENROLL);
@@ -145,8 +197,13 @@ void rename(lv_event_t *) {
     lv_textarea_set_one_line(g_alias_text, true); lv_textarea_set_max_length(g_alias_text, hp::MAX_ALIAS);
     lv_textarea_set_text(g_alias_text, peer->alias); lv_obj_set_style_text_font(g_alias_text, metadata_fonts::album(), 0);
     g_alias_error = label(g_alias_modal, "Choose your own short name. Empty clears the name.", 16, 116, 704, &lv_font_montserrat_14);
-    lv_obj_t *keyboard = lv_keyboard_create(g_alias_modal); lv_obj_set_pos(keyboard, 8, 160); lv_obj_set_size(keyboard, 724, 226);
-    lv_keyboard_set_textarea(keyboard, g_alias_text);
+    lv_obj_t *keyboard = lv_btnmatrix_create(g_alias_modal);
+    lv_obj_set_pos(keyboard, 12, 142); lv_obj_set_size(keyboard, 724, 248);
+    lv_obj_set_style_pad_all(keyboard, 4, 0);
+    lv_obj_set_style_pad_gap(keyboard, 4, 0);
+    lv_obj_set_style_text_font(keyboard, &lv_font_montserrat_16, LV_PART_ITEMS);
+    alias_keymap(keyboard, ALIAS_LOWER_KEYS);
+    lv_obj_add_event_cb(keyboard, alias_key_pressed, LV_EVENT_VALUE_CHANGED, nullptr);
 }
 void refresh(uint32_t now) {
     if (!g_modal) return;
@@ -179,6 +236,8 @@ void refresh(uint32_t now) {
     text(g_hint, !coherent ? "Waiting for a fresh saved-host list."
               : g_control.decoder.list.count == hp::MAX_PEERS ? "All saved host slots are in use. Existing pairings stay saved."
               : "Controls the BLE volume connection. Saved pairings are kept.\nSelect a saved host and press Connect, or open a 60-second pairing window.");
+    enabled(g_open_windows, windows_launch::available(now));
+    text(g_launch_status, windows_launch::status(now));
 }
 }  // namespace
 
@@ -216,6 +275,8 @@ void ble_host_ui_show(lv_obj_t *screen) {
     g_enroll = button(g_modal, "Pair new host", 260, 210, 220, enroll);
     g_rename = button(g_modal, "Rename", 500, 210, 220, rename);
     g_hint = label(g_modal, "Waiting for a fresh saved-host list.", 20, 282, 700, &lv_font_montserrat_14);
-    label(g_modal, "Host names are your labels; other hosts keep Bluetooth on.", 20, 366, 700, &lv_font_montserrat_14);
+    label(g_modal, "Host names are your labels; other hosts keep Bluetooth on.", 20, 324, 700, &lv_font_montserrat_14);
+    g_open_windows = button(g_modal, "Open Windows app", 20, 352, 220, open_windows);
+    g_launch_status = label(g_modal, "", 260, 361, 460, &lv_font_montserrat_14);
     g_options[0] = 0; refresh(millis());
 }

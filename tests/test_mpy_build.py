@@ -12,6 +12,10 @@ SRC_DIR = REPO_ROOT / "firmware" / "circuitpython"
 SRC_LIB_DIR = SRC_DIR / "lib"
 DIST_DIR = REPO_ROOT / "dist" / "circuitpython"
 DIST_LIB_DIR = DIST_DIR / "lib"
+PRIVATE_PROFILES = (
+    ".artwork_wifi.json", ".metadata_bridge.json", ".badge_remote.json",
+    ".badge_windows_launch.key", ".bm83_windows_companion.json", ".bm83_windows_receiver.json",
+)
 
 
 def _mpy_cross_path():
@@ -83,9 +87,8 @@ def test_private_profiles_are_never_packaged(tmp_path, with_rsync):
     (source / "not_an_entrypoint.py").write_text("raise RuntimeError('do not package')\n")
     (source / "lib/example.py").write_text("VALUE = 1\n")
     (source / "assets/public.txt").write_text("keep this asset\n")
-    private_profiles = (".artwork_wifi.json", ".metadata_bridge.json", ".badge_remote.json")
     for parent in (source, source / "assets", source / "lib"):
-        for name in private_profiles:
+        for name in PRIVATE_PROFILES:
             (parent / name).write_text('{"private":"synthetic-fixture"}\n')
     compiler = tmp_path / "fake-mpy"
     compiler.write_text("#!" + sys.executable + "\nimport sys\nfrom pathlib import Path\n"
@@ -108,7 +111,7 @@ def test_private_profiles_are_never_packaged(tmp_path, with_rsync):
         [bash, str(script)], cwd=tmp_path, env=env, capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     package = tmp_path / "dist/circuitpython"
-    for name in private_profiles:
+    for name in PRIVATE_PROFILES:
         assert not list(package.rglob(name)), name
     assert (package / "assets/public.txt").read_text() == "keep this asset\n"
     assert (package / "boot.py").read_bytes() == (source / "boot.py").read_bytes()
@@ -123,8 +126,8 @@ def test_private_receiver_profiles_are_ignored_by_git(tmp_path):
     if not git:
         pytest.skip("git is unavailable")
     shutil.copyfile(REPO_ROOT / ".gitignore", tmp_path / ".gitignore")
-    profiles = (".badge_remote.json", "firmware/circuitpython/.badge_remote.json",
-                "firmware/circuitpython/assets/.badge_remote.json")
+    profiles = [prefix + name for prefix in ("", "firmware/circuitpython/", "firmware/circuitpython/assets/")
+                for name in PRIVATE_PROFILES]
     for name in profiles:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)

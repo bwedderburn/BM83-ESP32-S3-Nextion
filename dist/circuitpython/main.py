@@ -19,6 +19,7 @@ from remote.ble_status import BleStatusPublisher
 from remote.artwork_wifi import start_artwork_wifi, retry_artwork_wifi
 from remote.metadata_bridge import MetadataBridge
 from remote.badge_remote import BadgeRemote, np_from_snapshot, set_phase1_metrics
+from remote.badge_hosts import BadgeHosts
 from bm83.bm83 import Bm83
 from bm83.link_probe import StartupLinkProbe
 from blehid.ble import BleHid
@@ -116,7 +117,8 @@ def main(phase1_timing=False):
     startup_link_probe = StartupLinkProbe(bm, enabled=metadata_bridge.enabled)
     # Optional authenticated Universe-badge endpoint; inert without its
     # private profile and never joins Wi-Fi itself.
-    badge_remote = BadgeRemote()
+    badge_hosts = BadgeHosts(ble, ble_status.note_external_host_request)
+    badge_remote = BadgeRemote(hosts=badge_hosts)
     badge_remote.setup()
 
     # Local bindings for speed/low allocation on mpy
@@ -648,8 +650,13 @@ def main(phase1_timing=False):
                 retry_artwork_wifi()
             elif tok == b"BLE_HOST":
                 if ble_status.request_host(remote.take_host_request()):
+                    badge_hosts.supersede()
                     vol_hold_active = None
                     vol_repeat_count = 0
+            elif tok == b"BADGE_HOST":
+                badge_remote.note_ble_request(None)
+                vol_hold_active = None
+                vol_repeat_count = 0
             elif tok in (b"BLE_PAUSE", b"BLE_ENABLE"):
                 request_seq = remote.take_ble_request(tok)
                 badge_request = None
@@ -662,6 +669,7 @@ def main(phase1_timing=False):
                 if request_seq is not None:
                     badge_remote.note_ble_request(badge_request)
                     if ble_status.request(tok, request_seq):
+                        badge_hosts.supersede()
                         # A lost release from the old host must not become
                         # a repeated volume command after Enable reconnects.
                         vol_hold_active = None
@@ -837,6 +845,7 @@ def main(phase1_timing=False):
 
         # BLE handoff work runs only after UART events and controls are serviced.
         ble_tick()
+        badge_hosts.note_tick()
         current_ble_input_generation = ble_input_generation()
         if current_ble_input_generation != last_ble_input_generation:
             last_ble_input_generation = current_ble_input_generation

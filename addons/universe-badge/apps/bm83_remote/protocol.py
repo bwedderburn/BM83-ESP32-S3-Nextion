@@ -4,10 +4,14 @@ import binascii
 import hashlib
 import json
 
+HOST_COMMANDS = {"disconnect": "HOST_DISCONNECT", "select": "HOST_SELECT",
+                 "enroll": "HOST_ENROLL", "open_windows": "HOST_OPEN_WINDOWS"}
+HOST_TOKENS = ("HOST_STATUS",) + tuple(HOST_COMMANDS.values())
+
 TOKENS = ("STATUS", "BT_PREV", "BT_PLAY", "BT_NEXT", "BT_MUTE",
           "BT_VOLUP_P", "BT_VOLUP_R", "BT_VOLDN_P", "BT_VOLDN_R",
           "BT_POWER", "BT_PAIR", "BT_EQ", "BT_EBIND", "NET_RETRY",
-          "BLE_PAUSE", "BLE_ENABLE")
+          "BLE_PAUSE", "BLE_ENABLE") + HOST_TOKENS
 
 
 def hex_text(value, size):

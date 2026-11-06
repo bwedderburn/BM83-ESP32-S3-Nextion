@@ -5,6 +5,9 @@ __pycache__/
 .artwork_wifi.json
 .metadata_bridge.json
 .badge_remote.json
+.badge_windows_launch.key
+.bm83_windows_companion.json
+.bm83_windows_receiver.json
 .venv
 *.pyc
 *.egg-info/

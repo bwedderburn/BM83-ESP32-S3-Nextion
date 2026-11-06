@@ -69,6 +69,9 @@ class BleStatusPublisher:
     def request_host(self, command):
         return self._hosts.request_host(command)
 
+    def note_external_host_request(self):
+        self._hosts.note_legacy_request()
+
     def tick(self):
         """Called only at the shared publisher's idle frame boundary."""
         if not self._remote.state_tx_enabled:

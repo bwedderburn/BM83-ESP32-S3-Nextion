@@ -5,8 +5,8 @@ import errno
 import os
 import socket
 
-from protocol import TOKENS, decode, encode, hex_text, uint
-from models import Playback, BleControl, valid_np, elapsed
+from protocol import HOST_COMMANDS, HOST_TOKENS, TOKENS, decode, encode, hex_text, uint
+from models import Playback, BleControl, HostControls, valid_np, elapsed
 
 WOULD_BLOCK = (errno.EAGAIN, 11, 10035)
 COMMAND_LABELS = {"BT_EBIND": "Erase bonds"}
@@ -22,19 +22,23 @@ class Remote:
         self.socket.setblocking(False)
         self.playback = Playback()
         self.ble = BleControl()
+        self.hosts = HostControls()
         self.unit = self.client = None
         self.seq = 0
         self.nonce = None
         self.pending = None
         self.queue = []
         self.last_poll = -1000
+        self.last_host_poll = -1000
+        self.host_page = False
+        self.host_intent = None
         self.feedback = "Waiting for audio unit"
         self.held_volume = None
         self.volume_queue = []
         self.rehello_count = 0
 
     def queue_command(self, command):
-        if command not in TOKENS:
+        if command not in TOKENS or command in HOST_TOKENS:
             raise ValueError("Unknown remote control")
         if command.endswith("_R"):
             base = command[:-2]
@@ -58,6 +62,27 @@ class Remote:
             self.feedback = "%s: waiting for audio unit" % command
         return True
 
+    def host_menu(self, active):
+        self.host_page = bool(active)
+        if not self.host_page:
+            self._drop_host_intent()
+
+    def queue_host(self, command, now, host=None):
+        if command not in HOST_COMMANDS or (command == "select") != (host is not None):
+            raise ValueError("Unknown volume host command or target")
+        reason = self.hosts.unavailable(command, host, now)
+        if reason or self.host_intent is not None:
+            self.hosts.result = reason or "Volume host request queued"
+            return False
+        self.host_intent = command, host, self.hosts.state["generation"], now
+        self.hosts.result = "Volume host request queued"
+        return True
+
+    def _drop_host_intent(self):
+        if self.host_intent is not None:
+            self.host_intent = None
+            self.hosts.result = "Volume host request not sent"
+
     def volume(self, command):
         if self.held_volume == command:
             return
@@ -71,6 +96,7 @@ class Remote:
             self.held_volume = None
 
     def _drop_unsent(self):
+        self._drop_host_intent()
         dropped = len([command for command in self.queue if command != "STATUS"])
         dropped += len([gesture for gesture in self.volume_queue if not gesture["pressed"]])
         self.queue = []
@@ -98,10 +124,12 @@ class Remote:
                         "attempts": 0, "sent": now, "started": now}
         self._send(now)
 
-    def _command(self, command, now):
+    def _command(self, command, now, host_intent=None):
         self.seq += 1
         message = {"v": 1, "type": "cmd", "unit": self.unit, "client": self.client,
                    "seq": self.seq, "token": command}
+        if command == "HOST_SELECT":
+            message["target"], message["generation"] = host_intent[1:3]
         self.pending = {"wire": encode(self.key, message), "command": command,
                         "attempts": 0, "sent": now, "started": now}
         if command in ("BLE_PAUSE", "BLE_ENABLE"):
@@ -109,8 +137,10 @@ class Remote:
                 self.pending = None
                 self.feedback = "Fresh BLE status required"
                 return
+        if host_intent is not None:
+            self.hosts.begin(host_intent[0], host_intent[1], self.client, self.seq, now)
         self._send(now)
-        if command != "STATUS":
+        if command != "STATUS" and command not in HOST_TOKENS:
             self.feedback = "%s: sent" % command
 
     def _receive(self, now):
@@ -142,6 +172,8 @@ class Remote:
                     command = self.pending["command"]
                     self.pending = None
                     self.unit = self.client = None
+                    self.hosts.invalidate("Volume host result unconfirmed after restart")
+                    self._drop_host_intent()
                     self.rehello_count += 1
                     if command == "STATUS" and self.rehello_count <= 3:
                         self.queue.insert(0, command)
@@ -154,7 +186,21 @@ class Remote:
                     if command and command.startswith("BLE_") and self.ble.result == "Waiting":
                         self.ble.result = "Unconfirmed (restarted)"
                     self.last_poll = now - 1000
+                elif (kind == "host" and m.get("unit") == self.unit and type(m.get("dup")) is bool
+                      and self.pending["command"] in HOST_TOKENS):
+                    denied = m.get("denied", False)
+                    if type(denied) is not bool:
+                        continue
+                    if denied:
+                        detail = m.get("error")
+                        if self.pending["command"] != "HOST_STATUS":
+                            self.hosts.finish(detail[:80] if isinstance(detail, str) and detail else "Volume host request refused")
+                    if not self.hosts.accept(m.get("hosts"), now) and not denied:
+                        continue
+                    self.pending = None
+                    self.rehello_count = 0
                 elif (kind == "state" and m.get("unit") == self.unit
+                      and self.pending["command"] not in HOST_TOKENS
                       and type(m.get("dup")) is bool and valid_np(m.get("np"))):
                     command = self.pending["command"]
                     self.playback.accept(m["np"], now)
@@ -178,6 +224,9 @@ class Remote:
     def step(self, now, closing=False, connected=True):
         if not connected:
             self._drop_unsent()
+            self.hosts.invalidate("Volume host result unconfirmed: Wi-Fi offline")
+            if self.pending and self.pending["command"] in HOST_TOKENS:
+                self.pending = None
         # Expire by wall-clock age before accepting a welcome. A delayed frame
         # must not deliver stale presses merely because few retries were made.
         if (self.pending and self.pending["command"] is None
@@ -193,6 +242,7 @@ class Remote:
         if connected:
             self._receive(now)
         self.ble.tick(now)
+        self.hosts.tick(now)
         if self.pending:
             if self.pending.get("stalled"):
                 if connected and elapsed(now, self.pending["sent"]) >= 1000:
@@ -207,7 +257,11 @@ class Remote:
                     self._send(now)
                 return
             command = self.pending["command"]
-            self.feedback = "%s: no reply" % (command or "Audio unit")
+            if command in HOST_TOKENS:
+                if command == "HOST_STATUS" and not self.hosts.fresh(now) and not self.hosts.busy:
+                    self.hosts.result = "Volume hosts: no reply"
+            else:
+                self.feedback = "%s: no reply" % (command or "Audio unit")
             if command and command.endswith("_R"):
                 # Do not advance to a new sequence: that could make the server
                 # discard the only release capable of stopping held volume.
@@ -231,11 +285,13 @@ class Remote:
             if closing:
                 return
             self.unit = self.client = None
+            self.hosts.invalidate("Volume host result unconfirmed after restart")
+            self._drop_host_intent()
             self._hello(now)
             return
         # Each accepted press owns its release. A second press of the same
         # button cannot overtake the first gesture's release, even in flight.
-        command = None
+        command, host_intent = None, None
         if self.volume_queue:
             gesture = self.volume_queue[0]
             if not gesture["pressed"]:
@@ -248,16 +304,31 @@ class Remote:
             pass
         elif self.queue:
             command = self.queue.pop(0)
+        elif not closing and self.host_intent is not None and not self.volume_queue:
+            host_intent, self.host_intent = self.host_intent, None
+            action, target, generation, queued_at = host_intent
+            reason = self.hosts.unavailable(action, target, now)
+            if reason or elapsed(now, queued_at) >= 4000 or generation != self.hosts.state["generation"]:
+                self.hosts.result = reason or "Volume hosts changed. Select again."
+                return
+            command = HOST_COMMANDS[action]
+        elif (not closing and (self.host_page or self.hosts.busy)
+              and elapsed(now, self.last_host_poll) >= 1000 and not self.volume_queue):
+            self.last_host_poll = now
+            command = "HOST_STATUS"
         elif not closing and elapsed(now, self.last_poll) >= 1000:
             self.last_poll = now
             command = "STATUS"
         else:
             return
-        self._command(command, now)
+        self._command(command, now, host_intent)
 
     def close(self, now, sleep):
         self.release_volume()
         self.queue = []
+        self._drop_host_intent()
+        if self.pending and self.pending["command"] in HOST_TOKENS:
+            self.pending = None
         # HOME stops existing gestures; it must never begin a queued press.
         self.volume_queue = [gesture for gesture in self.volume_queue if gesture["pressed"]]
         for gesture in self.volume_queue:

@@ -60,7 +60,10 @@ def test_rearm_requires_cached_committed_identity_not_just_wifi_association():
     assert "g_target_check.due(associated, generation, now)" in identity
     assert "g_target_check.record(target_connected(), generation, now)" in identity
     tick = function(source, "void network_setup_tick()", "void network_setup_show(")
-    assert "g_recovery.connected(committed_target_connected(now), now);" in tick
+    assert tick.count("committed_target_connected(now)") == 1
+    assert "const bool committed_connected = committed_target_connected(now);" in tick
+    assert "g_recovery.connected(committed_connected, now);" in tick
+    assert "windows_launch::tick(now, committed_connected && g_network_enabled && !g_connecting && !g_scanning);" in tick
     for start, end in (("void begin_join(", "void abort_trial("),
                        ("void restore_channel(", "enum class JoinOrigin")):
         assert "g_target_check.clear();" in function(source, start, end)

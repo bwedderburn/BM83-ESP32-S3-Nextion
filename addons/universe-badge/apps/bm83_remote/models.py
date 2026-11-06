@@ -1,6 +1,6 @@
 """Validated playback snapshots and independently fresh BLE confirmation."""
 
-from protocol import uint
+from protocol import hex_text, uint
 
 
 def newer(candidate, baseline):
@@ -155,6 +155,175 @@ class BleControl:
                     self.result = "Confirmed"
         if self.result == "Waiting" and elapsed(now, started) >= 6500:
             self.result = "Unconfirmed"
+
+
+HOST_STATES = ("PAUSED", "SWITCHING", "WAITING", "ENROLLING", "CONNECTED", "ERROR", "UNSUPPORTED")
+HOST_MODES = (None, "PAUSED", "AUTO", "ENROLL")
+HOST_ERRORS = ("NONE", "POLICY", "NVS", "NIMBLE", "SECURITY")
+LAUNCH_STATES = ("OFFLINE", "READY", "PENDING", "OPENED", "UNCONFIRMED")
+HOST_TIMEOUTS = {"disconnect": 6500, "select": 30000, "enroll": 70000, "open_windows": 12000}
+READY, ADVERTISING, CONNECTED, PERSISTED = 1, 2, 4, 64
+HID_READY_FLAGS = CONNECTED | 8 | 16 | 32 | PERSISTED | 256
+
+
+def _host_id(value):
+    return hex_text(value, 16) and value != "0000000000000000"
+
+
+def _valid_origin(value, client_field, sequence_field):
+    client, seq = value.get(client_field), value.get(sequence_field)
+    return (client is None and seq is None
+            or uint(client) and client > 0 and uint(seq) and seq > 0)
+
+
+def valid_hosts(value):
+    if not isinstance(value, dict):
+        return False
+    if (value.get("state") not in HOST_STATES or value.get("requested") not in HOST_MODES
+            or value.get("applied") not in HOST_MODES or value.get("error_domain") not in HOST_ERRORS
+            or value.get("launch") not in LAUNCH_STATES or type(value.get("launch_ready")) is not bool
+            or not uint(value.get("flags"), 511)
+            or not uint(value.get("remaining"), 120)
+            or not all(uint(value.get(key)) for key in ("generation", "operation", "request_operation"))
+            or type(value.get("error_code")) is not int or not -0x80000000 <= value["error_code"] < 0x80000000
+            or not _valid_origin(value, "req_client", "req_seq")
+            or not _valid_origin(value, "launch_client", "launch_seq")
+            or any(value.get(key) is not None and not _host_id(value[key]) for key in ("target", "connected"))):
+        return False
+    peers = value.get("peers")
+    if peers is None:
+        return True
+    if not isinstance(peers, list) or len(peers) > 8:
+        return False
+    identities = []
+    for peer in peers:
+        if not isinstance(peer, list) or len(peer) != 3:
+            return False
+        identity, alias, resumable = peer
+        if (not _host_id(identity) or identity in identities
+                or type(resumable) is not bool or not isinstance(alias, str)
+                or any(ord(c) < 32 or 127 <= ord(c) <= 159 or 0xD800 <= ord(c) <= 0xDFFF for c in alias)
+                or len(alias.encode("utf8")) > 24):
+            return False
+        identities.append(identity)
+    return True
+
+
+class HostControls:
+    """Report a host change only after observing its own native operation."""
+
+    def __init__(self):
+        self.state = None
+        self.received = 0
+        self.request = None
+        self.result = ""
+        self.observed = False
+
+    @property
+    def busy(self):
+        return self.request is not None
+
+    def fresh(self, now):
+        return self.state is not None and elapsed(now, self.received) < 4000
+
+    def unavailable(self, command, target, now):
+        if not self.fresh(now):
+            return "Waiting for fresh volume hosts"
+        if self.busy and command != "disconnect":
+            return "Volume host request in progress"
+        s = self.state
+        if command == "open_windows":
+            return None if s["launch_ready"] and s["launch"] != "PENDING" else "Windows launcher unavailable"
+        if s["state"] == "UNSUPPORTED":
+            return "Update audio unit for volume hosts"
+        if not s["flags"] & READY:
+            return "Volume hosts are not ready"
+        peers = s.get("peers")
+        if command == "select" and (peers is None or not any(
+                peer["id"] == target and peer["resumable"] for peer in peers)):
+            return "Select an available saved host"
+        if command == "enroll" and (peers is None or len(peers) >= 8):
+            return "Saved hosts unavailable or full"
+        return None
+
+    def begin(self, command, target, client, seq, now):
+        self.request = command, target, client, seq, self.state["operation"], now
+        self.observed = False
+        self.result = "Waiting for confirmation"
+
+    def finish(self, text):
+        self.request = None
+        self.result = text
+
+    def invalidate(self, text):
+        self.state = None
+        if self.busy:
+            self.finish(text)
+
+    def accept(self, value, now):
+        if not valid_hosts(value):
+            return False
+        self.state = dict(value)
+        rows = value.get("peers")
+        self.state["peers"] = ([{"id": identity, "alias": alias, "resumable": resumable}
+                                for identity, alias, resumable in rows] if rows is not None else None)
+        self.received = now
+        if not self.request:
+            if self.result == "Volume hosts: no reply":
+                self.result = ""
+            return True
+        command, target, client, seq, baseline, _ = self.request
+        if command == "open_windows":
+            own = value.get("launch_client") == client and value.get("launch_seq") == seq
+            if own and value["launch"] == "OPENED":
+                self.finish("BM83 Volume Remote opened")
+            elif own and value["launch"] == "UNCONFIRMED":
+                self.finish("Windows app launch unconfirmed")
+            elif own:
+                self.observed = True
+            elif self.observed:
+                self.finish("Windows app launch superseded")
+            return True
+        if value.get("req_client") != client or value.get("req_seq") != seq:
+            if self.observed:
+                self.finish("Volume host request superseded")
+            return True
+        self.observed = True
+        operation, expected, flags = value["operation"], value["request_operation"], value["flags"]
+        if not expected and value["error_domain"] == "POLICY" and value["error_code"]:
+            self.finish("Volume host request failed")
+            return True
+        if operation == baseline or not operation or operation != expected:
+            return True
+        if value["state"] == "ERROR":
+            self.finish("Volume host request failed")
+            return True
+        if not flags & READY:
+            return True
+        paused = (value["state"] == value["requested"] == value["applied"] == "PAUSED"
+                  and flags & PERSISTED and not flags & (CONNECTED | ADVERTISING))
+        connected = (value["state"] == "CONNECTED" and value["requested"] == value["applied"] == "AUTO"
+                     and flags & HID_READY_FLAGS == HID_READY_FLAGS and value.get("target") is not None
+                     and value["target"] == value.get("connected"))
+        if command == "enroll" and paused and not value["remaining"] and (
+                value["error_domain"] == "NONE" or (value["error_domain"], value["error_code"]) == ("POLICY", 6)):
+            self.finish("Pairing window closed")
+        elif value["error_domain"] != "NONE" or value["error_code"]:
+            self.finish("Volume host request failed")
+        elif command == "disconnect" and paused:
+            self.finish("Disconnected. Pairings kept.")
+        elif connected and (command == "enroll" or command == "select" and target == value["target"]):
+            self.finish("Volume host connected")
+        elif command == "select" and target == value.get("target") and value["state"] == "WAITING":
+            self.result = "Waiting for saved host"
+        elif command == "enroll" and value["state"] == "ENROLLING":
+            self.result = "Pairing window open"
+        return True
+
+    def tick(self, now):
+        if self.request and elapsed(now, self.request[-1]) >= HOST_TIMEOUTS[self.request[0]]:
+            self.finish("Windows app launch unconfirmed" if self.request[0] == "open_windows"
+                        else "Volume host result unconfirmed")
 
 
 def display_text(text):

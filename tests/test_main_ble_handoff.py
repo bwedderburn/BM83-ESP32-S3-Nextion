@@ -22,7 +22,7 @@ def test_handoff_is_remote_only_intent_and_cancels_old_host_volume_hold(token, a
     badge = BadgeRemote(profile_path="/nonexistent/.badge_remote.json", log=lambda _m: None)
     assert not badge.setup()
     scope = dict(tokens=[token], remote=remote, badge_remote=badge, ble_status=publisher, bm=bm,
-                 ble=mock.Mock(), aux_mode=aux, vol_hold_active="up", vol_repeat_count=5,
+                 ble=mock.Mock(), badge_hosts=mock.Mock(), aux_mode=aux, vol_hold_active="up", vol_repeat_count=5,
                  dprint=lambda *_args: None)
     exec(CODE, scope)  # nosec B102 - local repository AST, never external input
     assert backend.requests == ["pause" if token == b"BLE_PAUSE" else "enable"]
@@ -56,7 +56,7 @@ def test_badge_ble_request_echoes_zero_and_records_its_origin(token):
     publisher = BleStatusPublisher(sink, backend, clock=Clock(), session=1)
     badge = _Badge({token: (7, 3)})
     scope = dict(tokens=[token], remote=remote, badge_remote=badge, ble_status=publisher, bm=bm,
-                 ble=mock.Mock(), aux_mode=False, vol_hold_active="down", vol_repeat_count=2,
+                 ble=mock.Mock(), badge_hosts=mock.Mock(), aux_mode=False, vol_hold_active="down", vol_repeat_count=2,
                  dprint=lambda *_args: None)
     exec(CODE, scope)  # nosec B102 - local repository AST, never external input
     assert backend.requests == ["pause" if token == b"BLE_PAUSE" else "enable"]
@@ -75,7 +75,7 @@ def test_crowpanel_ble_request_supersedes_badge_origin():
     publisher = BleStatusPublisher(sink, backend, clock=Clock(), session=1)
     badge = _Badge({b"BLE_PAUSE": (7, 3)})
     scope = dict(tokens=[b"BLE_PAUSE"], remote=remote, badge_remote=badge, ble_status=publisher,
-                 bm=mock.Mock(), ble=mock.Mock(), aux_mode=False, vol_hold_active=None,
+                 bm=mock.Mock(), ble=mock.Mock(), badge_hosts=mock.Mock(), aux_mode=False, vol_hold_active=None,
                  vol_repeat_count=0, dprint=lambda *_args: None)
     exec(CODE, scope)  # nosec B102 - local repository AST, never external input
     assert remote.accept(REMOTE_MAC_B, frame(9, b"BLE_ENABLE"), clock()) == b"BLE_ENABLE"
@@ -85,6 +85,7 @@ def test_crowpanel_ble_request_supersedes_badge_origin():
     assert publisher._request_sequence == 9
     # The badge then reports "superseded" instead of a false confirmation.
     assert badge.noted == [(7, 3), None]
+    assert scope["badge_hosts"].supersede.call_count == 2
 
 
 def test_ble_native_tick_is_after_uart_events_and_controls_before_publish():

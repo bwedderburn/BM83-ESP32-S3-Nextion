@@ -35,6 +35,7 @@ def committed_source(tmp_path, monkeypatch):
         path.write_text("# committed example\n", encoding="utf-8")
     (repo / "LICENSE").write_text("MIT test fixture\n", encoding="utf-8")
     private_paths = ["settings.toml", "secrets.py", ".artwork_wifi.json", ".badge_remote.json",
+                     ".badge_windows_launch.key", ".bm83_windows_companion.json", ".bm83_windows_receiver.json",
                      "lib/secrets.py", "lib/remote/private_profile.py"]
     for name in private_paths:
         (repo / release.SOURCE_ROOT / name).write_text("DO-NOT-PACKAGE-PRIVATE-DATA", encoding="utf-8")
@@ -73,6 +74,17 @@ def test_committed_source_excludes_private_files_and_is_reproducible(committed_s
             assert hashlib.sha256(data).hexdigest() == member["sha256"]
             assert len(data) == member["bytes"]
     assert (repo / release.SOURCE_ROOT / "main.py").read_text() == "UNCOMMITTED-PRIVATE-DATA"
+
+
+def test_preview_supports_revisions_before_host_management(committed_source, tmp_path):
+    repo, _ = committed_source
+    git(repo, "rm", "--cached", "--", *(release.SOURCE_ROOT + name for name in release.HOST_MANAGEMENT_SOURCES))
+    git(repo, "commit", "-m", "legacy source preview")
+    result = release.package("HEAD", "v0.1.0", tmp_path / "legacy")
+    manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+    assert {item["source"] for item in manifest["inputs"]} == {
+        release.SOURCE_ROOT + name for name in release.BASE_APPLICATION_SOURCES
+    }
 
 
 @pytest.mark.parametrize("path", ["LICENSE", release.SOURCE_ROOT + "lib/bm83/bm83.py"])

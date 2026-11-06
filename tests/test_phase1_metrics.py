@@ -420,8 +420,8 @@ def test_enabled_main_wires_real_uart_parsers_crypto_and_radio_to_one_observer(m
         return captured["remote"]
 
     class Badge(badge_remote.BadgeRemote):
-        def __init__(self):
-            super().__init__(profile_path="/nonexistent-phase1-host-test-profile.json")
+        def __init__(self, **kwargs):
+            super().__init__(profile_path="/nonexistent-phase1-host-test-profile.json", **kwargs)
 
         def poll(self, state_fn, now=None):
             assert badge_remote.tag(bytes(32), b"host-wiring-vector") == hmac.new(

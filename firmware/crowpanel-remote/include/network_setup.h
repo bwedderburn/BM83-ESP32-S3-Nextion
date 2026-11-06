@@ -36,7 +36,7 @@ bool network_setup_idle_discovery_allowed();
 
 namespace network_setup_protocol {
 
-enum class Command : uint8_t { None, Profile, Apply, Commit, Abort };
+enum class Command : uint8_t { None, Profile, Apply, Commit, Abort, WindowsKey, WindowsInfo };
 struct Request {
     Command command;
     char nonce[65];
@@ -58,7 +58,14 @@ inline bool parse_line(const char *line, Request &request) {
     request = Request();
     const char *nonce = nullptr;
     Command command = Command::None;
-    if (line && strncmp(line, "BMWIFI_PROFILE:", 15) == 0) {
+    if (line && strcmp(line, "BMWIN_INFO") == 0) {
+        request.command = Command::WindowsInfo;
+        return true;
+    } else if (line && strncmp(line, "BMWIN_KEY:", 10) == 0) {
+        nonce = line + 10;
+        if (strlen(nonce) != 64) return false;
+        command = Command::WindowsKey;
+    } else if (line && strncmp(line, "BMWIFI_PROFILE:", 15) == 0) {
         nonce = line + 15;
         command = Command::Profile;
     } else if (line && strncmp(line, "BMWIFI_APPLY:", 13) == 0) {
@@ -84,6 +91,7 @@ public:
         if (byte == '\n') {
             line_[used_] = '\0';
             const bool valid = !dropping_ && parse_line(line_, request);
+            memset(line_, 0, used_);
             used_ = 0;
             dropping_ = false;
             saw_cr_ = false;

@@ -1,11 +1,10 @@
 # BLE volume host selection: implementation and acceptance
 
 The November 4 [B-Intel Phase 1 run](phase1-bintel-2026-11-04.md) is accepted
-within its recorded scope. Disconnect + Select host is a separate development
-candidate. Its host tests and CrowPanel compilation do not establish successful
-BLE switching, native persistence, privacy resolution or live UART timing.
-Do not describe the candidate as physically accepted until the gates below have
-actual results.
+within its recorded scope. The November 5–6 Phase 2 tests verified the Windows
+bench controls, a saved Raspberry Pi host, and the CrowPanel and badge changes
+described below. Broader platform coverage and a new qualified timing window
+remain separate gates.
 
 ## Intended behavior
 
@@ -67,14 +66,43 @@ guarantee.
 | Gate | Evidence required | Current state |
 | --- | --- | --- |
 | Phase 1 prerequisite | Qualified measured window, owner controls/screens, exact restoration and automatic CrowPanel recovery | Accepted for the recorded B-Intel scope |
-| Host integration | Production Python/C++ and native bridge/core fault tests, wire golden vectors, lint and security checks | 1,640 Linux host tests passed with five skipped; physical evidence remains separate |
-| CrowPanel compilation | Actual ESP32-S3 application build with recorded source, dependency and image hashes | Clean candidate compiled, installed and verified by a complete 4 MiB readback; saved-host menu observed on the panel |
+| Host integration | Production Python/C++ and native bridge/core fault tests, wire golden vectors, lint and security checks | Linux host coverage includes the host policy and both remote controls. Physical evidence is recorded separately below. |
+| CrowPanel compilation | Actual ESP32-S3 application build with recorded source, dependency and image hashes | Clean app builds installed with complete 4 MiB readback. The Volume hosts menu, Windows launch and revised Rename keyboard were exercised on the panel. |
 | Native compilation | Two clean Linux builds, exact source/patch/tool provenance, offline app/partition checks and byte comparison | Both the first and corrected candidates have two matching clean builds; live acceptance is separate |
 | Installation and rollback | Fresh paused state, verified safe/ROM mode, exact scoped native approval, private backups and protected-range readback | Both native app-slot writes passed full 8 MiB verification after separate exact approvals; every byte outside the app slot matched its prewrite backup |
-| Persistent Disconnect | Saved bonds unchanged; no connection or advertising through reset, with other hosts' Bluetooth on | Pending physical test |
-| Selected AUTO | Correct host after explicit Select, unexpected loss, controller restart and target absence; competitors cannot take ownership | B-Intel trials stopped at saved-record verification before advertising; no Windows BLE handshake was observed |
-| Enrollment | New-host success, expiry, cancel, stale requests, capacity and storage failure without old-bond deletion | Live advertising and timeout observed. A rejected attempt interrupted advertising and later windows could not restart it. The early link failure correction still needs a bench test. |
-| Live regression | Audio, Nextion, CrowPanel, badge, artwork, controls and measured UART/radio service during a new stability window | B-Intel audio, displays and artwork passed while the volume handle stayed disconnected; selected-host controls and qualified timing remain pending |
+| Persistent Disconnect | Saved bonds unchanged and no connection or advertising through reset, with host Bluetooth on | Windows companion Disconnect stayed paused through a physical power cycle. The Windows bond and enabled radio were verified. The badge independently confirmed a persisted pause and stopped advertising. |
+| Selected AUTO | Correct host after explicit Select, unexpected loss, controller restart and target absence | Windows and Raspberry Pi were selected and reconnected using saved bonds. Unexpected-loss, target-absence and broader competitor cases remain open. |
+| Enrollment | New-host success, expiry, cancel, stale requests, capacity and storage failure with bond preservation | Fresh Windows enrollment succeeded. Live timeout was observed during bring-up. The later badge test verified pairing-window entry and cancellation with the same four saved hosts. Enrollment of a second unpaired host remains open. |
+| Live regression | Audio, Nextion, CrowPanel, badge, artwork, controls and measured UART/radio service during a new stability window | Functional bench checks passed for the tested controls, Windows launch and media playback. A new qualified Phase 2 timing window remains open. |
+
+## November 5–6 physical results
+
+- Fresh Windows enrollment reached HID ready and produced a measured volume
+  down and up step on the BM83 output. The Windows companion requested
+  Disconnect while Apple Music continued through the separate audio link. A
+  confirmed cold restart preserved the paused state and the Windows pairing.
+  Passive monitoring observed other nearby radio traffic and zero packets from
+  the paused volume peripheral during the measured window.
+- CrowPanel selected an existing Raspberry Pi 5 bond. Native HID readiness and
+  the Pi's saved bond were verified across Disconnect and reconnection.
+  Windows retained its separate BM83 audio connection during that test.
+- The badge selected the saved Windows host, opened and cancelled the pairing
+  window, and reconnected to Windows with the same four saved volume hosts.
+  Windows confirmed the volume application opened and reported volume changes
+  from the badge while Apple Music was playing through BM83.
+- CrowPanel and badge each opened the Windows companion from their respective
+  menu. The revised CrowPanel Rename keyboard saved a label containing letters
+  and digits, and the controller reported the updated label with the same
+  saved host identities. The badge battery gauge and status text were visually
+  checked together on the physical display.
+
+These results cover the exercised devices and operations. The companion's dry
+run was exercised on Linux. The physical Raspberry Pi test used the existing
+saved host and the Windows companion to request Disconnect.
+Fresh enrollment on another platform, the wider radio and power-order matrix,
+and a new measured UART and radio stability window remain open.
+
+## Earlier bring-up observations
 
 The first live Select exposed a CircuitPython builtin incompatibility: the
 saved-peer lookup passed a default to `next()`, which this runtime does not
@@ -105,25 +133,9 @@ matching native and CircuitPython state on that failure event. The capture
 did not include raw HCI events, so it cannot identify the exact termination
 reason.
 
-Use a verified clean B-Intel pairing as the first functional acceptance test.
-Keep retained-bond migration as a separate test:
-
-1. Fix the controller-side store check and demonstrate that **Pair new host**
-   advertises and expires without changing existing bonds.
-2. Clear only the B-Intel volume bond on the unit via a separately reviewed
-   operation, then remove only the BLE volume device on Windows. Verify the
-   other bonds, the unit's BLE identity and the BM83 audio pairing are intact.
-   Windows **Remove device** alone does not establish a clean start on both
-   sides. Do not globally erase the unit's bonds or fill its live store.
-3. Pair from CrowPanel and Windows **Add device**. Verify the encrypted bond,
-   HID subscription and a real volume step before proceeding.
-4. Press **Disconnect** on CrowPanel while connected. Verify the BLE volume link
-   closes and stays closed through a controller restart, with the pairing
-   saved and Windows Bluetooth still on.
-5. Pair a second unpaired host and verify that B-Intel remains saved. Return to
-   B-Intel via **Connect**, with no new pairing prompt. Selecting an already
-   paired iPhone can test saved-host switching, but cannot prove enrollment.
-   Record every exercised direction and return leg.
+For the remaining enrollment gate, pair a second unpaired host and verify that
+Windows remains saved. Return to Windows via **Connect** and record whether a
+pairing prompt appears. Record each exercised direction and return leg.
 
 Windows may offer only **Remove device** for the volume handle. Firmware cannot
 add an operating-system Disconnect button. A disconnect reason alone also does

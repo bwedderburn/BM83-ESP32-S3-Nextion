@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[1]
 GIT_EXECUTABLE = shutil.which("git")
 PROJECT_URL = "https://github.com/bwedderburn/BM83-ESP32-S3-Nextion"
 SOURCE_ROOT = "firmware/circuitpython/"
-APPLICATION_SOURCES = frozenset({
+BASE_APPLICATION_SOURCES = frozenset({
     "boot.py", "main.py", "settings.example.toml",
     "lib/blehid/__init__.py", "lib/blehid/ble.py",
     "lib/bm83/__init__.py", "lib/bm83/bm83.py", "lib/bm83/link_probe.py",
@@ -26,6 +26,11 @@ APPLICATION_SOURCES = frozenset({
     "lib/utils/__init__.py", "lib/utils/common.py", "lib/utils/compat.py",
     "lib/utils/metadata_fields.py", "lib/utils/ticks.py",
 })
+# Older source previews predate the native host policy and badge host controls.
+HOST_MANAGEMENT_SOURCES = frozenset({
+    "lib/blehid/host_policy.py", "lib/remote/host_policy.py", "lib/remote/badge_hosts.py",
+})
+APPLICATION_SOURCES = BASE_APPLICATION_SOURCES | HOST_MANAGEMENT_SOURCES
 
 
 def git(*args):
@@ -67,7 +72,7 @@ def package(revision, version, output):
         if mode not in ("100644", "100755") or kind != "blob":
             raise ValueError("Release inputs must be ordinary committed files: " + path)
         entries[path] = object_id
-    required = {SOURCE_ROOT + name for name in APPLICATION_SOURCES} | {"LICENSE"}
+    required = {SOURCE_ROOT + name for name in BASE_APPLICATION_SOURCES} | {"LICENSE"}
     if not required.issubset(entries):
         raise ValueError("Commit is missing required release source: " + ", ".join(sorted(required - entries.keys())))
     selected = sorted(path for path in entries if is_application_source(path))

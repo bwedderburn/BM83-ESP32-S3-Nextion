@@ -57,6 +57,57 @@ The operating system may offer only Remove/Forget for this HID profile, and a
 link-disconnect reason cannot reliably distinguish a human click from sleep or
 another unexpected loss.
 
+## Open the Windows companion from CrowPanel
+
+**Settings → Volume hosts → Open Windows app** opens or restores **BM83 Volume
+Remote** on the configured Windows PC. Wait for the panel to confirm the window.
+The button uses the CrowPanel's existing Wi-Fi and becomes available when the
+receiver is running in a signed-in Windows desktop session.
+
+The [companion app](../../tools/bm83-windows-volume-host.py) uses Python 3.10 or
+later with Tkinter. From the checkout, run the command below while the CrowPanel
+is connected over USB. Install `pyserial` in that Python environment for this
+one-time setup.
+
+```powershell
+py -3 .\tools\windows_volume_app_receiver.py --configure
+```
+
+The [receiver](../../tools/windows_volume_app_receiver.py) creates
+`.bm83_windows_receiver.json` in the signed-in user's
+`%LOCALAPPDATA%\BM83VolumeRemote` directory. For the companion's **Status** and
+**Disconnect** buttons, make a private copy of the controller's
+`.badge_remote.json` profile named `.bm83_windows_companion.json` in that same
+directory. Add a `host` field with the controller's LAN address and keep its
+existing `v`, `key`, `port` and optional `client_ip` fields. If the profile sets
+`client_ip`, the companion must run from that address. The companion uses the
+BMW1 control key in its own profile.
+
+Run the receiver in the signed-in user's desktop session. To start it at login,
+add a shortcut to `pythonw.exe` with the absolute receiver script path as its
+argument in the user's Startup folder. An existing installation can supply
+`--config <private-local-json>` and can pass its local companion path after
+`--configure`. Keep these files in an owner-only directory outside Git.
+The receiver polls over authenticated UDP and needs no inbound Windows firewall
+rule. If the panel's LAN address changes, rerun setup and restart the receiver.
+
+## Use Volume hosts from the badge
+
+On the badge, open **BM83 Remote → Menu → Volume hosts**. **Disconnect** keeps
+saved pairings. **Select saved host** reconnects the chosen host. **Pair new
+host** opens a 60-second enrollment window that **Disconnect** can cancel.
+**Open Windows app** shows a launch result after the Windows receiver confirms its window.
+
+The matching controller application exposes these controls through the badge's
+existing authenticated connection. For Windows launch, provision a separate
+random 32-byte key as 64 hex characters in the controller's private
+`/.badge_windows_launch.key` file. In the Windows receiver's private JSON, add a
+`controller` object with the controller's `host`, badge receiver `port`, and
+matching `key`. Restart the signed-in receiver after updating its configuration.
+The badge's BMW1 clients can request a launch. The separate launch key
+authenticates the Windows receiver's polls. Keep both key files private and
+leave the existing badge and CrowPanel keys in place.
+
 ## Install the matching application files
 
 Install the reviewed project native host-policy runtime, updated CrowPanel

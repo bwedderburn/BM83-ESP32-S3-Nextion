@@ -2,6 +2,7 @@
 // transfer to the audio controller. No passwords are sent through ESP-NOW.
 #include "network_setup.h"
 #include "network_recovery_policy.h"
+#include "windows_launch.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -174,7 +175,8 @@ void release_export_when_safe() {
 
 void queue_line(const char *prefix, const char *nonce, const char *value) {
     if (g_tx_size) return;
-    const int size = snprintf(g_tx, sizeof(g_tx), "%s:%s:%s\n", prefix, nonce, value);
+    const int size = nonce ? snprintf(g_tx, sizeof(g_tx), "%s:%s:%s\n", prefix, nonce, value)
+                           : snprintf(g_tx, sizeof(g_tx), "%s:%s\n", prefix, value);
     if (size <= 0 || static_cast<size_t>(size) >= sizeof(g_tx)) return;
     g_tx_size = static_cast<size_t>(size);
     g_tx_offset = 0;
@@ -262,6 +264,20 @@ void abort_trial(bool automatic) {
 
 void handle_request(const network_setup_protocol::Request &request) {
     const uint32_t now = millis();
+    if (request.command == network_setup_protocol::Command::WindowsKey ||
+        request.command == network_setup_protocol::Command::WindowsInfo) {
+        if (request.command == network_setup_protocol::Command::WindowsKey && !windows_launch::provision(request.nonce)) {
+            queue_line("BMWIN_ERROR", nullptr, "STORE");
+        } else if (!windows_launch::configured()) {
+            queue_line("BMWIN_ERROR", nullptr, "NO_KEY");
+        } else {
+            const IPAddress ip = !g_scanning && committed_target_connected(now) ? WiFi.localIP() : IPAddress();
+            char address[16];
+            snprintf(address, sizeof(address), "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+            queue_line("BMWIN_READY", nullptr, address);
+        }
+        return;
+    }
     if (request.command == network_setup_protocol::Command::Profile) {
         if (!g_export_open || static_cast<uint32_t>(now - g_saved_at) > EXPORT_WINDOW_MS) {
             revoke_export();
@@ -376,6 +392,7 @@ void poll_serial() {
         for (unsigned i = 0; i < 64 && Serial0.available(); ++i) {
             if (g_parser.feed(static_cast<uint8_t>(Serial0.read()), request)) {
                 handle_request(request);
+                memset(request.nonce, 0, sizeof(request.nonce));
                 if (g_tx_size) break;
             }
         }
@@ -543,6 +560,7 @@ void network_setup_begin() {
     if (g_started) return;
     g_started = true;
     g_nvs_ready = g_preferences.begin("bm83net", false);
+    windows_launch::begin();
     WiFi.persistent(false);  // Preferences is the sole application credential store.
     WiFi.setAutoReconnect(false);
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t) {
@@ -603,7 +621,8 @@ void network_setup_tick() {
             }
         }
     }
-    g_recovery.connected(committed_target_connected(now), now);
+    const bool committed_connected = committed_target_connected(now);
+    g_recovery.connected(committed_connected, now);
     if (g_network_enabled && !g_connecting && !g_scanning && g_recovery.peer_missing(now)) {
         // Controls take priority over a unilateral AP connection. Do not keep
         // reconnecting on a channel the audio peer may no longer be using.
@@ -631,6 +650,7 @@ void network_setup_tick() {
         begin_join(g_active, false, JoinOrigin::Automatic);
         set_status("Audio-unit link restored. Reconnecting this panel to its saved network...");
     }
+    windows_launch::tick(now, committed_connected && g_network_enabled && !g_connecting && !g_scanning);
 }
 
 void network_setup_show(lv_obj_t *parent) {
@@ -729,6 +749,7 @@ bool network_setup_prepare_sleep() {
     g_recovery.suspend();
     g_network_enabled = false;
     g_rescan_requested = false;
+    windows_launch::tick(millis(), false);
     WiFi.setAutoReconnect(false);
     WiFi.disconnect(false, false);
     return true;

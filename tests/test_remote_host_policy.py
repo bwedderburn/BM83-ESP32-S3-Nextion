@@ -158,7 +158,7 @@ def test_paired_sender_dispatch_cancels_hold_but_never_touches_audio_or_calls_na
     admit(publisher._hosts, sink)
     bm = mock.Mock()
     scope = dict(tokens=[token], remote=remote, ble_status=publisher, bm=bm, ble=mock.Mock(),
-                 vol_hold_active="up", vol_repeat_count=5, dprint=lambda *_: None)
+                 badge_hosts=mock.Mock(), vol_hold_active="up", vol_repeat_count=5, dprint=lambda *_: None)
     exec(CODE, scope)  # nosec B102 - production local AST, never wire-provided code.
     assert scope["vol_hold_active"] is None and scope["vol_repeat_count"] == 0
     assert bm.mock_calls == [] and backend.adapter.calls == []

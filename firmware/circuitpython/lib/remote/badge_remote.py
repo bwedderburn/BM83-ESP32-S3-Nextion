@@ -43,6 +43,7 @@ TOKENS = ("STATUS", "BT_PREV", "BT_PLAY", "BT_NEXT", "BT_MUTE",
 # panel unless the private profile explicitly opts in.
 BOND_TOKENS = ("BT_EBIND",)
 BLE_TOKENS = (b"BLE_PAUSE", b"BLE_ENABLE")
+HOST_TOKENS = ("HOST_STATUS", "HOST_DISCONNECT", "HOST_SELECT", "HOST_ENROLL", "HOST_OPEN_WINDOWS")
 _phase1_metrics = None
 
 
@@ -131,8 +132,8 @@ def _sha256(data):
                 metrics.finish(SHA256, started, len(data))
 
 
-def tag(key, payload):
-    """Hex HMAC-SHA256 truncated to 16 bytes, matching the badge client."""
+def hmac_digest(key, payload):
+    """Calculate HMAC-SHA256 with the reviewed native hash cleanup."""
     if len(key) != 32:
         raise ValueError("BMW1 needs a 32-byte key")
     metrics = _phase1_metrics
@@ -141,11 +142,15 @@ def tag(key, payload):
         block = key + bytes(32)
         inner = bytes(byte ^ 0x36 for byte in block)
         outer = bytes(byte ^ 0x5C for byte in block)
-        return binascii.hexlify(_sha256(outer + _sha256(inner + payload))[:16])
+        return _sha256(outer + _sha256(inner + payload))
     finally:
         if metrics is not None:
             from utils.phase1_metrics import HMAC
             metrics.finish(HMAC, started, len(payload))
+
+
+def tag(key, payload):
+    return binascii.hexlify(hmac_digest(key, payload)[:16])
 
 
 def json_text(value):
@@ -172,6 +177,8 @@ def json_text(value):
                 out.append(char)
         out.append('"')
         return "".join(out)
+    if isinstance(value, list):
+        return "[" + ",".join(json_text(item) for item in value) + "]"
     if isinstance(value, dict):
         return "{" + ",".join(json_text(key) + ":" + json_text(item)
                               for key, item in value.items()) + "}"
@@ -270,7 +277,7 @@ class BadgeRemote:
     """One bounded UDP endpoint: hello/welcome, deduplicated commands, state."""
 
     def __init__(self, clock=None, log=print, profile_path=PROFILE_PATH, profile=None,
-                 socket=None, radio=None, pool=None, urandom=os.urandom, ticks=None):
+                 socket=None, radio=None, pool=None, urandom=os.urandom, ticks=None, hosts=None):
         # Keep the seconds clock/now API for stats; sub-second pacing always
         # uses integer hardware ticks (or an explicitly injected test clock).
         self._ticks = ticks_ms if ticks is None else ticks
@@ -282,6 +289,7 @@ class BadgeRemote:
         self._profile_path = profile_path
         self._profile_input = profile
         self._provided_socket = socket
+        self._hosts = hosts
         self._radio = radio
         self._pool = pool
         self._urandom = urandom
@@ -421,8 +429,8 @@ class BadgeRemote:
             self._clients.sort(key=lambda entry: entry[2])
             self._clients.pop(0)
         self._touch += 1
-        # [client id, last seq, LRU touch, last seq was refused, hello nonce]
-        self._clients.append([client_id, 0, self._touch, False, nonce])
+        # [client id, last seq, LRU touch, refused, hello nonce, last host error]
+        self._clients.append([client_id, 0, self._touch, False, nonce, None])
         self._log("[BADGE] client %d authenticated" % client_id)
         return {"v": 1, "type": "welcome", "nonce": nonce, "unit": self.unit, "client": client_id}
 
@@ -466,7 +474,8 @@ class BadgeRemote:
 
     def _command(self, value, state_fn):
         client_id, seq, command = value.get("client"), value.get("seq"), value.get("token")
-        if not _uint(client_id) or client_id == 0 or not _uint(seq) or command not in TOKENS:
+        host_command = self._hosts is not None and command in HOST_TOKENS
+        if not _uint(client_id) or client_id == 0 or not _uint(seq) or (command not in TOKENS and not host_command):
             return None, None
         entry = self._client(client_id)
         if value.get("unit") != self.unit or entry is None:
@@ -476,10 +485,21 @@ class BadgeRemote:
         if seq == entry[1] and seq != 0:
             self._stats[2] += 1
             # A retry after a lost reply must still learn the command was refused.
+            if host_command:
+                return self._host_state(client_id, seq, True, entry[5]), None
             return self._state(state_fn, client_id, seq, True, entry[3]), None
         if seq < entry[1] or seq == 0:
             return None, None
         entry[1] = seq
+        entry[5] = None
+        if host_command:
+            accepted, error = self._hosts.request(command, value, client_id, seq)
+            entry[3], entry[5] = error is not None, error
+            try:
+                reply = self._host_state(client_id, seq, False, error)
+            except Exception:
+                reply = None
+            return reply, b"BADGE_HOST" if accepted else None
         # VM teardown can hard-fault this runtime; a remote must not reload it.
         denied = (command == "NET_RETRY"
                   or (command in BOND_TOKENS and not self._profile["allow_bond_erase"]))
@@ -491,6 +511,14 @@ class BadgeRemote:
         except Exception:
             reply = None
         return reply, dispatch
+
+    def _host_state(self, client, seq, duplicate, error):
+        reply = {"v": 1, "type": "host", "unit": self.unit, "client": client, "seq": seq,
+                 "dup": duplicate, "hosts": self._hosts.snapshot()}
+        if error is not None:
+            reply["denied"], reply["error"] = True, error
+            reply["hosts"]["peers"] = None  # Reserve room for the refusal in a bounded packet.
+        return reply
 
     def _accept(self, command, client_id, seq, denied):
         """Record a new sequence; return the UART token to dispatch, if any."""
@@ -548,6 +576,14 @@ class BadgeRemote:
 
     def _service(self, length, address, state_fn):
         """Authenticate, reply to and return the token of one datagram."""
+        if self._hosts is not None and length == 69 and self._buffer[:5] == b"BWL1\x01":
+            try:
+                reply = self._hosts.launch.poll(bytes(self._buffer[:length]), self._ticks())
+                if reply is not None:
+                    self._socket.sendto(reply, address)
+            except Exception:  # nosec B110
+                pass
+            return None
         if not self._accepts(length, address):
             self._stats[1] += 1
             return None
