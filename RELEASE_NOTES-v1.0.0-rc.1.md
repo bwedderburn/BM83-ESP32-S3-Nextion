@@ -49,7 +49,7 @@ does not relicense unrelated vendor reference packages.
 ## Installation boundary
 
 Preparation does not install anything. Before any later authorized controller
-update, read `DEPLOYMENT.md`, preserve a verified complete backup and rollback,
+update, read `docs/guides/deployment.md`, preserve a verified complete backup and rollback,
 and establish the exact runtime and supported route. Use source `.py` mode for
 initial debugging and validation; switch to compiled libraries only after that
 configuration is accepted. Keep `BUILD_INFO.txt`, release notes, manifests, and
@@ -73,7 +73,7 @@ Local preparation checks and artifact provenance are recorded in
 scope, not physical operation. The new portfolio 3D demonstration is also
 separate browser evidence and is not part of this firmware package.
 
-The existing `docs/bm83-startup-artwork-validation-2026-11-01.md` records
+The existing `docs/validation/bm83-startup-artwork-validation-2026-11-01.md` records
 1,800.010162 uninterrupted monotonic seconds on a receiver-enabled Mac/helper
 route, combined with owner observations of audible playback, all three screens,
 advancing metadata/time/artwork, and badge pause/resume. It passes that scoped

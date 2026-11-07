@@ -14,10 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 VERSION = "1.0.0-rc.1"
 NOTES = f"RELEASE_NOTES-v{VERSION}.md"
 FIXED_FILES = {
-    "LICENSE", "README.md", "DEPLOYMENT.md", NOTES, "setup.py", "build_mpy.sh",
+    "LICENSE", "README.md", "docs/guides/deployment.md", NOTES, "setup.py", "build_mpy.sh",
     "scripts/fetch_mpy_cross.sh", "scripts/prepare_release.py", "tools/mpy_cross_pin.env",
-    "docs/hardware-test-limitations.md",
-    "docs/bm83-startup-artwork-validation-2026-11-01.md",
+    "docs/validation/hardware-test-limitations.md",
+    "docs/validation/bm83-startup-artwork-validation-2026-11-01.md",
     "docs/reliability/README.md", "docs/reliability/DIRECT-MAINTENANCE.md",
     "docs/releases/RC-PREPARATION.md",
 }
