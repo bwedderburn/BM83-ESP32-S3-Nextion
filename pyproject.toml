@@ -6,7 +6,7 @@ bundle = true
 # (B101: "Use of assert detected"), and tests routinely construct
 # adversarial inputs that trip other low-severity heuristics; running
 # bandit over tests/ produces only false positives for this project.
-exclude_dirs = ["tests", ".venv", "recovered_src"]
+exclude_dirs = ["tests", ".venv"]
 # B101 is also globally skipped as a defense-in-depth measure in case
 # the exclude_dirs setting isn't honored by an older bandit version.
 skips = ["B101"]

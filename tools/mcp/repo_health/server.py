@@ -37,7 +37,7 @@ mcp = FastMCP("repo_health_mcp")
 
 SKIP_DIRS = {
     ".git", ".venv", "venv", "__pycache__", ".pytest_cache", "dist",
-    "recovered_src", "Documents", ".snapshots", "node_modules",
+    "Documents", ".snapshots", "node_modules",
     "pytest-cache-files-fz3be7jp", ".codex", "egg-info",
 }
 SOURCE_EXTS = {".py", ".md", ".yml", ".yaml", ".sh", ".toml", ".ini", ".json", ".cfg"}
@@ -185,7 +185,7 @@ def repo_todo_scan() -> str:
     task syntax — the marker directly after a comment leader (hash, //, or
     <!--) or opening a checkbox/task line. Prose that merely mentions the
     words — docs, prompts, and this docstring — is ignored, as are vendor
-    docs, dist/, recovered_src/ and caches.
+    docs, dist/ and caches.
 
     Returns:
         JSON: {"count", "markers": [{"path", "line", "text"}]} — text trimmed

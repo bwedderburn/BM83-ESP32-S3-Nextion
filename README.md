@@ -77,7 +77,6 @@ docs/                     Guides, reviews, validation, troubleshooting and refer
 scripts/                  Host checks and build/support scripts
 tests/                    Host regression tests
 tools/                    Provisioning, diagnostics and pinned native-build recipes
-recovered_src/            Historical reference; not built or deployed
 ```
 
 Vendor manuals, firmware packages and utilities are consolidated under

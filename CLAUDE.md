@@ -49,7 +49,6 @@ content followed by a duplicate fragment.
   is a verbatim copy of the firmware version; `lib/**/*.mpy` are
   compiled with `mpy-cross -O2`. Regenerate after any change under
   `firmware/circuitpython/lib/`.
-- `recovered_src/` — historical reference, not built or deployed.
 
 When `firmware/` changes, run `build_mpy.sh` to refresh `dist/`. Do not
 hand-edit `dist/` — it will be overwritten on the next build.

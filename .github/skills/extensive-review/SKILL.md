@@ -50,7 +50,7 @@ Module map (all under `firmware/circuitpython/`):
    Green CI is not a merge verdict for protocol changes; hardware serial capture is.
 4. `dist/circuitpython/` is generated (`build_mpy.sh`); never hand-edit it. A test enforces
    `dist/circuitpython/main.py` parity with `firmware/circuitpython/main.py`.
-5. Treat `Documents/`, vendor PDFs/HEX at repo root, and `recovered_src/` as read-only reference.
+5. Treat `Documents/` and vendor PDFs/HEX at repo root as read-only reference.
    Treat `.github/workflows/` as read-only: CI changes go in the report as ready-to-apply diffs,
    not direct edits.
 6. Keep the implemented changeset ≤ ~300 changed lines (excluding the report), mechanical and

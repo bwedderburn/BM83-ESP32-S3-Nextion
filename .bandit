@@ -8,5 +8,5 @@
 # covers bare relative ones. Do not use bare names (bandit also substring-
 # matches, so "tests" would hide e.g. firmware/.../selftests.py), and do not
 # put spaces after the commas (they become part of the pattern).
-exclude = */tests/*,*/.venv/*,*/recovered_src/*,tests/*,.venv/*,recovered_src/*
+exclude = */tests/*,*/.venv/*,tests/*,.venv/*
 skips = B101
