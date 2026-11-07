@@ -44,7 +44,7 @@ Each future candidate requires independent review before tagging. Relevant
 local host/security/packaging gates, green main-branch CI for the exact commit,
 inspected assets/provenance and an explicit owner release decision remain
 release gates. The [release handoff](../reliability/release-handoff-2026-11-07.md)
-records the remaining work; a version increment or successful host check cannot
+records release evidence and follow-up status; a version increment or successful host check cannot
 substitute for a supported row's physical acceptance.
 
 ## Published assets
@@ -76,11 +76,15 @@ archives must not be copied wholesale to a device.
 
 ## Reproduce the published RC assets
 
-Use `scripts/package_source_release.py`, the canonical implementation for both
-profiles. `scripts/prepare_release.py` is a compatibility entrypoint to the same
-code; `--ref` is an alias for `--revision`. Start with a clean checkout of
+Current `main` uses `scripts/package_source_release.py` as its only release
+entrypoint. `--version` and `--scope` are required, and `--compiler` /
+`--compiler-sha256` require `--include-mpy`. The `prepare_release.py` shim has
+been retired; `--ref` remains an alias for `--revision` in the canonical CLI.
+
+For published assets, use the packager at their own tag. Start with a clean checkout of
 `v1.0.0-rc.1` at exact commit `888b089c5a75865bb2bf8c76833f0eddc0fbd290`,
-including its packager. Later `main` documentation commits are outside the
+including its packager. That snapshot retains its original compatibility shim
+and CLI behavior. Later `main` tooling and documentation commits are outside the
 published inputs; packaging the current `HEAD` would describe a different source
 revision. Choose a new host output directory; existing paths and symlinks are refused.
 

@@ -27,7 +27,7 @@ jobs:
       - name: Validate reliability configuration
         run: python scripts/check_reliability_setup.py
       - name: Analyze production Python
-        run: python -m bandit --ini .bandit -r firmware/circuitpython addons/universe-badge/apps/bm83_remote -ll
+        run: python -m bandit --ini .bandit -r firmware/circuitpython addons/universe-badge/apps/bm83_remote scripts -ll
       - name: Audit development, MCP and native-build dependency pins
         run: |
           python -m pip_audit -r requirements-reliability.txt

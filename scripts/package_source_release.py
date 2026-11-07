@@ -57,6 +57,8 @@ def sha256(data):
 
 def package(revision, version, output, *, scope="application-source", include_mpy=False,
             compiler=None, compiler_sha256=None):
+    if not include_mpy and (compiler is not None or compiler_sha256 is not None):
+        raise ValueError("--compiler and --compiler-sha256 require --include-mpy")
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?", version):
         raise ValueError("Version must be a v-prefixed semantic version")
     commit = git("rev-parse", "--verify", "--end-of-options", revision + "^{commit}").decode().strip()
@@ -148,7 +150,7 @@ RC_FIXED_FILES = frozenset({
     "docs/reliability/phase1-bintel-2026-11-04.md", "docs/reliability/phase2-host-selection.md",
     "docs/releases/README.md", "docs/releases/RC-PREPARATION.md",
     "scripts/fetch_mpy_cross.sh", "scripts/package_source_release.py",
-    "scripts/prepare_release.py", "tools/mpy_cross_pin.env",
+    "tools/mpy_cross_pin.env",
     "tools/bm83-windows-volume-host.py", "tools/windows_volume_app_receiver.py",
 })
 BADGE_ROOT = "addons/universe-badge/"
@@ -307,6 +309,8 @@ def write_archive(path, files, metadata, executable=()):
 
 def package_controller_badge(commit, version, output, *, include_mpy=False,
                              compiler=None, compiler_sha256=None):
+    if not include_mpy and (compiler is not None or compiler_sha256 is not None):
+        raise ValueError("--compiler and --compiler-sha256 require --include-mpy")
     source, executable = rc_source_files(commit, version)
     compiled = compiled_files(commit, source, compiler, compiler_sha256) if include_mpy else None
     output = Path(output)
@@ -337,14 +341,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", "--ref", dest="revision", required=True,
                         help="Reviewed Git commit; reads committed files only")
-    parser.add_argument("--version", default="v1.0.0-rc.1")
+    parser.add_argument("--version", required=True, help="Explicit v-prefixed release version")
     parser.add_argument("--scope", choices=("application-source", "controller-badge-source"),
-                        default="application-source")
+                        required=True)
     parser.add_argument("--output", type=Path, required=True, help="New host output directory")
     parser.add_argument("--include-mpy", action="store_true", help="Verify and include exact-ref dist/ output")
     parser.add_argument("--compiler", type=Path, help="Actual mpy-cross binary for verification")
     parser.add_argument("--compiler-sha256", help="Observed SHA-256 of that compiler file")
     args = parser.parse_args()
+    if not args.include_mpy and (args.compiler is not None or args.compiler_sha256 is not None):
+        parser.error("--compiler and --compiler-sha256 require --include-mpy")
     print(json.dumps(package(args.revision, args.version, args.output, scope=args.scope,
                              include_mpy=args.include_mpy, compiler=args.compiler,
                              compiler_sha256=args.compiler_sha256), indent=2))

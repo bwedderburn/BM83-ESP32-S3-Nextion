@@ -24,7 +24,7 @@ the repository root unless they explicitly select another folder.
 - [Direct-maintenance handoff](reliability/DIRECT-MAINTENANCE.md): repository-only
   scope, preserved candidates and delivery procedure.
 - [Release handoff, 2026-11-07](reliability/release-handoff-2026-11-07.md): rc.1
-  gates, hashes, independent reproduction, publication order and deferred backlog.
+  gates, hashes, independent reproduction, publication order and tooling follow-up status.
 - [Native runtime flash guards](reliability/RUNTIME-FLASH-GUARDS.md).
 - [Security scan status](security/SCAN-STATUS.md): supported analyses, old tool
   records and reviewed findings.

@@ -96,7 +96,7 @@ Host tests, compiler checks and browser simulations each establish only their me
 The [dated release handoff](docs/reliability/release-handoff-2026-11-07.md)
 records the verbatim local gates, CI run IDs, all four asset hashes, compiler
 digest, separate-session reproduction result and actual rc.1 gate order. It also
-records repository cleanup and the deferred packaging backlog. Future candidates
+records repository cleanup and the packaging backlog's implementation on later `main`. Future candidates
 are independently reviewed before tagging.
 
 The [November 4 B-Intel Phase 1 record](docs/reliability/phase1-bintel-2026-11-04.md)

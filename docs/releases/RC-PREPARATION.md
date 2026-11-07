@@ -30,17 +30,20 @@ beb8018100eba91919745990a860a55105a5ae6b9e89bcb74059822aa072bbfb  MANIFEST.json
 
 ## One canonical packager
 
-`scripts/package_source_release.py` owns both supported source profiles:
+At the released rc.1 tag, `scripts/package_source_release.py` owns both supported
+source profiles:
 
 - `--scope application-source` preserves the earlier controller-only preview.
 - `--scope controller-badge-source` selects the expanded RC package, including
   controller/badge source, public assets/notices, the Windows companion and
   launch receiver, and the explicit release/deployment/validation files.
 
-`scripts/prepare_release.py` is a compatibility entrypoint to the same
-implementation. `--ref` aliases `--revision`; it does not select a different
-allowlist or output policy. Always specify the scope and version when preparing
-release assets.
+At that tag, `scripts/prepare_release.py` is a compatibility entrypoint to the
+same implementation. Later `main` retired the shim and made `--scope` and
+`--version` required; compiler arguments also require `--include-mpy`. Reproduce
+the published files using their own tagged packager, preserving its original
+allowlist and behavior. `--ref` aliases `--revision` in the canonical CLI.
+The commands below specify the scope and version explicitly on both versions.
 
 The packager reads committed Git objects with replacement objects disabled. It
 selects explicit reviewed paths, requires the profile's expected inputs and

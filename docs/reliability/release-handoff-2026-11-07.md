@@ -123,33 +123,36 @@ tie final `v1.0.0` to the platform rows and remaining acceptance gates.
   files, frozen evidence and the main checkout's `.claude/` and `tmp/` remain
   preserved outside tracked release assets.
 
-## Tracked backlog — deferred
+## Tracked backlog — implemented on later main
 
-These are future packaging and host-policy tasks. This handoff records them
-without implementing them or changing the published tag, packager or assets.
+These tasks were deferred when this handoff was first recorded. Subsequent
+host-only maintenance on November 7 implemented them on later `main`; its gates
+are recorded in that implementation commit message. The published rc.1 tag,
+tagged packager and four assets remain unchanged.
 
-- [ ] Make `--scope` and `--version` required in
+- [x] Make `--scope` and `--version` required in
   `scripts/package_source_release.py` so a release invocation selects both
   explicitly.
-- [ ] Reject `--compiler` / `--compiler-sha256` when `--include-mpy` is absent.
-- [ ] Harden or remove the `scripts/prepare_release.py` compatibility shim,
-  with an explicit supported invocation/import contract.
-- [ ] Add automated RC-profile plus `--include-mpy` end-to-end coverage of
+- [x] Reject `--compiler` / `--compiler-sha256` when `--include-mpy` is absent.
+- [x] Remove the `scripts/prepare_release.py` compatibility shim and its current
+  RC allowlist entry; the canonical script is the supported release entrypoint.
+- [x] Add automated RC-profile plus `--include-mpy` end-to-end coverage of
   combined source/compiled packaging and its manifests/checksums. Preserve the
   existing manual reproduction evidence and focused compiler-verification tests.
-- [ ] Add a `main()` smoke test covering the canonical CLI entry point.
-- [ ] Add a cross-script `BUILD_INFO.txt` contract test from build output
+- [x] Add a `main()` smoke test covering the canonical CLI entry point.
+- [x] Add a cross-script `BUILD_INFO.txt` contract test from build output
   through compiled packaging. Extend the existing field/refusal and build-script
   metadata tests with the exact four-field, source/compiler/optimization contract.
-- [ ] Add `scripts/` to the Bandit targets in `.github/workflows/host-security.yml`.
-- [ ] Fix the moved-path comment in `tools/mpy_cross_pin.env` from
+- [x] Add `scripts/` to the Bandit targets in `.github/workflows/host-security.yml`.
+- [x] Fix the moved-path comment in `tools/mpy_cross_pin.env` from
   `docs/hardware-test-limitations.md` to `docs/validation/hardware-test-limitations.md`,
   preserving the compiler version and digest.
-- [ ] Keep published-asset reproduction on the packager at each asset's own
+- [x] Keep published-asset reproduction on the packager at each asset's own
   tag. The rc.1 guide already pins `888b089`; preserve and verify this invariant
   for future releases.
 
-The shim and automated-test items are follow-up hardening/coverage work. They
-do not invalidate the recorded published-byte reproduction or authorize device
-operations. The [reliability matrix](README.md) and
+Host-only tests cover the current CLI, combined RC source/compiled output and
+the build-script/packager metadata contract. These follow-ups do not invalidate
+the recorded published-byte reproduction or authorize device operations.
+The [reliability matrix](README.md) and
 [Phase 2 record](phase2-host-selection.md) continue to own physical acceptance.

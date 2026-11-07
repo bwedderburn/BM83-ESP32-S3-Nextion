@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 import re
+import shlex
 import sys
 
 import yaml
@@ -27,6 +28,9 @@ OUT_OF_SCOPE_EVENTS = ("schedule", "workflow_dispatch", "push")
 # Only the existing Codacy scanner is preserved. Retired automation names must
 # not reserve exemptions for workflows that could be added in the future.
 OUT_OF_SCOPE_WORKFLOWS = ("codacy.yml",)
+PRODUCTION_BANDIT_TARGETS = frozenset({
+    "firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts",
+})
 
 
 def is_out_of_scope(text, name):
@@ -82,6 +86,29 @@ def reference_errors(data, text):
     return errors
 
 
+def production_bandit_errors(data, name):
+    """Keep the host-security scan complete and able to fail its workflow."""
+    if name != "host-security.yml":
+        return []
+    job = data.get("jobs", {}).get("host-security", {})
+    if job.get("if") is None and job.get("continue-on-error", False) is False:
+        for step in job.get("steps", []):
+            command = step.get("run")
+            if (not isinstance(command, str) or step.get("if") is not None
+                    or step.get("continue-on-error", False) is not False):
+                continue
+            try:
+                args = shlex.split(command)
+            except ValueError:
+                continue
+            if (args[:6] == ["python", "-m", "bandit", "--ini", ".bandit", "-r"]
+                    and len(args) == 7 + len(PRODUCTION_BANDIT_TARGETS)
+                    and args[-1] == "-ll"
+                    and set(args[6:-1]) == PRODUCTION_BANDIT_TARGETS):
+                return []
+    return ["host security must run the required production Bandit scan without bypasses"]
+
+
 def workflow_errors(data, text, name=""):
     errors = trigger_errors(data, text, name)
     if is_out_of_scope(text, name):
@@ -97,6 +124,7 @@ def workflow_errors(data, text, name=""):
             errors.append("job must have only contents: read")
         for step in job.get("steps", []):
             errors.extend(step_errors(step))
+    errors.extend(production_bandit_errors(data, name))
     return errors
 
 

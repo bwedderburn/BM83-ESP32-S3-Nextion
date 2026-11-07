@@ -40,6 +40,49 @@ class ReliabilityPolicyTests(unittest.TestCase):
     def test_safe_workflow(self):
         self.assertEqual(POLICY.workflow_errors(self.workflow(), ""), [])
 
+    def host_security_workflow(self):
+        data = self.workflow()
+        job = data["jobs"].pop("test")
+        data["jobs"]["host-security"] = job
+        job["steps"].append({"run": (
+            "python -m bandit --ini .bandit -r "
+            "firmware/circuitpython addons/universe-badge/apps/bm83_remote scripts -ll"
+        )})
+        return data
+
+    def test_host_security_requires_each_production_bandit_target(self):
+        for target in ("firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts"):
+            with self.subTest(target=target):
+                data = self.host_security_workflow()
+                step = data["jobs"]["host-security"]["steps"][-1]
+                step["run"] = step["run"].replace(target + " ", "")
+                self.assertIn("host security must run the required production Bandit scan without bypasses",
+                              POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
+
+    def test_host_security_bandit_scan_cannot_be_skipped_or_suppress_errors(self):
+        for field, value, location in (("if", "false", "step"), ("continue-on-error", True, "step"),
+                                       ("if", "false", "job"), ("continue-on-error", True, "job")):
+            with self.subTest(field=field, location=location):
+                data = self.host_security_workflow()
+                job = data["jobs"]["host-security"]
+                item = job["steps"][-1] if location == "step" else job
+                item[field] = value
+                self.assertIn("host security must run the required production Bandit scan without bypasses",
+                              POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
+        data = self.host_security_workflow()
+        data["jobs"]["host-security"]["steps"][-1]["run"] += " || true"
+        self.assertIn("host security must run the required production Bandit scan without bypasses",
+                      POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
+
+    def test_host_security_accepts_required_scan_with_reordered_targets(self):
+        data = self.host_security_workflow()
+        step = data["jobs"]["host-security"]["steps"][-1]
+        step["run"] = (
+            "python -m bandit --ini .bandit -r scripts "
+            "addons/universe-badge/apps/bm83_remote firmware/circuitpython -ll"
+        )
+        self.assertEqual(POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"), [])
+
     def agent(self):
         return {
             "target": "vscode", "tools": ["read", "search"],
