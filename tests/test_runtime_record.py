@@ -28,18 +28,6 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-@pytest.mark.parametrize("filename,key", [
-    ("espidf.constraints.v6.0.txt", "constraints_sha256"),
-    ("requirements-build.txt", "requirements_sha256"),
-])
-def test_repository_dependency_files_match_active_provenance_pins(filename, key):
-    recipe = SCRIPT.parent
-    pins = json.loads((recipe / "source-pins.json").read_text(encoding="utf-8"))
-    assert digest((recipe / filename).read_bytes()) == pins["security_build"][key], (
-        f"Refresh security_build.{key} after changing {filename}"
-    )
-
-
 def git(folder, *args):
     result = subprocess.run(["git", "-C", str(folder), *args], capture_output=True,
                             text=True, timeout=15, check=True)

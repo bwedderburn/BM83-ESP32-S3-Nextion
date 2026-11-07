@@ -16,13 +16,28 @@ access, deployment, pairing, playback or live NVS data is part of this recipe.
 including its old constraints digest. `security_build` identifies the new active
 Linux snapshot and its current requirements/constraints hashes. Do not relabel
 an original artifact with new digests or replace frozen candidates silently.
-The local release candidate incorporates dependency updates from PRs #196 and
-#197: `idf-build-apps < 3.2` for Python >=3.10 and NVS partition generator
-`0.3.0`. The frozen build requirements do not install `idf-build-apps`; the
-expanded constraint does not add that tool to this recipe. The active
-dependency hashes identify the refreshed files. The dated November 1 native
-build reports retain their original inputs and do not validate this refreshed
-dependency snapshot; a new native build has not been run for this update.
+The active recipe incorporates dependency updates from PRs #196 and #197
+(`idf-build-apps < 3.2` for Python >=3.10 and NVS partition generator `0.3.0`),
+#199 (Click `8.5.0`) and #200 (the optional linuxdoc constraint `20260504`).
+The frozen build requirements install neither `idf-build-apps` nor linuxdoc;
+their constraints do not add those tools to this recipe. Click `8.5.0` is an
+explicit local override of the pinned ESP-IDF's upstream `click<8.2` bound,
+validated for the recorded Linux/Python 3.11.18 environment.
+
+The active raw-byte dependency hashes in `source-pins.json` are:
+
+| Input | SHA256 |
+| --- | --- |
+| `requirements-build.txt` | `e0c1f8197c9a62b3a7ff875574036be301eee1a62008db4c58a947f9573a2f2b` |
+| `espidf.constraints.v6.0.txt` | `0728b440d5b5f6fb517d954b74889bc9e8e4b1e079b1a92237f7e43036d4edc5` |
+
+The [3 November dependency validation](VALIDATION-DEPENDENCIES-2026-11-03.md)
+records real offline host-tool preflight and two clean native builds of these
+combined inputs. Raw comparison passed for all ten recorded artifacts, and
+both builds passed the default offline image validator with no writes. This
+dated evidence does not qualify later source or patch changes, or establish
+hardware acceptance. The November 1 reports retain their original inputs and
+frozen artifacts; they are not relabeled as builds of the refreshed recipe.
 
 The additional [one-line web-asset build-tool patch](reproducible-web-assets.patch)
 sets gzip's timestamp to zero before compression. The pinned upstream generator

@@ -1,96 +1,111 @@
-# BM83 controller and badge source — v1.0.0-rc.1
+# BM83 Remote controller and badge source — v1.0.0-rc.1
 
-Status: local release candidate for review. No tag, GitHub Release, upload,
-hardware installation, native-runtime update, or website deployment is made by
-this preparation. Python package metadata uses `1.0.0rc1`; the proposed Git tag
-is `v1.0.0-rc.1`.
+Status: proposed release candidate for review. Python package metadata uses
+`1.0.0rc1`; the proposed Git tag is `v1.0.0-rc.1`. Preparing this candidate does
+not create a tag or GitHub Release, upload assets, install firmware or deploy a
+website. The published [v0.1.0 source-preview prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v0.1.0)
+remains available; it does not establish acceptance of this later integration.
 
 ## Included behavior and scope
 
-The existing CircuitPython controller coordinates the BM83 audio module,
-Nextion touchscreen, BLE consumer controls, and remote state/control paths.
-The optional Universe badge app communicates with the controller's implemented
-BMW1 authenticated UDP receiver. Playback metadata, press/release volume
-gestures, connection handling, bounded work, and native hash cleanup admission
-are represented by the existing source and host tests.
+The ESP32-S3 CircuitPython controller coordinates BM83 UART control/metadata,
+the Nextion touchscreen, relative BLE HID volume keys and remote state/control
+paths. BM83 carries audio independently of the controller. The optional Universe
+badge uses the implemented BMW1 authenticated UDP receiver. The full repository
+also contains the separate CrowPanel firmware and native-runtime build recipe.
 
-This candidate changes release metadata, licensing, documentation, and the
-native-runtime build dependency recipe. It includes merged PR #196
-(`idf-build-apps < 3.2` on Python >=3.10) and PR #197 (NVS partition generator
-`0.3.0`), with refreshed active dependency hashes and a regression check that
-rejects stale hashes. These build tools remain outside the selected download
-archives. The controller and badge application source is unchanged by this
-refresh; no new native-runtime build or hardware validation is claimed.
-Historical documentation is corrected to recognize the receiver and the later
-scoped Mac/helper acceptance record.
+This candidate includes the behavior already merged through `096706b`:
 
-## Candidate downloads
+- Bond-preserving Disconnect, saved-host selection and bounded new-host pairing
+  on CrowPanel and the badge, backed by the project native host-policy runtime.
+- CrowPanel host labels and the revised Rename keyboard, badge battery status,
+  and confirmed host-control results rather than radio-delivery inference.
+- The Windows volume companion and authenticated launch receiver, with an
+  **Open Windows app** action on CrowPanel and the badge.
+- The existing playback, metadata, artwork and relative-volume paths, along with
+  the startup and BLE enrollment/recovery changes recorded on `main`.
+
+The release preparation itself changes packaging, metadata, documentation and
+tests. It does not add a firmware change to that rebased controller/badge source.
+Absolute-volume feedback and synchronized mute remain unavailable.
+
+The native dependency recipe already includes PRs #196 (`idf-build-apps < 3.2`
+on Python >=3.10), #197 (NVS generator 0.3.0), #199 (Click 8.5.0 with a local
+compatibility override) and #200 (the optional linuxdoc 20260504 constraint).
+The [November 3 dependency validation](tools/circuitpython-runtime/VALIDATION-DEPENDENCIES-2026-11-03.md)
+records two matching native builds of the final combined dependency inputs.
+Those builds are historical, uninstalled candidate evidence; this release
+preparation does not rerun them or bundle a native image.
+
+## Candidate assets
 
 - `bm83-controller-badge-v1.0.0-rc.1-source.zip`: selected controller and badge
-  source, public trust assets and their notices, license, installation guidance,
-  relevant validation records, compiler pin, and release-packaging helper.
-- `bm83-controller-v1.0.0-rc.1-mpy.zip`: controller `main.py` and `boot.py`, public
-  inactive example settings, and libraries built with pinned CircuitPython
-  mpy-cross **10.3.1**, optimization **-O2**. The separate `BUILD_INFO.txt`
-  identifies the exact source commit and compiler version.
-- `SHA256SUMS.txt`: archive hashes. Each ZIP also contains a per-file
-  `RELEASE-MANIFEST.json` with exact source revision and file hashes.
+  source, public assets/notices, the Windows companion and launch receiver,
+  license, release/deployment guidance, selected validation records and pinned
+  application-build helpers.
+- `bm83-controller-v1.0.0-rc.1-mpy.zip`: optional controller `main.py` and
+  `boot.py`, inactive example settings and project libraries compiled with the
+  pinned CircuitPython **10.3.1** mpy-cross at **-O2**. It is generated only after
+  exact-revision build and compiler checks pass.
+- `MANIFEST.json` and `SHA256SUMS.txt`: source/input and archive provenance.
+  Each ZIP also contains its own `MANIFEST.json`; the compiled archive includes
+  `BUILD_INFO.txt` identifying its source commit and compiler.
 
-The source ZIP is intentionally a selected controller/badge package, not a full
-repository export. CrowPanel firmware, native CircuitPython images, vendor
-PDFs/installers/demo HEX packages, private profiles, credentials, caches, device
-backups, and live captures are excluded. CrowPanel and native-runtime builds
-remain separate artifacts with their own toolchains and validation.
-
-The project's MIT license covers project-authored software; retained asset and
-dependency notices continue to govern their respective material. The license
-does not relicense unrelated vendor reference packages.
+The selected source ZIP is an application package. CrowPanel source/binaries,
+native CircuitPython images and build dependencies, vendor reference packages,
+Adafruit libraries, private profiles, credentials, device backups and captures
+are excluded. CrowPanel and native-runtime builds have separate toolchains and
+acceptance gates. Retained asset/dependency notices govern their material; the
+project MIT license does not relicense vendor references.
 
 ## Installation boundary
 
-Preparation does not install anything. Before any later authorized controller
-update, read `docs/guides/deployment.md`, preserve a verified complete backup and rollback,
-and establish the exact runtime and supported route. Use source `.py` mode for
-initial debugging and validation; switch to compiled libraries only after that
-configuration is accepted. Keep `BUILD_INFO.txt`, release notes, manifests, and
-the archive wrapper outside the device filesystem.
+Before any later authorized update, read the
+[deployment and rollback guide](docs/guides/deployment.md), preserve a verified
+complete backup and establish the exact runtime and supported route. Use source
+`.py` mode for initial debugging/validation. Keep archive wrappers, manifests and
+`BUILD_INFO.txt` outside the device filesystem.
 
-The evaluated installed `10.3.1-dirty` runtime has a separate Ctrl-C/VM teardown
-fault. Its documented safe-mode/paused-runtime recovery safeguards take
-precedence over general copy/soft-reload examples. This RC does not bundle a
-replacement native runtime or authorize a reset or flash operation.
+The documented installed `10.3.1-dirty` runtime has a separate Ctrl-C/VM teardown
+fault. Its safe-mode/paused-runtime recovery safeguards take precedence over
+general copy/soft-reload examples. Host selection requires the matching project
+native host-policy runtime and application components; an older eight-bond
+runtime alone cannot provide it. This RC does not authorize reset or flashing.
 
-The optional badge client is installed separately on BADGER using its existing
-launcher. Live BMW1 control needs compatible native hash cleanup support,
-opt-in receiver configuration, and private enrollment on both ends. Never
-reuse or distribute a real key, receiver profile, Wi-Fi configuration, or
-saved device state in an archive.
+The badge app is installed separately using its existing launcher. Live BMW1
+control needs compatible native hash cleanup, opt-in receiver configuration and
+private enrollment. Windows launch uses separate private receiver configuration
+and authentication material. Preserve existing keys, profiles, Wi-Fi settings,
+bonds and saved state; none belong in a release archive.
 
 ## Validation and remaining limits
 
-Local preparation checks and artifact provenance are recorded in
-`docs/releases/RC-PREPARATION.md`. A completed host/build check proves its own
-scope, not physical operation. The new portfolio 3D demonstration is also
-separate browser evidence and is not part of this firmware package.
+[RC preparation](docs/releases/RC-PREPARATION.md) describes the reproducible host
+and packaging gates. Current results and generated archive digests are recorded
+against the final candidate revision in the maintenance handoff. Host tests,
+compiler checks and browser simulations each establish only their measured scope.
 
-The existing `docs/validation/bm83-startup-artwork-validation-2026-11-01.md` records
-1,800.010162 uninterrupted monotonic seconds on a receiver-enabled Mac/helper
-route, combined with owner observations of audible playback, all three screens,
-advancing metadata/time/artwork, and badge pause/resume. It passes that scoped
-delivery and physical acceptance gate. Its raw host result and separate owner
-acceptance remain distinct evidence.
+The [November 4 B-Intel Phase 1 record](docs/reliability/phase1-bintel-2026-11-04.md)
+accepts its Windows Apple Music/BLE HID measured workload, owner screens/controls,
+exact original restoration and automatic CrowPanel recovery. The
+[November 5–6 Phase 2 record](docs/reliability/phase2-host-selection.md) separately
+records exercised Windows enrollment/persisted pause, a saved Pi handoff,
+CrowPanel/badge controls, Rename and Windows launch. A new qualified Phase 2
+timing window and the broader enrollment, competing-host and power-order matrix
+remain open.
 
-That result does not establish helper-free AVRCP delivery, Windows/Pi behavior,
-all BLE handoff stacks, every cold-start order, power-interruption recovery, or
-prolonged outages. Ctrl-C/VM teardown remains unresolved. Transient no-reply and
-retry observations are retained; this is not a zero-loss network claim.
+The [reliability matrix](docs/reliability/README.md) continues to classify both
+macOS/Apple Music helper-off and helper-on routes as **Not accepted**. The
+[November 1 startup/artwork record](docs/validation/bm83-startup-artwork-validation-2026-11-01.md)
+retains its historical observations and owner reports; they do not supersede
+that current matrix. The Windows BM83 audio power-cycle wedge and native-runtime
+teardown fault remain separate unresolved limits. No result here qualifies all
+hosts or unattended deployment.
 
 ## Reproduction
 
-Use the exact committed candidate revision in a clean checkout, the repository
-compiler pin, and the instructions in `docs/releases/RC-PREPARATION.md`. Build
-first, then package the exact commit. The packager refuses a dirty or mismatched
-compiled provenance record and an unexpected compiled file set.
-
-Local archives are review artifacts. Publishing, installing, or claiming a
-stable all-platform release requires its own explicit decision.
+Use the exact reviewed commit in a clean checkout and the canonical
+`scripts/package_source_release.py` with `--scope controller-badge-source`.
+[RC preparation](docs/releases/RC-PREPARATION.md) gives the commands and optional
+compiled-artifact requirements. Local archives remain review artifacts until
+their revision, supported scope and publication are explicitly approved.

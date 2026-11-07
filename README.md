@@ -36,8 +36,12 @@ See the [hardware reference](docs/reference/hardware.md).
 - CrowPanel Now Playing, compact transport/volume buttons, Settings and battery
   indication; its progress bar displays playback position and does not seek.
 - Optional Wi-Fi album artwork lookup on CrowPanel using track metadata.
-- Bond-preserving Pause/Enable controls for handing the volume remote between
-  saved hosts, with confirmed state rather than radio-delivery inference.
+- Bond-preserving Disconnect, saved-host selection and bounded new-host pairing
+  controls on CrowPanel and the badge, plus CrowPanel host labels and a Rename
+  keyboard. Completion uses observed controller state; the badge also displays
+  its battery status.
+- A Windows volume companion and authenticated launch receiver, with an
+  **Open Windows app** action on CrowPanel and the badge.
 - An optional [Mac metadata bridge](docs/guides/mac-metadata-bridge.md) for sources
   that omit native AVRCP track text. Bluetooth continues to carry the audio.
 
@@ -53,6 +57,10 @@ passed its agreed measured, physical and restoration/recovery scope. Other
 platforms and power-order cases remain subject to the
 [acceptance gates](docs/reliability/README.md). Host tests do not establish stable
 radio, audio or screen behavior.
+The [November 5–6 host-selection record](docs/reliability/phase2-host-selection.md)
+also records exercised Windows/Pi handoffs, the revised CrowPanel Rename keyboard,
+badge controls and Windows launch. Its broader host/power-order matrix and a new
+qualified Phase 2 timing window remain open.
 
 ## Start here
 
@@ -112,9 +120,10 @@ Host tests, native compilation and physical acceptance are separate evidence.
   [reliability runbook](docs/reliability/README.md).
 - Metadata availability, including genre and playback timing, depends on the source.
   Online artwork is a lookup result, not artwork retrieved from BM83 UART.
-- The [first-release draft](docs/releases/v0.1.0.md) describes the candidate scope,
-  proposed assets and remaining gates. Drafting a release does not qualify it for
-  unattended deployment.
+- The active [v1.0.0-rc.1 notes](RELEASE_NOTES-v1.0.0-rc.1.md) and
+  [release preparation guide](docs/releases/README.md) describe the proposed
+  assets and remaining gates. The earlier v0.1.0 source-preview notes remain a
+  historical record. Preparing a candidate does not qualify unattended deployment.
 
 Project code is provided under [LICENSE](LICENSE); bundled third-party material
 retains its own terms. See [security reporting](SECURITY.md) and the

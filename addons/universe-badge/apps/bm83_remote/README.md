@@ -17,9 +17,13 @@ fetch or `os.urandom`, so it covers rendering and button handling against
 controlled replies, not real Wi-Fi/UDP, a BM83 unit, or the physical badge
 display and buttons. Separate later
 [Mac/helper validation](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/main/docs/validation/bm83-startup-artwork-validation-2026-11-01.md)
-records scoped 30-minute physical acceptance with owner observations. That
-result does not extend the simulator's scope or establish all platforms and
-startup/recovery combinations.
+records scoped 30-minute physical acceptance with owner observations for that
+dated delivery. The separate
+[B-Intel Phase 1 record](../../../../docs/reliability/phase1-bintel-2026-11-04.md)
+documents the later Windows scope. Neither record qualifies the current release
+candidate, extends the simulator's scope, or establishes all platforms and
+startup/recovery combinations. The current platform verdicts remain in the
+[reliability runbook](../../../../docs/reliability/README.md).
 
 Playback validation now rejects snapshots that omit
 `duration_ms`, `position_ms`, or `position_age_ms`; these fields may explicitly

@@ -1,142 +1,125 @@
-# Local release candidate preparation
+# v1.0.0-rc.1 preparation
 
-Candidate: Python version `1.0.0rc1`, proposed Git tag `v1.0.0-rc.1`.
-This document describes local preparation only; no tag or public release exists
-as a consequence of these commands.
+Python package version: `1.0.0rc1`. Proposed Git tag: `v1.0.0-rc.1`.
+The active candidate continues from `main` at `096706b` on
+`codex/bm83-release-candidate-20261107`. The published
+[v0.1.0 source-preview prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v0.1.0)
+and its [original draft notes](v0.1.0.md) remain historical. These commands prepare
+review assets; they do not create tags/releases, upload files or operate devices.
 
-## Scope and source selection
+## One canonical packager
 
-The release helper reads committed Git blobs from the requested revision. Its
-allowlist contains `firmware/circuitpython/`, `addons/universe-badge/`, and a
-small explicit set of release/installation/validation files. It never walks
-the entire working tree to create a source archive. Generated or untracked
-files cannot silently enter the source package.
+`scripts/package_source_release.py` owns both supported source profiles:
 
-Compiled output must match the exact committed revision in `dist/BUILD_INFO.txt`
-and the pinned CircuitPython 10.3.1 compiler at -O2. Expected output names are
-derived from committed source: source entrypoints remain verbatim `.py`, library
-modules become `.mpy`, and tracked public assets retain their exact bytes.
-Unexpected files, private profiles, private key blocks, and escaped paths are
-refused. The native runtime, CrowPanel build, and vendor reference/demo packages
-are excluded. No device drive or serial port is used.
+- `--scope application-source` preserves the earlier controller-only preview.
+- `--scope controller-badge-source` selects the expanded RC package, including
+  controller/badge source, public assets/notices, the Windows companion and
+  launch receiver, and the explicit release/deployment/validation files.
 
-ZIP entry order, timestamps, file modes, JSON formatting, and separators are
-fixed. Stored ZIP entries avoid compression-library differences. Repeating the
-packaging command for identical committed source and compiled bytes produces
-identical archive SHA-256 values. Reproducing native compiler output itself
-still requires the documented compiler/runtime compatibility.
+`scripts/prepare_release.py` is a compatibility entrypoint to the same
+implementation. `--ref` aliases `--revision`; it does not select a different
+allowlist or output policy. Always specify the scope and version when preparing
+release assets.
 
-## Local build and package
+The packager reads committed Git objects with replacement objects disabled. It
+selects explicit reviewed paths, requires the profile's expected inputs and
+rejects symlinks, submodules, escaped paths and private material. Working-tree
+edits, untracked files and generated source cannot enter the source ZIP.
+The native build recipe/dependencies, CrowPanel firmware and vendor packages
+remain outside this selected package. No device drive or serial port is used.
 
-1. Commit the reviewed release files and note the exact commit.
-2. Select the repository-pinned CircuitPython 10.3.1 mpy-cross for the host.
-3. Confirm the resolved `dist/circuitpython` output is inside this isolated
-   checkout, then run the existing build script. Its cleanup removes only that
-   generated controller directory; never point it at a device filesystem.
-4. Run the packager from the repository root:
+ZIP member order, stored entries, timestamps, modes, JSON and path separators
+are fixed. Identical committed inputs and compiled bytes produce identical
+archive hashes. The output directory must be new; existing files/directories and
+output symlinks are refused. Choose a host path for review artifacts, never a
+device filesystem.
 
-   ```sh
-   python scripts/prepare_release.py --include-mpy --compiler-sha256 <observed-compiler-sha256>
-   ```
+## Prepare source assets
 
-   Source-only preparation omits `--include-mpy` and the compiler hash. Output
-   defaults to ignored `dist/releases/v1.0.0-rc.1/`. Existing differing archives
-   are refused; choose another output folder inside `dist/` for another build.
+Commit reviewed changes first. Substitute the full reviewed commit SHA and a
+new host directory below; neither command builds or installs firmware.
 
-5. Verify `SHA256SUMS.txt`, internal manifests, file names, and notices. Repeat
-   the packaging command to check deterministic archive bytes.
+```powershell
+python scripts/package_source_release.py --revision <reviewed-commit-sha> --version v1.0.0-rc.1 --scope controller-badge-source --output C:\Users\brian\Downloads\BM83-v1.0.0-rc.1-source-assets
+```
 
-The command writes only archives/checksums under the checkout's ignored `dist/`.
-It does not build or flash firmware, install dependencies, contact a device,
-create a tag or release, push a branch, or upload artifacts.
+```sh
+python3 scripts/package_source_release.py --revision <reviewed-commit-sha> --version v1.0.0-rc.1 --scope controller-badge-source --output /absolute/new/BM83-v1.0.0-rc.1-source-assets
+```
 
-## Recorded preparation checks
+Outputs are `bm83-controller-badge-v1.0.0-rc.1-source.zip`, `MANIFEST.json` and
+`SHA256SUMS.txt`. ZIPs unpack beneath a named `BM83-Remote-v1.0.0-rc.1/` directory.
+Inspect every member, license/notice, per-file hash and source revision before
+publication. Reproduce into a second new directory to compare archive bytes.
 
-Final revision, check results, and generated archive hashes are reported by the
-local preparation handoff. Detailed machine logs remain ignored build outputs.
-Record hardware acceptance only from its named historical evidence; no device
-validation is rerun by release preparation.
+## Optional compiled controller assets
 
-Preparation on November 2, 2026 completed:
+Source-only review needs no compiler. To add a compiled controller ZIP, use a
+clean checkout of that exact reviewed revision and follow the
+[application build guide](../guides/building.md). First verify that the resolved
+generated `dist/circuitpython` directory remains inside the intended checkout;
+`build_mpy.sh` removes/recreates that generated directory. Keep the pinned
+compiler outside release assets.
 
-- Full host regression on Ubuntu 24.04 / Python 3.12.3: **1,500 passed,
-  4 skipped, 157 subtests passed**, with the real pinned Linux 10.3.1 compiler
-  build lane enabled. The host native-hash ownership harness also passed.
-- Reliability policy and fatal lint checks passed. Production Bandit analysis
-  found no medium/high-severity issues. Audits of the development, repo-health
-  MCP, and native-runtime build requirement manifests reported no known
-  vulnerabilities at preparation time.
-- The actual `build_mpy.sh` completed using native Windows mpy-cross 10.3.1
-  after verifying that its output remains inside the isolated release checkout.
-- Packaging refusal checks covered private paths, traversal, and private-key
-  headers. Archive bytes were repeatable; executable source modes are preserved
-  from the committed Git tree.
+The optional compiled package requires the repository-pinned Linux amd64
+CircuitPython 10.3.1 mpy-cross, used at `-O2`. Run this lane under Linux/WSL.
+The committed compiler digest is
+`aa74dcb51e51c1a70fd268dad9e05b40f72c29df3082f86c3a20665360e4acda`.
+The supplied digest must match both `tools/mpy_cross_pin.env` and the actual
+executable. Historical Windows compiler observations do not satisfy that pin.
 
-The Windows Python 3.14 diagnostic full-suite run was not accepted: 1,315 passed,
-90 failed, 99 skipped, and 2 errored. It exposes POSIX-private-permission,
-default-encoding, path, and checkout-line-ending assumptions in host tools and
-fixtures. No production safety guards were weakened to turn that run green.
-The intended Linux/CI-style suite above passed from a fresh LF checkout with
-proper POSIX fixture permissions. This record does not claim Windows host-tool
-or physical Windows audio/BLE compatibility.
+After building, add the compiler path and its verified digest to the same
+canonical command, with a new output directory:
 
-The Linux native-hash harness used locally extracted OpenSSL development
-headers, version 3.0.13-0ubuntu3.16, with the host crypto library. This was a
-local build dependency, not a system package installation or a bundled runtime.
+```sh
+python3 scripts/package_source_release.py --revision <reviewed-commit-sha> --version v1.0.0-rc.1 --scope controller-badge-source --include-mpy --compiler /absolute/path/to/mpy-cross --compiler-sha256 <verified-compiler-sha256> --output /absolute/new/BM83-v1.0.0-rc.1-with-mpy
+```
 
-The native Windows compiler available for this preparation reports
-`CircuitPython 10.3.1 on 2026-09-14; mpy-cross emitting mpy v6.3` and SHA-256
-`0f57daeaeda62d9f4b36c110ea0dc6e80f60ef8eb8adb77d576741167e1a47a9`.
-This is an observed host compiler, distinct from the separately pinned Linux
-download digest. Neither compiler binary is bundled in the RC archives.
+The packager requires matching `dist/BUILD_INFO.txt` source/compiler provenance,
+the complete expected file set and verbatim source entrypoints/public assets.
+It verifies the supplied compiler's bytes/version and recompiles committed
+library sources at `-O2` to compare with `dist/`. A stale build is refused even
+when application source has not changed since its recorded commit. The optional
+output is `bm83-controller-v1.0.0-rc.1-mpy.zip` with its manifest/build record.
+These checks validate application artifacts; they do not build or qualify the
+native runtime, CrowPanel or physical audio/radio/screens.
 
-## Local dependency refresh on November 2, 2026
+## Provenance and historical evidence
 
-The candidate incorporates the two squash-merged dependency updates while
-retaining the original release preparation commit:
+The rebased tree retains the dependency updates merged as #196 (IDF-build-apps),
+#197 (NVS generator 0.3.0), #199 (Click 8.5.0) and #200 (optional linuxdoc
+20260504 constraint). Its active `security_build` inputs are:
 
-- PR #196: `afc0c3b9632e20d4c2fd2871e18b0ce29a4285da`, allowing
-  `idf-build-apps < 3.2` on Python >=3.10. That package is not installed by the
-  frozen native build requirements.
-- PR #197: `f7cffd27c23855c82a20305276eb14fbeca41015`, updating the NVS
-  partition generator to `0.3.0` in both requirements and constraints.
+| Input | SHA-256 |
+| --- | --- |
+| `requirements-build.txt` | `e0c1f8197c9a62b3a7ff875574036be301eee1a62008db4c58a947f9573a2f2b` |
+| `espidf.constraints.v6.0.txt` | `0728b440d5b5f6fb517d954b74889bc9e8e4b1e079b1a92237f7e43036d4edc5` |
 
-At the final merged revision, GitHub's Python 3.11/3.12/3.13 tests, host-security
-policy/dependency audits, Codacy scan, CodeQL language scans and dependency graph
-update passed. These are host checks, not a native-runtime compilation or
-hardware acceptance record.
+The [November 3 native dependency record](../../tools/circuitpython-runtime/VALIDATION-DEPENDENCIES-2026-11-03.md)
+documents offline preflight and two matching native builds of these combined
+inputs. The Click override is local compatibility evidence for the recorded
+Linux/Python 3.11.18 builder. Historical `reference_tools` hashes, source/patch
+pins, compiler manifests and frozen native artifacts retain their own scope;
+they are not relabeled by this RC preparation.
 
-The merged dependency files changed without corresponding active provenance
-hash updates. The local refresh repairs only `security_build` in
-`tools/circuitpython-runtime/source-pins.json`: constraints SHA-256
-`54ee078efacb8de913ba75d0132b783a192e5f887ddda539d13a2937f71dd3b5`
-and requirements SHA-256
-`47e0b8723a7e1439e1bbc1ac0e961f1c91160539ea0331efbbf619d8984de6b0`.
-The new two-case repository consistency test failed against the merged files
-before this repair and passed afterward. Historical `reference_tools` hashes,
-native source/patch pins and dated native-build reports retain their original
-bytes and scope.
+The [B-Intel Phase 1 record](../reliability/phase1-bintel-2026-11-04.md) accepts
+its November 4 measured and physical workload. The
+[Phase 2 record](../reliability/phase2-host-selection.md) documents the exercised
+November 5–6 controls and host handoffs, with further matrix/timing gates open.
+The current [reliability matrix](../reliability/README.md) still marks both macOS
+helper routes **Not accepted**. Earlier November 1–2 records remain historical
+evidence; their test counts and artifacts do not describe this rebased revision.
 
-Refresh validation on Ubuntu 24.04 / Python 3.12.3:
+## Current candidate gates
 
-- **128 passed** across native provenance, host-tool safety and reproducibility
-  tests, including the new repository consistency cases. Fatal lint passed.
-- A fresh isolated environment installed the complete frozen native build
-  requirements with the refreshed constraints; `pip check` passed.
-- The actual host-tool verifier passed all five synthetic check groups: NVS
-  generate/repeat/encrypt/decrypt, AES-XTS, legacy ESP32 AES-ECB, ECDSA P-256 and
-  RSA-3072 signing/verification with tamper rejection. It reported
-  `hardware_access: false`, NVS `0.3.0`, cryptography `50.0.0`, esptool `5.6.0`,
-  cffi `2.1.1` and OpenSSL `4.0.1`.
+Run the relevant host checks against the finished candidate: the full supported
+host suite, fatal lint, production/packager Bandit checks, reliability policy,
+and the pinned dependency audits. Exercise packager allowlists, refusal cases,
+exact-revision provenance and repeatability. Record the final commit, actual
+platform/interpreter, pass/skip counts and archive digests in the maintenance
+handoff; do not carry forward older counts as current results.
 
-These new checks do not rerun or replace the earlier full regression record.
-The native builder's Python 3.11.18 environment and a new native CircuitPython
-image have not been built or validated for this dependency refresh.
-
-Refreshed controller archives use the pinned Linux mpy-cross 10.3.1 at -O2,
-SHA-256 `aa74dcb51e51c1a70fd268dad9e05b40f72c29df3082f86c3a20665360e4acda`.
-Their output folder is `dist/releases/v1.0.0-rc.1-dependency-refresh/`; the
-original `dist/releases/v1.0.0-rc.1/` archives are preserved. Each refreshed
-archive's manifest records the exact final local candidate revision, and the
-compiled archive includes matching `BUILD_INFO.txt`. The selected source and
-compiled archives exclude the native build recipe and its dependencies.
+The GitHub push workflows target `main`, so a candidate-branch push alone does
+not establish current CI results. Keep publication, native/app installation and
+physical acceptance separate. The finished candidate requires owner review
+before fast-forwarding `main`; this preparation does not authorize device access.
