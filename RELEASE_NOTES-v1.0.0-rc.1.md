@@ -93,6 +93,12 @@ and packaging gates. The tagged commit passed the
 and [Codacy analysis/SARIF upload](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42416862684).
 Host tests, compiler checks and browser simulations each establish only their measured scope.
 
+The [dated release handoff](docs/reliability/release-handoff-2026-11-07.md)
+records the verbatim local gates, CI run IDs, all four asset hashes, compiler
+digest, separate-session reproduction result and actual rc.1 gate order. It also
+records repository cleanup and the deferred packaging backlog. Future candidates
+are independently reviewed before tagging.
+
 The [November 4 B-Intel Phase 1 record](docs/reliability/phase1-bintel-2026-11-04.md)
 accepts its Windows Apple Music/BLE HID measured workload, owner screens/controls,
 exact original restoration and automatic CrowPanel recovery. The

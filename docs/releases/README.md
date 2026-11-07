@@ -15,6 +15,38 @@ Its [original draft notes](v0.1.0.md) remain a historical record rather than the
 active version plan. That prerelease does not establish physical acceptance of
 this later controller/badge integration.
 
+## Version line and final v1.0.0 gates
+
+We retain the already chosen **1.0.0** line for the coordinated controller/badge
+release. The earlier `setup.py` value `1.0.0` was package metadata for an intended
+final version that was never released as `v1.0.0`; `1.0.0rc1` supersedes that
+metadata as the identified prerelease version. This version choice
+organizes the release and its matching components without claiming mature
+acceptance across every host.
+
+Before final `v1.0.0`, the owner must explicitly declare the supported rows from
+the [reliability matrix](../reliability/README.md#later-hardware-run-card---separate-authorization-required)
+and obtain actual acceptance of the exact final source/native/application build
+and installed configuration for every declared row. The **Windows / B-Intel
+Apple Music + separate BLE HID** row currently has the scoped November 4 Phase 1
+acceptance. That historical result does not accept a different final build or
+complete its Phase 2 host-selection matrix and new qualified timing window.
+
+The **macOS / Apple Music / helper off** and **macOS / Apple Music / helper on**
+rows remain **Not accepted**; **Linux / claimed audio + BLE HID stack** remains
+**Not tested**. The final support declaration may explicitly exclude these rows
+as unsupported. Including any of them requires its own exact-build evidence and
+acceptance; Windows/Pi bench observations cannot fill those rows by inference.
+All declared functionality must satisfy its matching Phase 2 and recovery gates,
+with owner-confirmed screens/controls and a qualified measured workload.
+
+Each future candidate requires independent review before tagging. Relevant
+local host/security/packaging gates, green main-branch CI for the exact commit,
+inspected assets/provenance and an explicit owner release decision remain
+release gates. The [release handoff](../reliability/release-handoff-2026-11-07.md)
+records the remaining work; a version increment or successful host check cannot
+substitute for a supported row's physical acceptance.
+
 ## Published assets
 
 | Download | Purpose | Boundary |
