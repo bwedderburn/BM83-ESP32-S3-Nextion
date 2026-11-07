@@ -1,14 +1,34 @@
 # BM83 Remote — ESP32-S3, Nextion and CrowPanel
 
-Local release candidate: **1.0.0rc1** (proposed Git tag `v1.0.0-rc.1`). See the
-[draft release notes](RELEASE_NOTES-v1.0.0-rc.1.md) for package scope, checks, and
-remaining limits. A candidate archive is not an installed or published release.
+Published prerelease: **[v1.0.0-rc.1](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v1.0.0-rc.1)**
+(Python package version `1.0.0rc1`), built from
+[`888b089`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/888b089c5a75865bb2bf8c76833f0eddc0fbd290).
+See the [downloads](#prerelease-downloads) and
+[release notes](RELEASE_NOTES-v1.0.0-rc.1.md) for package scope, checks and remaining limits.
 
 An audio controller and touchscreen remote built around the Microchip BM83.
 The BM83 carries Bluetooth audio; an ESP32-S3 running CircuitPython sends UART
 control commands, reads playback metadata and drives a Nextion display. An
 optional CrowPanel adds a wireless Now Playing screen, playback controls and
 album artwork.
+
+## Prerelease downloads
+
+The [v1.0.0-rc.1 release](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v1.0.0-rc.1)
+was published on November 7, 2026. Its assets remain tied to the tagged commit;
+later documentation updates on `main` do not change those downloads.
+
+| Asset | Contents |
+| --- | --- |
+| [Controller/badge source ZIP](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/bm83-controller-badge-v1.0.0-rc.1-source.zip) | Selected application source, public assets/notices, Windows host tools and guidance |
+| [Compiled controller `.mpy` ZIP](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/bm83-controller-v1.0.0-rc.1-mpy.zip) | Controller entrypoints and project libraries built with pinned CircuitPython 10.3.1 mpy-cross at `-O2` |
+| [MANIFEST.json](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/MANIFEST.json) | Per-file provenance for the source ZIP; both ZIPs also contain their own manifests |
+| [SHA256SUMS.txt](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/SHA256SUMS.txt) | SHA-256 checksums for both ZIPs and the standalone manifest |
+
+Read the [release guide](docs/releases/README.md) and
+[deployment/rollback guide](docs/guides/deployment.md) before use. These are
+application packages; native CircuitPython, CrowPanel images and Adafruit
+libraries are separate. Publication does not establish additional physical acceptance.
 
 ## Hardware and connections
 
@@ -120,10 +140,11 @@ Host tests, native compilation and physical acceptance are separate evidence.
   [reliability runbook](docs/reliability/README.md).
 - Metadata availability, including genre and playback timing, depends on the source.
   Online artwork is a lookup result, not artwork retrieved from BM83 UART.
-- The active [v1.0.0-rc.1 notes](RELEASE_NOTES-v1.0.0-rc.1.md) and
-  [release preparation guide](docs/releases/README.md) describe the proposed
-  assets and remaining gates. The earlier v0.1.0 source-preview notes remain a
-  historical record. Preparing a candidate does not qualify unattended deployment.
+- The published [v1.0.0-rc.1 prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v1.0.0-rc.1),
+  [release notes](RELEASE_NOTES-v1.0.0-rc.1.md) and
+  [release guide](docs/releases/README.md) describe the assets and remaining gates.
+  The earlier v0.1.0 source-preview notes remain a historical record.
+  The prerelease does not qualify unattended deployment.
 
 Project code is provided under [LICENSE](LICENSE); bundled third-party material
 retains its own terms. See [security reporting](SECURITY.md) and the

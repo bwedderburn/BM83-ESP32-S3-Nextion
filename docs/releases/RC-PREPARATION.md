@@ -1,11 +1,32 @@
-# v1.0.0-rc.1 preparation
+# v1.0.0-rc.1 preparation and reproduction record
 
-Python package version: `1.0.0rc1`. Proposed Git tag: `v1.0.0-rc.1`.
-The active candidate continues from `main` at `096706b` on
-`codex/bm83-release-candidate-20261107`. The published
+Python package version: `1.0.0rc1`. Published Git tag: `v1.0.0-rc.1`.
+The [GitHub prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v1.0.0-rc.1)
+was published on November 7, 2026, from exact commit
+`888b089c5a75865bb2bf8c76833f0eddc0fbd290`. The candidate was rebased on
+`main` at `096706b`, then reviewed, integrated into `main` and published. Its
+`codex/bm83-release-candidate-20261107` branch has been retired. The earlier
 [v0.1.0 source-preview prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v0.1.0)
-and its [original draft notes](v0.1.0.md) remain historical. These commands prepare
-review assets; they do not create tags/releases, upload files or operate devices.
+and its [original draft notes](v0.1.0.md) remain historical. This record describes
+the completed preparation and exact-version reproduction. Its commands generate
+local artifacts without creating tags/releases, uploading or operating devices.
+
+## Published artifacts
+
+- [bm83-controller-badge-v1.0.0-rc.1-source.zip](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/bm83-controller-badge-v1.0.0-rc.1-source.zip)
+- [bm83-controller-v1.0.0-rc.1-mpy.zip](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/bm83-controller-v1.0.0-rc.1-mpy.zip)
+- [MANIFEST.json](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/MANIFEST.json)
+- [SHA256SUMS.txt](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/SHA256SUMS.txt)
+
+All four downloads were verified after publication against the inspected local
+release assets, with matching bytes and SHA-256 digests:
+
+```text
+fdebb8918805f4746bbea98c294e1d7df45a075776061650cae90ce5cc8e94d7  bm83-controller-badge-v1.0.0-rc.1-source.zip
+b5610d3c0a4e46146e11fd8a648efc89e97fa9452464139ae9fb794a7917afde  bm83-controller-v1.0.0-rc.1-mpy.zip
+beb8018100eba91919745990a860a55105a5ae6b9e89bcb74059822aa072bbfb  MANIFEST.json
+033010c2b1e20ca31df3d680123d2904ab9d78e228632c8666878d401a2431ac  SHA256SUMS.txt
+```
 
 ## One canonical packager
 
@@ -34,28 +55,45 @@ archive hashes. The output directory must be new; existing files/directories and
 output symlinks are refused. Choose a host path for review artifacts, never a
 device filesystem.
 
-## Prepare source assets
+## Reproduce source assets
 
-Commit reviewed changes first. Substitute the full reviewed commit SHA and a
-new host directory below; neither command builds or installs firmware.
+Start from a clean checkout of the published tag, including its exact packager:
+
+```sh
+git clone --branch v1.0.0-rc.1 --single-branch https://github.com/bwedderburn/BM83-ESP32-S3-Nextion.git BM83-v1.0.0-rc.1-reproduction
+cd BM83-v1.0.0-rc.1-reproduction
+git rev-parse HEAD
+```
+
+The reported commit must be `888b089c5a75865bb2bf8c76833f0eddc0fbd290`.
+Later documentation commits on `main` are outside the published inputs.
+Packaging a later `HEAD` would record a different revision and produce different
+source bytes. Choose a new host output directory below; neither command builds
+or installs firmware.
 
 ```powershell
-python scripts/package_source_release.py --revision <reviewed-commit-sha> --version v1.0.0-rc.1 --scope controller-badge-source --output C:\Users\brian\Downloads\BM83-v1.0.0-rc.1-source-assets
+python scripts/package_source_release.py --revision 888b089c5a75865bb2bf8c76833f0eddc0fbd290 --version v1.0.0-rc.1 --scope controller-badge-source --output C:\Users\brian\Downloads\BM83-v1.0.0-rc.1-source-assets
 ```
 
 ```sh
-python3 scripts/package_source_release.py --revision <reviewed-commit-sha> --version v1.0.0-rc.1 --scope controller-badge-source --output /absolute/new/BM83-v1.0.0-rc.1-source-assets
+python3 scripts/package_source_release.py --revision 888b089c5a75865bb2bf8c76833f0eddc0fbd290 --version v1.0.0-rc.1 --scope controller-badge-source --output /absolute/new/BM83-v1.0.0-rc.1-source-assets
 ```
 
 Outputs are `bm83-controller-badge-v1.0.0-rc.1-source.zip`, `MANIFEST.json` and
 `SHA256SUMS.txt`. ZIPs unpack beneath a named `BM83-Remote-v1.0.0-rc.1/` directory.
-Inspect every member, license/notice, per-file hash and source revision before
-publication. Reproduce into a second new directory to compare archive bytes.
+Inspect every member, license/notice, per-file hash and source revision. Compare
+the source ZIP and manifest with the published checksums. Reproduction generates
+local comparison artifacts; the existing release needs no rebuild or replacement
+upload.
+
+The source-only command writes two checksum entries, for the source ZIP and
+manifest. The published `SHA256SUMS.txt` has a third entry for the compiled ZIP;
+use the combined source/compiled command below to reproduce that complete file.
 
 ## Optional compiled controller assets
 
 Source-only review needs no compiler. To add a compiled controller ZIP, use a
-clean checkout of that exact reviewed revision and follow the
+clean checkout of exact release commit `888b089` and follow the
 [application build guide](../guides/building.md). First verify that the resolved
 generated `dist/circuitpython` directory remains inside the intended checkout;
 `build_mpy.sh` removes/recreates that generated directory. Keep the pinned
@@ -72,7 +110,7 @@ After building, add the compiler path and its verified digest to the same
 canonical command, with a new output directory:
 
 ```sh
-python3 scripts/package_source_release.py --revision <reviewed-commit-sha> --version v1.0.0-rc.1 --scope controller-badge-source --include-mpy --compiler /absolute/path/to/mpy-cross --compiler-sha256 <verified-compiler-sha256> --output /absolute/new/BM83-v1.0.0-rc.1-with-mpy
+python3 scripts/package_source_release.py --revision 888b089c5a75865bb2bf8c76833f0eddc0fbd290 --version v1.0.0-rc.1 --scope controller-badge-source --include-mpy --compiler /absolute/path/to/mpy-cross --compiler-sha256 <verified-compiler-sha256> --output /absolute/new/BM83-v1.0.0-rc.1-with-mpy
 ```
 
 The packager requires matching `dist/BUILD_INFO.txt` source/compiler provenance,
@@ -110,16 +148,20 @@ The current [reliability matrix](../reliability/README.md) still marks both macO
 helper routes **Not accepted**. Earlier November 1–2 records remain historical
 evidence; their test counts and artifacts do not describe this rebased revision.
 
-## Current candidate gates
+## Completed validation and publication
 
-Run the relevant host checks against the finished candidate: the full supported
-host suite, fatal lint, production/packager Bandit checks, reliability policy,
-and the pinned dependency audits. Exercise packager allowlists, refusal cases,
-exact-revision provenance and repeatability. Record the final commit, actual
-platform/interpreter, pass/skip counts and archive digests in the maintenance
-handoff; do not carry forward older counts as current results.
+The release commit passed the supported Linux Python 3.11/3.12/3.13 host suite,
+fatal lint, production/packager Bandit checks, reliability policy and pinned
+dependency audits. Packager checks exercised allowlists, refusal cases,
+exact-revision provenance and repeatability. Source and compiled archive bytes
+were reproduced through both entrypoints; Windows source packaging matched.
 
-The GitHub push workflows target `main`, so a candidate-branch push alone does
-not establish current CI results. Keep publication, native/app installation and
-physical acceptance separate. The finished candidate requires owner review
-before fast-forwarding `main`; this preparation does not authorize device access.
+After integration, the exact commit passed the main-branch
+[Python package](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42416862677),
+[Host security and reliability policy](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42416862651)
+and [Codacy Security Scan](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42416862684)
+workflows. Codacy completed analysis and SARIF upload. The reviewed tag and four
+verified assets were then published as a prerelease. No new native build or
+hardware run was performed for publication; BM83 and CrowPanel remained offline.
+Native/application installation and physical acceptance retain their separate
+gates. Later documentation updates leave the released tag and asset bytes fixed.

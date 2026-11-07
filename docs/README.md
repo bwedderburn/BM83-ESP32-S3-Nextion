@@ -52,7 +52,9 @@ establish current end-to-end hardware acceptance.
 - [Hardware reference](reference/hardware.md): controller, displays and both DAC boards.
 - [BM83 vendor reference archive](reference/vendor/bm83/README.md): consolidated
   manuals, command table, vendor firmware and utilities, with byte hashes.
-- [First-release preparation](releases/README.md) and [v0.1.0 draft](releases/v0.1.0.md).
+- [Published prereleases and downloads](releases/README.md),
+  [v1.0.0-rc.1 release notes](../RELEASE_NOTES-v1.0.0-rc.1.md) and the historical
+  [v0.1.0 draft notes](releases/v0.1.0.md).
 
 The previous root guides moved to `docs/guides/` and `docs/reference/`. Former
 flat `docs/code-review-*.md` files are in `docs/reviews/`; validation and incident

@@ -1,10 +1,13 @@
 # BM83 Remote controller and badge source — v1.0.0-rc.1
 
-Status: proposed release candidate for review. Python package metadata uses
-`1.0.0rc1`; the proposed Git tag is `v1.0.0-rc.1`. Preparing this candidate does
-not create a tag or GitHub Release, upload assets, install firmware or deploy a
-website. The published [v0.1.0 source-preview prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v0.1.0)
-remains available; it does not establish acceptance of this later integration.
+Status: **[published GitHub prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v1.0.0-rc.1)**,
+November 7, 2026. Annotated tag `v1.0.0-rc.1` points to
+[`888b089c5a75865bb2bf8c76833f0eddc0fbd290`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/888b089c5a75865bb2bf8c76833f0eddc0fbd290);
+Python package metadata uses `1.0.0rc1`. The published assets retain that exact
+revision, independently of later documentation changes on `main`. Publication
+performed no device operation. The earlier
+[v0.1.0 source-preview prerelease](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v0.1.0)
+remains available.
 
 ## Included behavior and scope
 
@@ -14,7 +17,7 @@ paths. BM83 carries audio independently of the controller. The optional Universe
 badge uses the implemented BMW1 authenticated UDP receiver. The full repository
 also contains the separate CrowPanel firmware and native-runtime build recipe.
 
-This candidate includes the behavior already merged through `096706b`:
+This prerelease includes the behavior already merged through `096706b`:
 
 - Bond-preserving Disconnect, saved-host selection and bounded new-host pairing
   on CrowPanel and the badge, backed by the project native host-policy runtime.
@@ -37,19 +40,22 @@ records two matching native builds of the final combined dependency inputs.
 Those builds are historical, uninstalled candidate evidence; this release
 preparation does not rerun them or bundle a native image.
 
-## Candidate assets
+## Published assets
 
-- `bm83-controller-badge-v1.0.0-rc.1-source.zip`: selected controller and badge
+- [bm83-controller-badge-v1.0.0-rc.1-source.zip](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/bm83-controller-badge-v1.0.0-rc.1-source.zip): selected controller and badge
   source, public assets/notices, the Windows companion and launch receiver,
   license, release/deployment guidance, selected validation records and pinned
   application-build helpers.
-- `bm83-controller-v1.0.0-rc.1-mpy.zip`: optional controller `main.py` and
+- [bm83-controller-v1.0.0-rc.1-mpy.zip](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/bm83-controller-v1.0.0-rc.1-mpy.zip): controller `main.py` and
   `boot.py`, inactive example settings and project libraries compiled with the
-  pinned CircuitPython **10.3.1** mpy-cross at **-O2**. It is generated only after
-  exact-revision build and compiler checks pass.
-- `MANIFEST.json` and `SHA256SUMS.txt`: source/input and archive provenance.
-  Each ZIP also contains its own `MANIFEST.json`; the compiled archive includes
-  `BUILD_INFO.txt` identifying its source commit and compiler.
+  pinned CircuitPython **10.3.1** mpy-cross at **-O2**. Exact-revision build and
+  compiler checks passed before publication.
+- [MANIFEST.json](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/MANIFEST.json): per-file provenance for the source ZIP. Each ZIP also contains its own manifest; the compiled archive includes `BUILD_INFO.txt` identifying its source commit and compiler.
+- [SHA256SUMS.txt](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/download/v1.0.0-rc.1/SHA256SUMS.txt): checksums for both ZIPs and the standalone manifest.
+
+GitHub's asset digests and fresh downloads matched the verified local files
+before and after publication. The [release page](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/releases/tag/v1.0.0-rc.1)
+also records all four asset hashes.
 
 The selected source ZIP is an application package. CrowPanel source/binaries,
 native CircuitPython images and build dependencies, vendor reference packages,
@@ -80,10 +86,12 @@ bonds and saved state; none belong in a release archive.
 
 ## Validation and remaining limits
 
-[RC preparation](docs/releases/RC-PREPARATION.md) describes the reproducible host
-and packaging gates. Current results and generated archive digests are recorded
-against the final candidate revision in the maintenance handoff. Host tests,
-compiler checks and browser simulations each establish only their measured scope.
+[RC preparation](docs/releases/RC-PREPARATION.md) records the reproducible host
+and packaging gates. The tagged commit passed the
+[Python 3.11/3.12/3.13 workflow](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42416862677),
+[host security and reliability workflow](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42416862651)
+and [Codacy analysis/SARIF upload](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42416862684).
+Host tests, compiler checks and browser simulations each establish only their measured scope.
 
 The [November 4 B-Intel Phase 1 record](docs/reliability/phase1-bintel-2026-11-04.md)
 accepts its Windows Apple Music/BLE HID measured workload, owner screens/controls,
@@ -104,8 +112,8 @@ hosts or unattended deployment.
 
 ## Reproduction
 
-Use the exact reviewed commit in a clean checkout and the canonical
+Use the exact tagged commit `888b089c5a75865bb2bf8c76833f0eddc0fbd290` in a clean checkout and the canonical
 `scripts/package_source_release.py` with `--scope controller-badge-source`.
 [RC preparation](docs/releases/RC-PREPARATION.md) gives the commands and optional
-compiled-artifact requirements. Local archives remain review artifacts until
-their revision, supported scope and publication are explicitly approved.
+compiled-artifact requirements. Later `main` documentation changes are outside
+the tagged snapshot; use the release revision to reproduce its published assets.
