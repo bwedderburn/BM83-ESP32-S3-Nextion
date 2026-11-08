@@ -50,18 +50,25 @@ expansion. Codex chose the tooling, test and workflow edits in
 [`f6243be`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/f6243be4a150552ad288951453f3bfa836ea259b)
 under that request.
 
-Both commits completed their automatic post-landing main workflows successfully:
+The following commits completed their automatic post-landing main workflows successfully:
 
 | Commit | Python package | Host security and reliability policy | Codacy Security Scan |
 | --- | --- | --- | --- |
 | `fc498b8` — documentation/list-only handoff | [42421242030](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42421242030) | [42421242140](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42421242140) | [42421242058](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42421242058) |
 | `f6243be` — host-only backlog implementation | [42426961009](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42426961009) | [42426961007](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42426961007) | [42426961054](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42426961054) |
+| `e6d8901` — release-review follow-ups | [42435140948](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140948) | [42435140949](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140949) | [42435140954](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140954) |
+| `4f8a6f1` — owner-required check documentation | [42436344333](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344333) | [42436344315](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344315) | [42436344346](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344346) |
 
 The `f6243be` [pinned application `.mpy` build](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42426961027)
 also passed. These runs record actual execution for their respective commits;
 the host-security runs executed their configured policy, Bandit and dependency
 audit steps. Codacy success records completed analysis/upload. None of these
 results establishes physical acceptance or a new native-runtime build.
+
+Standing CI-record rule: commits touching `.github/workflows/` or
+`scripts/check_reliability_setup.py` must record their post-landing workflow run
+IDs in this handoff, verified read-only against the exact commit.
+Documentation-only commits need not record their own post-landing run IDs here.
 
 The current review follow-up's reliability checker is a host-only structural
 guard. It requires the workflow directory and `python-package.yml`,
@@ -235,7 +242,8 @@ substitute for a new final build or unaccepted platform row. These open gates do
 not authorize device access during host-only maintenance.
 
 On 2026-11-07, Brian, the repository owner, added `host-security` as a required
-status check for `main` in the GitHub UI. Subsequent read-only API verification
+status check for `main` via the GitHub REST API (`gh api`), after the UI edit did
+not save. Subsequent read-only API verification
 found exactly these required contexts: `build (3.11)`, `build (3.12)`,
 `build (3.13)` and `host-security`. The strict/up-to-date flag remains `true`,
 and `enforce_admins.enabled` remains `false` ("Do not allow bypassing the above
