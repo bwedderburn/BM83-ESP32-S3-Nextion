@@ -58,9 +58,12 @@ behavior that the CLI's `no-reset` flags alone do not exclude. Its offline image
 validator remains useful. The candidate's live procedure must use a reviewed
 single-open ROM/stub session with no reconnect/reset, exact scoped approval,
 private Windows ACL checks, two independent full backup transactions, validated
-rollback and exact full-flash readback. That procedure remains pending until its
-tests, concrete artifact and approval record are ready; do not substitute an
-unreviewed CLI invocation.
+rollback and exact full-flash readback. The gate table in the
+[Phase 2 record](../reliability/phase2-host-selection.md#required-gates) records two
+separately approved native app-slot writes that passed full 8 MiB verification;
+every byte outside the app slot matched its prewrite backup. Each new write
+still requires the reviewed single-open procedure, the exact artifact and fresh
+scoped approval; the historical CLI is not a substitute.
 
 First finish the artifact review, stop processes using the target serial port,
 and place the expected unit in its ROM download loader manually. The tool does

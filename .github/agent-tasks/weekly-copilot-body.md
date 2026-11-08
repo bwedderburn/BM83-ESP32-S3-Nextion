@@ -1,3 +1,7 @@
+> **Historical template for the retired weekly Copilot workflow.** Retained for
+> reference only; it grants no current assignment or execution authority. Follow
+> `CLAUDE.md` and the current maintenance handoff.
+
 ## Weekly code improvement — focus: {{FOCUS}}
 
 You are the Copilot coding agent on your weekly improvement pass for this repo.

@@ -75,8 +75,9 @@ python3 -m venv .venv
 
 Windows uses `.venv\Scripts\python.exe`. VS Code's `BM83:` tasks only run selected
 Python processes on explicit invocation; none deploy, open serial or run at
-folder open. Run Universe's existing `scripts/check-bm83-addon.py --bm83-repo
-<canonical-checkout>` to compare seven app files and three tests. Use exact
+folder open. Run the Universe repository's
+`scripts/check-bm83-addon.py --bm83-repo <canonical-checkout>`; that script is the
+authoritative file list. Use exact
 reviewed revisions in the evidence record, not changing branch tips.
 
 Checked-in PR workflows use GitHub-hosted runners, read-only contents permission, full-SHA

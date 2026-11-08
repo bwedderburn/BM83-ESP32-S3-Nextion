@@ -28,7 +28,8 @@ candidate thresholds are not acceptance criteria. Report unsupported native
 counters as unavailable, not zero. Review crypto finalization and socket/native
 ownership without assuming Python heap proves native resource health.
 
-Keep the canonical add-on and Universe app plus three mirrored tests identical.
+Keep the canonical add-on and Universe mirror aligned using the authoritative
+file list in the Universe repository's `scripts/check-bm83-addon.py`.
 Do not include frozen runtime experiments in tooling-only commits. Publish only
 sanitized aggregates. Source-only commits do not establish physical acceptance.
 Hardware access and deployment remain blocked until explicitly authorized.
