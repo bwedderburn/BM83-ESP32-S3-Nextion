@@ -13,6 +13,8 @@ import tempfile
 import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
+PACKAGER_GIT_PATH = "scripts/package_source_release.py"
+EXECUTING_SOURCE = Path(__file__).read_bytes()
 GIT_EXECUTABLE = shutil.which("git")
 PROJECT_URL = "https://github.com/bwedderburn/BM83-ESP32-S3-Nextion"
 SOURCE_ROOT = "firmware/circuitpython/"
@@ -55,10 +57,30 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def require_matching_packager(commit):
+    """Use the requested revision's own tool, allowing checkout newline conversion."""
+    tree = git("ls-tree", "--full-tree", "-z", commit, "--", PACKAGER_GIT_PATH)
+    records = [record for record in tree.split(b"\0") if record]
+    message = "Requested revision must contain an ordinary committed packager: " + PACKAGER_GIT_PATH
+    if len(records) != 1:
+        raise ValueError(message)
+    metadata, path = records[0].split(b"\t", 1)
+    mode, kind, object_id = metadata.decode("ascii").split()
+    if path.decode("utf-8") != PACKAGER_GIT_PATH or mode not in ("100644", "100755") or kind != "blob":
+        raise ValueError(message)
+    committed = git("cat-file", "blob", object_id)
+    if committed.replace(b"\r\n", b"\n") != EXECUTING_SOURCE.replace(b"\r\n", b"\n"):
+        raise ValueError("Executing packager differs from requested revision; run its own " + PACKAGER_GIT_PATH)
+
+
 def package(revision, version, output, *, scope="application-source", include_mpy=False,
             compiler=None, compiler_sha256=None):
     if not include_mpy and (compiler is not None or compiler_sha256 is not None):
         raise ValueError("--compiler and --compiler-sha256 require --include-mpy")
+    if scope not in ("application-source", "controller-badge-source") or (include_mpy and scope != "controller-badge-source"):
+        raise ValueError("Compiled assets require the controller-badge-source scope")
+    if include_mpy and (compiler is None or not re.fullmatch(r"[0-9a-fA-F]{64}", compiler_sha256 or "")):
+        raise ValueError("--include-mpy requires --compiler and observed --compiler-sha256")
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?", version):
         raise ValueError("Version must be a v-prefixed semantic version")
     commit = git("rev-parse", "--verify", "--end-of-options", revision + "^{commit}").decode().strip()
@@ -67,8 +89,7 @@ def package(revision, version, output, *, scope="application-source", include_mp
     if scope == "controller-badge-source":
         return package_controller_badge(commit, version, output, include_mpy=include_mpy,
                                         compiler=compiler, compiler_sha256=compiler_sha256)
-    if scope != "application-source" or include_mpy:
-        raise ValueError("Compiled assets require the controller-badge-source scope")
+    require_matching_packager(commit)
     entries = {}
     tree = git("ls-tree", "--full-tree", "-rz", commit, "--", SOURCE_ROOT, "LICENSE")
     for record in tree.split(b"\0"):
@@ -311,6 +332,9 @@ def package_controller_badge(commit, version, output, *, include_mpy=False,
                              compiler=None, compiler_sha256=None):
     if not include_mpy and (compiler is not None or compiler_sha256 is not None):
         raise ValueError("--compiler and --compiler-sha256 require --include-mpy")
+    if include_mpy and (compiler is None or not re.fullmatch(r"[0-9a-fA-F]{64}", compiler_sha256 or "")):
+        raise ValueError("--include-mpy requires --compiler and observed --compiler-sha256")
+    require_matching_packager(commit)
     source, executable = rc_source_files(commit, version)
     compiled = compiled_files(commit, source, compiler, compiler_sha256) if include_mpy else None
     output = Path(output)
@@ -351,6 +375,10 @@ def main():
     args = parser.parse_args()
     if not args.include_mpy and (args.compiler is not None or args.compiler_sha256 is not None):
         parser.error("--compiler and --compiler-sha256 require --include-mpy")
+    if args.include_mpy and args.scope != "controller-badge-source":
+        parser.error("Compiled assets require the controller-badge-source scope")
+    if args.include_mpy and (args.compiler is None or not re.fullmatch(r"[0-9a-fA-F]{64}", args.compiler_sha256 or "")):
+        parser.error("--include-mpy requires --compiler and observed --compiler-sha256")
     print(json.dumps(package(args.revision, args.version, args.output, scope=args.scope,
                              include_mpy=args.include_mpy, compiler=args.compiler,
                              compiler_sha256=args.compiler_sha256), indent=2))

@@ -20,7 +20,7 @@
     },
     {
       "label": "BM83: frozen toolchain advisory audit",
-      "detail": "Host-only, no dependency installation. Known pre-existing advisories currently make this fail.",
+      "detail": "Host-only, no dependency installation; reports current advisories and preserves failures.",
       "type": "process",
       "command": "${command:python.interpreterPath}",
       "args": ["-m", "pip_audit", "--disable-pip", "--no-deps", "-r", "tools/circuitpython-runtime/requirements-build.txt"],
@@ -31,7 +31,7 @@
       "label": "BM83: security (host only)",
       "type": "process",
       "command": "${command:python.interpreterPath}",
-      "args": ["-m", "bandit", "--ini", ".bandit", "-r", "firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "-ll"],
+      "args": ["-m", "bandit", "--ini", ".bandit", "-r", "firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts", "-ll"],
       "options": {"cwd": "${workspaceFolder}"},
       "problemMatcher": []
     }

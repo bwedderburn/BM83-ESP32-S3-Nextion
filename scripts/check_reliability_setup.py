@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate repository-only reliability controls; never contact a device."""
+"""Inspect reliability configuration structure and literals; never contact a device."""
 
 import json
 from pathlib import Path
@@ -28,6 +28,7 @@ OUT_OF_SCOPE_EVENTS = ("schedule", "workflow_dispatch", "push")
 # Only the existing Codacy scanner is preserved. Retired automation names must
 # not reserve exemptions for workflows that could be added in the future.
 OUT_OF_SCOPE_WORKFLOWS = ("codacy.yml",)
+REQUIRED_WORKFLOWS = ("python-package.yml", "host-security.yml", "codacy.yml")
 PRODUCTION_BANDIT_TARGETS = frozenset({
     "firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts",
 })
@@ -86,8 +87,16 @@ def reference_errors(data, text):
     return errors
 
 
+def matches_production_bandit_args(args):
+    """Recognize the expected literal argv layout, not general shell semantics."""
+    return (args[:6] == ["python", "-m", "bandit", "--ini", ".bandit", "-r"]
+            and len(args) == 7 + len(PRODUCTION_BANDIT_TARGETS)
+            and args[-1] == "-ll"
+            and set(args[6:-1]) == PRODUCTION_BANDIT_TARGETS)
+
+
 def production_bandit_errors(data, name):
-    """Keep the host-security scan complete and able to fail its workflow."""
+    """Check literal argv and declared skip/error flags; do not execute a workflow."""
     if name != "host-security.yml":
         return []
     job = data.get("jobs", {}).get("host-security", {})
@@ -101,12 +110,9 @@ def production_bandit_errors(data, name):
                 args = shlex.split(command)
             except ValueError:
                 continue
-            if (args[:6] == ["python", "-m", "bandit", "--ini", ".bandit", "-r"]
-                    and len(args) == 7 + len(PRODUCTION_BANDIT_TARGETS)
-                    and args[-1] == "-ll"
-                    and set(args[6:-1]) == PRODUCTION_BANDIT_TARGETS):
+            if matches_production_bandit_args(args):
                 return []
-    return ["host security must run the required production Bandit scan without bypasses"]
+    return ["host security must retain literal production Bandit arguments with if/continue-on-error unset"]
 
 
 def workflow_errors(data, text, name=""):
@@ -129,8 +135,12 @@ def workflow_errors(data, text, name=""):
 
 
 def check_workflows(root):
-    errors = []
-    paths = (root / ".github/workflows").iterdir()
+    workflow_directory = root / ".github/workflows"
+    if not workflow_directory.is_dir():
+        return ["required workflow directory is missing: .github/workflows"]
+    errors = ["required workflow is missing: .github/workflows/" + name
+              for name in REQUIRED_WORKFLOWS if not (workflow_directory / name).is_file()]
+    paths = workflow_directory.iterdir()
     for path in sorted(path for path in paths
                        if path.is_file() and path.suffix.lower() in (".yml", ".yaml")):
         text = path.read_text()
@@ -145,6 +155,25 @@ def agent_errors(data):
             or data.get("disable-model-invocation") is not True):
         return ["expected user-invoked VS Code read-only profile"]
     return []
+
+
+def task_errors(tasks):
+    """Check editor task structure and the security task's literal Bandit argv."""
+    errors = []
+    for task in tasks:
+        if task["label"].startswith("BM83:"):
+            if (task["type"] != "process"
+                    or task["command"] != "${command:python.interpreterPath}"
+                    or task.get("runOptions", {}).get("runOn") == "folderOpen"):
+                errors.append("BM83 tasks must be explicit selected-Python processes")
+    security_tasks = [task for task in tasks if task["label"] == "BM83: security (host only)"]
+    if len(security_tasks) != 1:
+        errors.append("expected exactly one BM83 security task")
+    else:
+        args = security_tasks[0].get("args")
+        if not isinstance(args, list) or not matches_production_bandit_args(["python", *args]):
+            errors.append("BM83 security task must retain literal production Bandit arguments")
+    return errors
 
 
 def check(root):
@@ -162,12 +191,7 @@ def check(root):
     if not all(field.get("validations", {}).get("required") for field in fields):
         errors.append("reliability issue fields must be required")
     tasks = json.loads((root / ".vscode/tasks.json").read_text())
-    for task in tasks["tasks"]:
-        if task["label"].startswith("BM83:"):
-            if (task["type"] != "process"
-                    or task["command"] != "${command:python.interpreterPath}"
-                    or task.get("runOptions", {}).get("runOn") == "folderOpen"):
-                errors.append("BM83 tasks must be explicit selected-Python processes")
+    errors.extend(task_errors(tasks["tasks"]))
     return errors
 
 
@@ -182,7 +206,7 @@ def main():
         print("FAIL " + error, file=sys.stderr)
     if errors:
         return 1
-    print("PASS reliability configuration (host-only structural checks)")
+    print("PASS reliability configuration (structural presence and literal-command checks only)")
     return 0
 
 

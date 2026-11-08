@@ -78,7 +78,11 @@ archives must not be copied wholesale to a device.
 
 Current `main` uses `scripts/package_source_release.py` as its only release
 entrypoint. `--version` and `--scope` are required, and `--compiler` /
-`--compiler-sha256` require `--include-mpy`. The `prepare_release.py` shim has
+`--compiler-sha256` require `--include-mpy`, which in turn requires both compiler
+arguments before source reads. The executing packager must match its committed
+source at the requested revision, allowing CRLF/LF checkout conversion; a newer
+packager refuses an older revision with different packager source before creating
+output. The `prepare_release.py` shim has
 been retired; `--ref` remains an alias for `--revision` in the canonical CLI.
 
 For published assets, use the packager at their own tag. Start with a clean checkout of

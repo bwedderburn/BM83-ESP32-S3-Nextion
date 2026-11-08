@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import zipfile
@@ -16,8 +17,12 @@ SPEC.loader.exec_module(release)
 
 
 def git(repo, *args, input_bytes=None):
+    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_GLOBAL=os.devnull)
     return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, input=input_bytes
+        ["git", "-c", "core.hooksPath=" + os.devnull, "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
+         "-c", "core.attributesFile=" + os.devnull, "-c", "core.excludesFile=" + os.devnull, *args],
+        cwd=repo, check=True, capture_output=True, input=input_bytes, env=environment,
     ).stdout
 
 
@@ -34,12 +39,15 @@ def committed_source(tmp_path, monkeypatch):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# committed example\n", encoding="utf-8")
     (repo / "LICENSE").write_text("MIT test fixture\n", encoding="utf-8")
+    script = repo / "scripts/package_source_release.py"
+    script.parent.mkdir()
+    script.write_bytes((REPO / "scripts/package_source_release.py").read_bytes())
     private_paths = ["settings.toml", "secrets.py", ".artwork_wifi.json", ".badge_remote.json",
                      ".badge_windows_launch.key", ".bm83_windows_companion.json", ".bm83_windows_receiver.json",
                      "lib/secrets.py", "lib/remote/private_profile.py"]
     for name in private_paths:
         (repo / release.SOURCE_ROOT / name).write_text("DO-NOT-PACKAGE-PRIVATE-DATA", encoding="utf-8")
-    git(repo, "add", "LICENSE", "firmware")
+    git(repo, "add", "LICENSE", "firmware", "scripts/package_source_release.py")
     git(repo, "commit", "-m", "release fixture")
     commit = git(repo, "rev-parse", "HEAD").decode().strip()
     # A working copy modification must never enter the asset for this commit.
@@ -161,7 +169,8 @@ def committed_rc(committed_source):
     for name in paths:
         path = repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"public committed release fixture\n")
+        if name != "scripts/package_source_release.py":
+            path.write_bytes(b"public committed release fixture\n")
     private = repo / release.BADGE_ROOT / "apps/bm83_remote/.bm83_windows_receiver.json"
     private.write_bytes(b"DO-NOT-PACKAGE-PRIVATE-DATA")
     unexpected = repo / release.BADGE_ROOT / "apps/bm83_remote/new_unreviewed.py"
@@ -352,3 +361,97 @@ def test_compiled_release_refuses_unexpected_build_metadata(compiled_tree, extra
     info.write_bytes(info.read_bytes() + extra.encode())
     with pytest.raises(ValueError, match="Unexpected compiled build metadata fields"):
         release.compiled_files(commit, source, compiler, compiler_hash)
+
+
+def load_executing_packager(path, repo):
+    spec = importlib.util.spec_from_file_location("fixture_executing_release", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.REPO = repo
+    return module
+
+
+@pytest.mark.parametrize("entry_point", ["package", "package_controller_badge"])
+@pytest.mark.parametrize("compiler_fields", [
+    {}, {"compiler": Path("missing-mpy-cross")}, {"compiler_sha256": "0" * 64},
+    {"compiler": Path("missing-mpy-cross"), "compiler_sha256": "not-a-digest"},
+])
+def test_compiled_options_required_before_any_git_or_source_reads(tmp_path, monkeypatch, entry_point, compiler_fields):
+    output = tmp_path / "output"
+    monkeypatch.setattr(release, "git", lambda *args: pytest.fail("Git accessed before compiler arguments were validated"))
+    options = {"scope": "controller-badge-source"} if entry_point == "package" else {}
+    with pytest.raises(ValueError, match="--include-mpy requires"):
+        getattr(release, entry_point)("a" * 40, "v1.0.0-rc.1", output, include_mpy=True,
+                                      **options, **compiler_fields)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("entry_point", ["package", "package_controller_badge"])
+@pytest.mark.parametrize("source_kind", ["missing", "symlink"])
+def test_release_ref_requires_ordinary_committed_packager(committed_source, tmp_path, entry_point, source_kind):
+    repo, _ = committed_source
+    path = "scripts/package_source_release.py"
+    if source_kind == "missing":
+        git(repo, "rm", "--cached", "--", path)
+    else:
+        target = git(repo, "hash-object", "-w", "--stdin", input_bytes=b"../../private-tool").decode().strip()
+        git(repo, "update-index", "--cacheinfo", "120000," + target + "," + path)
+    git(repo, "commit", "-m", "invalid packager provenance")
+    commit = git(repo, "rev-parse", "HEAD").decode().strip()
+    output = tmp_path / "output"
+    options = {"scope": "controller-badge-source"} if entry_point == "package" else {}
+    with pytest.raises(ValueError, match="committed packager"):
+        getattr(release, entry_point)(commit, "v1.0.0-rc.1", output, **options)
+    assert not output.exists()
+
+
+def test_changed_historical_allowlist_requires_its_own_tagged_tool(committed_rc, tmp_path):
+    repo, _ = committed_rc
+    script = repo / "scripts/package_source_release.py"
+    current = script.read_bytes()
+    historical = current.replace(b'    "tools/mpy_cross_pin.env",',
+                                 b'    "scripts/prepare_release.py", "tools/mpy_cross_pin.env",', 1)
+    assert historical != current
+    script.write_bytes(historical)
+    (repo / "scripts/prepare_release.py").write_bytes(b"# historical compatibility entry point\n")
+    git(repo, "add", "scripts")
+    git(repo, "commit", "-m", "historical tag with compatibility entry point in allowlist")
+    git(repo, "tag", "fixture-historical-release")
+    commit = git(repo, "rev-parse", "HEAD").decode().strip()
+    output = tmp_path / "new-tool-output"
+    with pytest.raises(ValueError, match="Executing packager differs"):
+        release.package("fixture-historical-release", "v1.0.0-rc.1", output, scope="controller-badge-source")
+    assert not output.exists()
+    historical_tool = load_executing_packager(script, repo)
+    first = historical_tool.package(commit, "v1.0.0-rc.1", tmp_path / "own-tag-first", scope="controller-badge-source")
+    second = historical_tool.package(commit, "v1.0.0-rc.1", tmp_path / "own-tag-second", scope="controller-badge-source")
+    assert Path(first["archive"]).read_bytes() == Path(second["archive"]).read_bytes()
+    with zipfile.ZipFile(first["archive"]) as bundle:
+        assert "BM83-Remote-v1.0.0-rc.1/scripts/prepare_release.py" in bundle.namelist()
+
+
+def test_actual_executing_module_must_match_even_when_repo_script_matches_ref(committed_source, tmp_path):
+    repo, commit = committed_source
+    script = tmp_path / "different-executing-tool.py"
+    canonical = (repo / "scripts/package_source_release.py").read_bytes()
+    changed = canonical.replace(b"APPLICATION_SOURCES = BASE_APPLICATION_SOURCES | HOST_MANAGEMENT_SOURCES",
+                                b'APPLICATION_SOURCES = BASE_APPLICATION_SOURCES | HOST_MANAGEMENT_SOURCES | {"new.py"}', 1)
+    assert changed != canonical
+    script.write_bytes(changed)
+    module = load_executing_packager(script, repo)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError, match="Executing packager differs"):
+        module.package(commit, "v0.1.0", output)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("scope", ["application-source", "controller-badge-source"])
+def test_crlf_checkout_of_matching_tagged_packager_preserves_archive_bytes(committed_rc, tmp_path, scope):
+    repo, commit = committed_rc
+    first = release.package(commit, "v1.0.0-rc.1", tmp_path / "lf", scope=scope)
+    script = tmp_path / "crlf-executing-tool.py"
+    canonical = (repo / "scripts/package_source_release.py").read_bytes().replace(b"\r\n", b"\n")
+    script.write_bytes(canonical.replace(b"\n", b"\r\n"))
+    module = load_executing_packager(script, repo)
+    second = module.package(commit, "v1.0.0-rc.1", tmp_path / "crlf", scope=scope)
+    assert Path(first["archive"]).read_bytes() == Path(second["archive"]).read_bytes()

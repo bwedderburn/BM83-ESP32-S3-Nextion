@@ -69,8 +69,12 @@ BM83 and CrowPanel must remain offline during this maintenance. Do not enumerate
 probe, reset, deploy to or change playback on connected devices. Preserve private
 captures/configuration and frozen source/compiler/artifact manifests. No CI or
 simulator result proves the screens, metadata, radio lifecycle or stable audio.
-Phase 2 BLE HID Disconnect remains blocked on actual Phase 1 acceptance; see
-`docs/reliability/README.md` and `docs/reliability/DIRECT-MAINTENANCE.md`.
+The November 4 B-Intel Phase 1 acceptance supplies its agreed prerequisite for
+Phase 2 Disconnect + Select host source work. Phase 2 retains its own build,
+host-selection matrix, qualified timing-window and physical acceptance gates;
+see `docs/reliability/phase1-bintel-2026-11-04.md`,
+`docs/reliability/phase2-host-selection.md` and `docs/reliability/README.md`.
+Repository maintenance remains offline and does not authorize a hardware run.
 
 The two weekly AI workflows have been retired so this work cannot automatically
 create new paid agent sessions or PRs. The Codacy security scan and host checks

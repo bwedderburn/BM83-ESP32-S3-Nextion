@@ -50,16 +50,73 @@ class ReliabilityPolicyTests(unittest.TestCase):
         )})
         return data
 
+    def required_workflows(self, root):
+        workflows = root / ".github/workflows"
+        workflows.mkdir(parents=True)
+        for name, data in (("python-package.yml", self.workflow()),
+                           ("host-security.yml", self.host_security_workflow()),
+                           ("codacy.yml", self.workflow())):
+            (workflows / name).write_text(yaml.safe_dump(data))
+        return workflows
+
+    def test_required_workflow_directory_and_empty_directory_are_rejected(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(POLICY.check_workflows(root), [
+                "required workflow directory is missing: .github/workflows"])
+            (root / ".github/workflows").mkdir(parents=True)
+            self.assertEqual(set(POLICY.check_workflows(root)), {
+                "required workflow is missing: .github/workflows/python-package.yml",
+                "required workflow is missing: .github/workflows/host-security.yml",
+                "required workflow is missing: .github/workflows/codacy.yml",
+            })
+
+    def test_each_required_workflow_filename_is_checked(self):
+        for name in ("python-package.yml", "host-security.yml", "codacy.yml"):
+            with self.subTest(name=name), TemporaryDirectory() as directory:
+                root = Path(directory)
+                workflows = self.required_workflows(root)
+                self.assertEqual(POLICY.check_workflows(root), [])
+                (workflows / name).rename(workflows / "renamed.yml")
+                self.assertEqual(POLICY.check_workflows(root), [
+                    "required workflow is missing: .github/workflows/" + name])
+
+    def security_task(self):
+        return {
+            "label": "BM83: security (host only)", "type": "process",
+            "command": "${command:python.interpreterPath}",
+            "args": ["-m", "bandit", "--ini", ".bandit", "-r", "firmware/circuitpython",
+                     "addons/universe-badge/apps/bm83_remote", "scripts", "-ll"],
+        }
+
+    def test_editor_security_task_retains_each_production_bandit_target(self):
+        self.assertEqual(POLICY.task_errors([self.security_task()]), [])
+        for target in ("firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts"):
+            with self.subTest(target=target):
+                task = self.security_task()
+                task["args"].remove(target)
+                self.assertIn("BM83 security task must retain literal production Bandit arguments",
+                              POLICY.task_errors([task]))
+        task = self.security_task()
+        task["args"].append("--exit-zero")
+        self.assertIn("BM83 security task must retain literal production Bandit arguments",
+                      POLICY.task_errors([task]))
+
+    def test_editor_security_task_must_be_present_once(self):
+        for tasks in ([], [self.security_task(), self.security_task()]):
+            with self.subTest(count=len(tasks)):
+                self.assertIn("expected exactly one BM83 security task", POLICY.task_errors(tasks))
+
     def test_host_security_requires_each_production_bandit_target(self):
         for target in ("firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts"):
             with self.subTest(target=target):
                 data = self.host_security_workflow()
                 step = data["jobs"]["host-security"]["steps"][-1]
                 step["run"] = step["run"].replace(target + " ", "")
-                self.assertIn("host security must run the required production Bandit scan without bypasses",
+                self.assertIn("host security must retain literal production Bandit arguments with if/continue-on-error unset",
                               POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
 
-    def test_host_security_bandit_scan_cannot_be_skipped_or_suppress_errors(self):
+    def test_host_security_rejects_skip_error_flags_and_modified_literal_command(self):
         for field, value, location in (("if", "false", "step"), ("continue-on-error", True, "step"),
                                        ("if", "false", "job"), ("continue-on-error", True, "job")):
             with self.subTest(field=field, location=location):
@@ -67,11 +124,11 @@ class ReliabilityPolicyTests(unittest.TestCase):
                 job = data["jobs"]["host-security"]
                 item = job["steps"][-1] if location == "step" else job
                 item[field] = value
-                self.assertIn("host security must run the required production Bandit scan without bypasses",
+                self.assertIn("host security must retain literal production Bandit arguments with if/continue-on-error unset",
                               POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
         data = self.host_security_workflow()
         data["jobs"]["host-security"]["steps"][-1]["run"] += " || true"
-        self.assertIn("host security must run the required production Bandit scan without bypasses",
+        self.assertIn("host security must retain literal production Bandit arguments with if/continue-on-error unset",
                       POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
 
     def test_host_security_accepts_required_scan_with_reordered_targets(self):
@@ -140,8 +197,7 @@ class ReliabilityPolicyTests(unittest.TestCase):
                 self.assertIn("forbidden credential/agent reference: " + expected,
                               POLICY.workflow_errors(yaml.safe_load(text), text))
         with TemporaryDirectory() as directory:
-            workflows = Path(directory) / ".github/workflows"
-            workflows.mkdir(parents=True)
+            workflows = self.required_workflows(Path(directory))
             text = yaml.safe_dump(self.workflow()) + 'env:\n  TOKEN: "${{ \\u0073ecrets.T }}"\n'
             (workflows / "escaped.yml").write_text(text)
             self.assertEqual(POLICY.check_workflows(Path(directory)), [
@@ -183,8 +239,7 @@ class ReliabilityPolicyTests(unittest.TestCase):
             "job must have only contents: read",
         })
         with TemporaryDirectory() as directory:
-            workflows = Path(directory) / ".github/workflows"
-            workflows.mkdir(parents=True)
+            workflows = self.required_workflows(Path(directory))
             (workflows / "new-bypass.yml").write_text(label + yaml.safe_dump(data))
             self.assertIn(
                 ".github/workflows/new-bypass.yml: forbidden credential/agent reference: secrets",
@@ -211,8 +266,7 @@ class ReliabilityPolicyTests(unittest.TestCase):
         for name in ("weekly-claude-audit.yml", "weekly-copilot-review.yml"):
             with self.subTest(name=name), TemporaryDirectory() as directory:
                 root = Path(directory)
-                workflows = root / ".github/workflows"
-                workflows.mkdir(parents=True)
+                workflows = self.required_workflows(root)
                 (workflows / name).write_text(POLICY.OUT_OF_SCOPE + "\n" + yaml.safe_dump(data))
                 prefix = ".github/workflows/" + name + ": "
                 self.assertEqual(set(POLICY.check_workflows(root)), {
@@ -248,8 +302,7 @@ class ReliabilityPolicyTests(unittest.TestCase):
     def test_yaml_extension_is_checked(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            workflows = root / ".github/workflows"
-            workflows.mkdir(parents=True)
+            workflows = self.required_workflows(root)
             data = self.workflow()
             data["on"] = {"pull_request_target": None}
             (workflows / "unsafe.yaml").write_text(yaml.safe_dump(data))

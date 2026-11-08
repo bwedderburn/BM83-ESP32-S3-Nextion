@@ -3,6 +3,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -71,9 +72,16 @@ def test_only_canonical_release_entry_point_is_shipped():
     assert "scripts/package_source_release.py" in release.RC_FIXED_FILES
 
 
+def git_environment():
+    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_SYSTEM=os.devnull,
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
+    return environment
+
+
 def git(repo, *args):
     return subprocess.run(
-        ["git", *args], cwd=repo, check=True, capture_output=True, stdin=subprocess.DEVNULL
+        ["git", *args], cwd=repo, check=True, capture_output=True, stdin=subprocess.DEVNULL, env=git_environment()
     ).stdout
 
 
@@ -81,9 +89,17 @@ def git(repo, *args):
 def cli_repository(tmp_path):
     repo = tmp_path / "repository"
     repo.mkdir()
-    git(repo, "init")
-    git(repo, "config", "user.name", "Release CLI Test")
-    git(repo, "config", "user.email", "release-cli-test@example.invalid")
+    template = tmp_path / "empty-git-template"
+    hooks = tmp_path / "disabled-hooks"
+    template.mkdir()
+    hooks.mkdir()
+    git(repo, "init", "--template=" + str(template))
+    for name, value in (("user.name", "Release CLI Test"), ("user.email", "release-cli-test@example.invalid"),
+                        ("commit.gpgsign", "false"), ("tag.gpgsign", "false"),
+                        ("core.hooksPath", str(hooks)), ("core.autocrlf", "false"),
+                        ("core.excludesFile", os.devnull), ("core.attributesFile", os.devnull),
+                        ("core.fsmonitor", "false")):
+        git(repo, "config", name, value)
     selected = (release.RC_FIXED_FILES | {"RELEASE_NOTES-v1.0.0-rc.1.md"}
                 | {release.SOURCE_ROOT + name for name in release.APPLICATION_SOURCES}
                 | {release.BADGE_ROOT + name for name in release.BADGE_SOURCES})
@@ -103,7 +119,7 @@ def invoke_cli(repo, output, *, scope="application-source", revision="HEAD", ver
     return subprocess.run(
         [sys.executable, str(repo / "scripts/package_source_release.py"),
          "--revision", revision, "--scope", scope, "--version", version, "--output", str(output)],
-        cwd=repo, capture_output=True, stdin=subprocess.DEVNULL,
+        cwd=repo, capture_output=True, stdin=subprocess.DEVNULL, env=git_environment(),
     )
 
 
@@ -157,3 +173,53 @@ def test_controller_badge_api_refuses_orphan_compiler_fields_before_source_reads
     with pytest.raises(ValueError, match="--include-mpy"):
         release.package_controller_badge("a" * 40, "v1.0.0-rc.1", output, **compiler_fields)
     assert not output.exists()
+
+
+@pytest.mark.parametrize("compiler_arguments", [
+    [], ["--compiler", "missing-mpy-cross"], ["--compiler-sha256", "0" * 64],
+    ["--compiler", "missing-mpy-cross", "--compiler-sha256", "invalid"],
+])
+def test_cli_requires_complete_compiler_options_before_package(tmp_path, monkeypatch, capsys, compiler_arguments):
+    output = tmp_path / "output"
+    monkeypatch.setattr(sys, "argv", [
+        "package_source_release.py", "--revision", "HEAD", "--version", "v1.0.0-rc.1",
+        "--scope", "controller-badge-source", "--output", str(output), "--include-mpy", *compiler_arguments,
+    ])
+    monkeypatch.setattr(release, "package", lambda *args, **kwargs: pytest.fail("Package reached before compiler validation"))
+    with pytest.raises(SystemExit) as error:
+        release.main()
+    assert error.value.code == 2
+    assert "--include-mpy requires" in capsys.readouterr().err
+    assert not output.exists()
+
+
+def test_cli_fixture_ignores_hostile_git_configuration(tmp_path, monkeypatch):
+    hooks = tmp_path / "hostile-hooks"
+    hooks.mkdir()
+    hook = hooks / "pre-commit"
+    hook.write_bytes(b"#!/bin/sh\nexit 93\n")
+    hook.chmod(0o755)
+    configuration = tmp_path / "hostile-gitconfig"
+    configuration.write_text(
+        '[core]\n hooksPath = "' + hooks.as_posix() + '"\n'
+        '[commit]\n gpgSign = true\n'
+        '[gpg]\n program = "' + (tmp_path / 'missing-fixture-signer').as_posix() + '"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(configuration))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(configuration))
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+    unused_git_directory = tmp_path / "must-not-be-used-as-git-dir"
+    monkeypatch.setenv("GIT_DIR", str(unused_git_directory))
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "inherited-author@example.invalid")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "inherited-committer@example.invalid")
+    repo, commit = cli_repository.__wrapped__(tmp_path)
+    assert not unused_git_directory.exists()
+    assert git(repo, "show", "-s", "--format=%ae %ce", commit).strip() == (
+        b"release-cli-test@example.invalid release-cli-test@example.invalid"
+    )
+    assert git(repo, "config", "--get", "commit.gpgsign").strip() == b"false"
+    process = invoke_cli(repo, tmp_path / "output", revision=commit)
+    assert process.returncode == 0, process.stderr.decode()

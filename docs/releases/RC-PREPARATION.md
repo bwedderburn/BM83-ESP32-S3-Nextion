@@ -40,7 +40,10 @@ source profiles:
 
 At that tag, `scripts/prepare_release.py` is a compatibility entrypoint to the
 same implementation. Later `main` retired the shim and made `--scope` and
-`--version` required; compiler arguments also require `--include-mpy`. Reproduce
+`--version` required; compiler arguments also require `--include-mpy`, and compiled
+packaging requires both arguments before source reads. Current `main` also
+refuses a requested revision whose committed packager differs from the executing
+script, allowing CRLF/LF checkout conversion. Reproduce
 the published files using their own tagged packager, preserving its original
 allowlist and behavior. `--ref` aliases `--revision` in the canonical CLI.
 The commands below specify the scope and version explicitly on both versions.

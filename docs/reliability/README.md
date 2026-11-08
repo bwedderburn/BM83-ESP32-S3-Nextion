@@ -68,7 +68,7 @@ python3 -m venv .venv
 .venv/bin/python scripts/check_reliability_setup.py
 .venv/bin/python -m flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 .venv/bin/python -m pytest -q
-.venv/bin/python -m bandit --ini .bandit -r firmware/circuitpython addons/universe-badge/apps/bm83_remote -ll
+.venv/bin/python -m bandit --ini .bandit -r firmware/circuitpython addons/universe-badge/apps/bm83_remote scripts -ll
 .venv/bin/python -m pip_audit -r requirements-reliability.txt
 .venv/bin/python -m pip_audit -r tools/mcp/repo_health/requirements.txt
 ```
@@ -85,6 +85,10 @@ not need Codacy tokens, SARIF write permissions or a paid security feature.
 YAML is supported for issue forms; GitHub PR templates are Markdown, not YAML.
 The structural checker is a regression guard, not a complete GitHub/VS Code
 schema validator or security sandbox.
+It requires the declared workflow files and checks the literal Bandit command,
+target paths and matching VS Code arguments. It does not execute Bandit or prove
+every workflow behavior. The [post-landing CI records](release-handoff-2026-11-07.md#later-main-scope-and-ci-record)
+provide the recorded execution results.
 
 ### Native-build dependency security and separate hardware gate
 
