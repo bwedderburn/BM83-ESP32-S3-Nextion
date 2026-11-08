@@ -39,5 +39,9 @@ are retained; `repo_test_summary` executes tests and writes caches, so it is not
 a read-only tool. No wildcard permission grant is required by this maintenance.
 
 Offline tests and repository integration do not satisfy physical acceptance.
-Keep BM83 and CrowPanel offline and Phase 2 blocked until the separately
-authorized hardware protocol passes.
+Keep BM83 and CrowPanel offline during repository maintenance; the
+[November 4 B-Intel run](../reliability/phase1-bintel-2026-11-04.md) was
+accepted for its agreed Phase 1 scope, so Phase 2 Disconnect + Select host
+source work may proceed with its own build, host-selection matrix, qualified
+timing-window and physical acceptance gates, and this grants no new device
+authorization.

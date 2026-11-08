@@ -17,8 +17,11 @@ Preserve profiles, bonds, keys, unrelated apps and all private rollback evidence
 
 Separate source proof, host tests, fresh hardware observations, user reports and
 hypotheses. Audio, UART ACKs and cached snapshots do not prove fresh metadata or
-controller health. The 582.4-second original observation stopped on an intentional
-user volume change, not a proven fault; physical acceptance is unconfirmed.
+controller health. The 582.4-second original observation stopped on an
+intentional user volume change, not a proven fault, and keeps that historical
+classification; the November 4 B-Intel run
+(docs/reliability/phase1-bintel-2026-11-04.md) later passed its agreed Phase 1
+scope, and other hosts, power orders and native-failure cases remain unaccepted.
 
 Derive latency budgets from original measurements and protocol/buffer deadlines;
 candidate thresholds are not acceptance criteria. Report unsupported native
@@ -29,5 +32,10 @@ Keep the canonical add-on and Universe app plus three mirrored tests identical.
 Do not include frozen runtime experiments in tooling-only commits. Publish only
 sanitized aggregates. Source-only commits do not establish physical acceptance.
 Hardware access and deployment remain blocked until explicitly authorized.
-Physical acceptance still requires >=30-minute stable soak, power/reconnect,
-screens/buttons, HOME and a platform matrix. Phase 2 BLE Disconnect stays blocked.
+The November 4 B-Intel run was accepted for its agreed scope; other
+configurations still require >=30-minute stable soak, power/reconnect,
+screens/buttons, HOME and a platform matrix. Phase 2 BLE HID Disconnect + Select
+host source work may proceed with its own build, host-selection matrix,
+qualified timing-window and physical acceptance gates; BM83/CrowPanel stay
+offline during repository maintenance, and this grants no new device
+authorization.

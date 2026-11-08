@@ -21,8 +21,13 @@ Green CI is not an end-to-end metadata or hardware acceptance verdict. -->
 - [ ] Explicit OS/source/helper/runtime/device matrix; unsupported/not-tested fields labeled.
 - [ ] Original-versus-candidate conditions and stop reasons are unambiguous.
 
-<!-- For tooling-only changes, state "Not applicable; hardware acceptance remains pending"
-rather than checking unperformed gates. Preserve draft status and the Phase 2 block. -->
+<!-- For tooling-only changes, state "Not applicable; this change claims no
+hardware acceptance" rather than checking unperformed gates. The November 4
+B-Intel Phase 1 run is accepted for its agreed scope; other rows remain Not
+accepted/Not tested. Preserve draft status; Phase 2 Disconnect + Select host
+keeps its own build, host-selection matrix, qualified timing-window and physical
+acceptance gates, and BM83/CrowPanel stay offline during repository maintenance.
+-->
 
 ## Review and remaining limits
 

@@ -23,7 +23,10 @@ are not substitutes. See the [receiver setup and runtime safeguards](../../docs/
 
 Host tests use fake sockets and sample data. Dated component and physical
 observations are recorded in the [validation notes](../../docs/validation/bm83-startup-artwork-validation-2026-11-01.md),
-but the complete receiver-bearing system has not passed the
+and the separately authorized
+[November 4 B-Intel Phase 1 run](../../docs/reliability/phase1-bintel-2026-11-04.md)
+passed its agreed scope with the badge in the tested path; other hosts, power
+orders and native-failure cases remain subject to the
 [reliability acceptance gates](../../docs/reliability/README.md). Configured private
 credentials, a reviewed runtime and separately authorized physical checks remain
 prerequisites for live use. Including this add-on does not install or activate it.
