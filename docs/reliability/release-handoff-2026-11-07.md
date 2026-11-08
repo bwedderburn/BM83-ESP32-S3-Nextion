@@ -234,11 +234,21 @@ remain authoritative for those decisions. Historical Windows acceptance cannot
 substitute for a new final build or unaccepted platform row. These open gates do
 not authorize device access during host-only maintenance.
 
-Owner consideration remains pending on whether the host-security status should
-become a required protected-branch check. No protection/ruleset change was made;
-the repository's `CLAUDE.md` restriction on changing those settings remains in
-force. Successful host-security execution and structural checker coverage are
-recorded independently of that pending governance decision.
+On 2026-11-07, Brian, the repository owner, added `host-security` as a required
+status check for `main` in the GitHub UI. Subsequent read-only API verification
+found exactly these required contexts: `build (3.11)`, `build (3.12)`,
+`build (3.13)` and `host-security`. The strict/up-to-date flag remains `true`,
+and `enforce_admins.enabled` remains `false` ("Do not allow bypassing the above
+settings" is off). The pull-request review requirement is unchanged, Codacy
+remains non-required, and ruleset `11607796` is unchanged.
+
+These required checks gate pull requests such as Dependabot's updates. Direct
+pushes to `main` remain the maintenance workflow under `CLAUDE.md`, using the
+owner's existing permissions. Codex verified the decision read-only and changed
+no protection, ruleset, credential or approval setting; the restriction on
+changing those settings remains in force. Successful host-security execution
+and structural checker coverage are recorded separately from this settings
+verification.
 
 ## Review disposition
 
@@ -246,4 +256,3 @@ The owner reported zero blockers across all three review lenses, with no rollbac
 requested. The follow-ups addressed here correct evidence wording and task
 history, name the remaining gates/owners, link post-landing CI, align local scan
 commands, and add missing presence, argument and packager-identity checks.
-The protected-branch `host-security` requirement remains an owner decision.
