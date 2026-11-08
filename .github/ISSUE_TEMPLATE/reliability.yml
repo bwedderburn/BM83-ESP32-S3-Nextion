@@ -8,7 +8,7 @@ body:
       value: |
         Keep captures, credentials, network identifiers and machine reports private.
         This form does not authorize hardware actions or a cloud coding assignment.
-        Phase 2 remains blocked on explicit Phase 1 physical acceptance.
+        The November 4 B-Intel Phase 1 run was accepted for its agreed scope; Phase 2 Disconnect + Select host source work may proceed with its own build, host-selection matrix, qualified timing-window and physical acceptance gates. This form grants no device authorization.
   - type: input
     id: owner
     attributes:
