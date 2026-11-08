@@ -6,13 +6,12 @@ It uses the badge's MicroPython runtime and firmware-provided graphics/buttons.
 It does not run on the BM83 audio unit's CircuitPython firmware.
 
 This directory is the canonical home for the badge client.
-As of 2026-11-08, seven compared files differ from the
-[Universe workshop repository](https://github.com/bwedderburn/github-universe-2026):
-those Universe copies at `7f29e51` match BM83 at `9cf00e8` and lack the
-November 6-7 changes; reconcile and re-run the comparison before claiming parity.
-Apply client fixes here first, then use the authoritative file list in the
-Universe repository's `scripts/check-bm83-addon.py` and run it with
-`--bm83-repo /path/to/this/repository` to check equality.
+The [Universe workshop repository](https://github.com/bwedderburn/github-universe-2026)
+keeps a copy at `badge/apps/bm83_remote/` so the remote and World Capitals can be
+reviewed together. Apply client fixes here first, mirror every file listed in
+that repository's `scripts/check-bm83-addon.py`, and run it with
+`--bm83-repo /path/to/this/repository` at exact paired revisions before claiming
+parity.
 
 ## Compatibility
 
