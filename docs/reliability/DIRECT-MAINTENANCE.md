@@ -73,11 +73,16 @@ an AI backend response test; Copilot requests are intentionally paused.
   for real tool checks and fresh-build comparison. Original frozen images and
   backups are preserved. Dependency remediation does not prove native fault
   cause or close issue #193's radio/resource investigation.
-- **Phase 1 acceptance:** requires the separately authorized run card, measured
-  latency budgets, fresh-only status and at least 30 uninterrupted stable minutes
-  plus actual screens/buttons/reconnect checks. Unit tests do not close it.
-- **Phase 2 BLE HID Disconnect:** remains blocked by actual Phase 1 acceptance.
-  No new firmware feature, bond change or cross-platform physical claim is made.
+- **Phase 1 acceptance:** the [November 4 B-Intel run](phase1-bintel-2026-11-04.md)
+  was accepted for its agreed scope. Other configurations still require a separately
+  authorized run card, measured latency budgets, fresh-only status, at least
+  30 uninterrupted stable minutes and actual screens/buttons/reconnect checks.
+  Unit tests do not establish that acceptance.
+- **Phase 2 BLE HID Disconnect + Select host:** source work may proceed after
+  that scoped Phase 1 result. Its own builds, full host-selection matrix,
+  qualified timing window and physical acceptance gates remain required.
+  BM83/CrowPanel stay offline during repository maintenance; this grants no
+  new device authorization.
 
 The full work graph and evidence classifications remain in
 [the reliability runbook](README.md). Universe retains the matching badge add-on

@@ -22,10 +22,11 @@ CI run IDs: 42416862677, 42416862651, 42416862684
 ```
 
 These are the historical results for `888b089`, including its real pinned
-application `.mpy` compiler lane. The **local** Bandit gate covered the production
-trees and packagers at medium/high severity (`-ll`). The `888b089` host-security
-workflow scanned only `firmware/circuitpython` and
-`addons/universe-badge/apps/bm83_remote`; it did not scan `scripts/` in CI.
+application `.mpy` compiler lane. The exact local Bandit argv was not retained
+in the handoff evidence. The documented local command at `888b089` targets
+`firmware/circuitpython` and `addons/universe-badge/apps/bm83_remote` at
+medium/high severity (`-ll`). The `888b089` host-security workflow scanned the
+same two trees; it did not scan `scripts/` in CI.
 That CI target was added later in `f6243be`. The clean dependency audits covered
 the development, repo-health MCP and native-build requirement manifests. They
 are separate from a native-runtime build or physical acceptance.
@@ -59,8 +60,10 @@ The following commits completed their automatic post-landing main workflows succ
 | `e6d8901` — release-review follow-ups | [42435140948](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140948) | [42435140949](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140949) | [42435140954](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140954) |
 | `4f8a6f1` — owner-required check documentation | [42436344333](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344333) | [42436344315](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344315) | [42436344346](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344346) |
 
-The `f6243be` [pinned application `.mpy` build](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42426961027)
-also passed. These runs record actual execution for their respective commits;
+The `f6243be` [Build CircuitPython drag-and-drop dist](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42426961027)
+workflow also passed. It ran for `f6243be` because that commit changed
+`tools/mpy_cross_pin.env`, which matched the workflow's path filter.
+These runs record actual execution for their respective commits;
 the host-security runs executed their configured policy, Bandit and dependency
 audit steps. Codacy success records completed analysis/upload. None of these
 results establishes physical acceptance or a new native-runtime build.
@@ -251,10 +254,11 @@ settings" is off). The pull-request review requirement is unchanged, Codacy
 remains non-required, and ruleset `11607796` is unchanged.
 
 These required checks gate pull requests such as Dependabot's updates. Direct
-pushes to `main` remain the maintenance workflow under `CLAUDE.md`, using the
-owner's existing permissions. Codex verified the decision read-only and changed
-no protection, ruleset, credential or approval setting; the restriction on
-changing those settings remains in force. Successful host-security execution
+pushes to `main` under `CLAUDE.md` continue only because the owner is a repository
+admin and "Do not allow bypassing the above settings" is off. Enabling that
+setting would block the `CLAUDE.md` direct-push workflow. Codex verified the
+decision read-only and changed no protection, ruleset, credential or approval
+setting; the restriction on changing those settings remains in force. Successful host-security execution
 and structural checker coverage are recorded separately from this settings
 verification.
 

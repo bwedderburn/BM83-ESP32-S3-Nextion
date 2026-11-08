@@ -228,8 +228,12 @@ any change that touches one.
   in both active repositories, without new PRs. Never force-push or weaken branch
   protections. Report an actual push rejection and retain the work if blocked.
 - Preserve frozen candidates and private evidence. No hardware I/O, deployment
-  or playback changes during repository validation. Phase 2 remains blocked on
-  actual Phase 1 hardware acceptance, separately authorized.
+  or playback changes during repository validation. The
+  [November 4 B-Intel Phase 1 run](../docs/reliability/phase1-bintel-2026-11-04.md)
+  was accepted for its agreed scope; Phase 2 Disconnect + Select host source work may
+  proceed. Its own builds, full host-selection matrix, qualified timing window
+  and physical acceptance gates remain required. Keep BM83/CrowPanel offline
+  during repository maintenance; this grants no new device authorization.
 - Use pinned development requirements and explicit VS Code `BM83:` tasks.
   CI uses Python 3.11/3.12/3.13; host CI is not physical acceptance.
 - Weekly Copilot and Claude automation is retired. The existing Codacy scanner
