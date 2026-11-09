@@ -9,7 +9,7 @@ BLE HID pairing on ESP32 looks simple on paper (stand up an `HIDService`, start 
 
 Use this as a reference when you're either designing a new BLE HID peripheral on this stack or, more often, debugging one that seemed fine but fell apart the moment a user did "Forget Device" on their phone or PC.
 
-**Legacy applicability.** This tutorial and its `references/` examples describe the pre-host-policy BLE path. For current BM83 native host selection, use the canonical [`firmware/circuitpython/lib/blehid/ble.py`](../../firmware/circuitpython/lib/blehid/ble.py) and [`HOST-POLICY-API.md`](../../tools/circuitpython-runtime/HOST-POLICY-API.md). Preserve the native owner's `PAUSED` / `AUTO` / `ENROLL` admission rules; do not apply unconditional disconnect re-advertising to that path. These references do not qualify the current platform acceptance matrix or authorize hardware operation.
+**Legacy applicability.** This tutorial and its `references/` examples describe the pre-host-policy BLE path. For current BM83 native host selection, use the canonical [`firmware/circuitpython/lib/blehid/ble.py`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/main/firmware/circuitpython/lib/blehid/ble.py) and [`HOST-POLICY-API.md`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/main/tools/circuitpython-runtime/HOST-POLICY-API.md). Preserve the native owner's `PAUSED` / `AUTO` / `ENROLL` admission rules; do not apply unconditional disconnect re-advertising to that path. These references do not qualify the current platform acceptance matrix or authorize hardware operation.
 
 ## The core mental model
 
