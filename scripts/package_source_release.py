@@ -77,15 +77,14 @@ def package(revision, version, output, *, scope="application-source", include_mp
             compiler=None, compiler_sha256=None):
     if not include_mpy and (compiler is not None or compiler_sha256 is not None):
         raise ValueError("--compiler and --compiler-sha256 require --include-mpy")
-    if scope not in ("application-source", "controller-badge-source") or (include_mpy and scope != "controller-badge-source"):
+    if scope not in ("application-source", "controller-badge-source"):
+        raise ValueError("Unknown release scope: " + repr(scope)
+                         + "; choose application-source or controller-badge-source")
+    if include_mpy and scope != "controller-badge-source":
         raise ValueError("Compiled assets require the controller-badge-source scope")
     if include_mpy and (compiler is None or not re.fullmatch(r"[0-9a-fA-F]{64}", compiler_sha256 or "")):
         raise ValueError("--include-mpy requires --compiler and observed --compiler-sha256")
-    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?", version):
-        raise ValueError("Version must be a v-prefixed semantic version")
-    commit = git("rev-parse", "--verify", "--end-of-options", revision + "^{commit}").decode().strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", commit):
-        raise ValueError("Expected a full Git commit SHA")
+    commit = resolve_release_commit(revision, version)
     if scope == "controller-badge-source":
         return package_controller_badge(commit, version, output, include_mpy=include_mpy,
                                         compiler=compiler, compiler_sha256=compiler_sha256)
@@ -162,6 +161,7 @@ def package(revision, version, output, *, scope="application-source", include_mp
 
 
 
+
 RC_FIXED_FILES = frozenset({
     "LICENSE", "README.md", "setup.py", "build_mpy.sh",
     "docs/guides/deployment.md", "docs/guides/ble-volume-handoff.md",
@@ -193,6 +193,30 @@ PRIVATE_NAMES = frozenset({
     ".metadata_bridge.json", ".badge_remote.json", ".badge_windows_launch.key",
     ".bm83_windows_companion.json", ".bm83_windows_receiver.json",
 })
+
+
+def resolve_release_commit(revision, version):
+    """Bind an existing version tag to its commit; permit an untagged candidate."""
+    if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?", version):
+        raise ValueError("Version must be a v-prefixed semantic version")
+    commit = git("rev-parse", "--verify", "--end-of-options", revision + "^{commit}").decode().strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("Expected a full Git commit SHA")
+    tag_ref = "refs/tags/" + version
+    try:
+        git("show-ref", "--verify", "--quiet", tag_ref)
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode == 1:
+            return commit
+        raise
+    try:
+        tagged_commit = git("rev-parse", "--verify", "--end-of-options", tag_ref + "^{commit}").decode().strip()
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("Version tag " + tag_ref + " does not resolve to a commit") from exc
+    if tagged_commit != commit:
+        raise ValueError("Version tag " + tag_ref + " resolves to " + tagged_commit
+                         + ", not requested commit " + commit)
+    return commit
 
 
 def checked(path, data):
@@ -334,6 +358,7 @@ def package_controller_badge(commit, version, output, *, include_mpy=False,
         raise ValueError("--compiler and --compiler-sha256 require --include-mpy")
     if include_mpy and (compiler is None or not re.fullmatch(r"[0-9a-fA-F]{64}", compiler_sha256 or "")):
         raise ValueError("--include-mpy requires --compiler and observed --compiler-sha256")
+    commit = resolve_release_commit(commit, version)
     require_matching_packager(commit)
     source, executable = rc_source_files(commit, version)
     compiled = compiled_files(commit, source, compiler, compiler_sha256) if include_mpy else None

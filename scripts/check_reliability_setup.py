@@ -32,6 +32,10 @@ REQUIRED_WORKFLOWS = ("python-package.yml", "host-security.yml", "codacy.yml")
 PRODUCTION_BANDIT_TARGETS = frozenset({
     "firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts",
 })
+EXPECTED_PRODUCTION_BANDIT_COMMAND = (
+    "python -m bandit --ini .bandit -r "
+    "firmware/circuitpython addons/universe-badge/apps/bm83_remote scripts -ll"
+)
 
 
 def is_out_of_scope(text, name):
@@ -112,7 +116,8 @@ def production_bandit_errors(data, name):
                 continue
             if matches_production_bandit_args(args):
                 return []
-    return ["host security must retain literal production Bandit arguments with if/continue-on-error unset"]
+    return ["host security must retain literal production Bandit arguments with if/continue-on-error unset"
+            + ": expected " + EXPECTED_PRODUCTION_BANDIT_COMMAND]
 
 
 def workflow_errors(data, text, name=""):
@@ -172,7 +177,9 @@ def task_errors(tasks):
     else:
         args = security_tasks[0].get("args")
         if not isinstance(args, list) or not matches_production_bandit_args(["python", *args]):
-            errors.append("BM83 security task must retain literal production Bandit arguments")
+            errors.append("BM83 security task must retain literal production Bandit arguments"
+                          + ": expected args "
+                          + json.dumps(shlex.split(EXPECTED_PRODUCTION_BANDIT_COMMAND)[1:]))
     return errors
 
 

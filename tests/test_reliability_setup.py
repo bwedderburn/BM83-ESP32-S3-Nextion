@@ -96,11 +96,11 @@ class ReliabilityPolicyTests(unittest.TestCase):
                 task = self.security_task()
                 task["args"].remove(target)
                 self.assertIn("BM83 security task must retain literal production Bandit arguments",
-                              POLICY.task_errors([task]))
+                              "\n".join(POLICY.task_errors([task])))
         task = self.security_task()
         task["args"].append("--exit-zero")
         self.assertIn("BM83 security task must retain literal production Bandit arguments",
-                      POLICY.task_errors([task]))
+                      "\n".join(POLICY.task_errors([task])))
 
     def test_editor_security_task_must_be_present_once(self):
         for tasks in ([], [self.security_task(), self.security_task()]):
@@ -114,7 +114,7 @@ class ReliabilityPolicyTests(unittest.TestCase):
                 step = data["jobs"]["host-security"]["steps"][-1]
                 step["run"] = step["run"].replace(target + " ", "")
                 self.assertIn("host security must retain literal production Bandit arguments with if/continue-on-error unset",
-                              POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
+                              "\n".join(POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml")))
 
     def test_host_security_rejects_skip_error_flags_and_modified_literal_command(self):
         for field, value, location in (("if", "false", "step"), ("continue-on-error", True, "step"),
@@ -125,11 +125,30 @@ class ReliabilityPolicyTests(unittest.TestCase):
                 item = job["steps"][-1] if location == "step" else job
                 item[field] = value
                 self.assertIn("host security must retain literal production Bandit arguments with if/continue-on-error unset",
-                              POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
+                              "\n".join(POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml")))
         data = self.host_security_workflow()
         data["jobs"]["host-security"]["steps"][-1]["run"] += " || true"
         self.assertIn("host security must retain literal production Bandit arguments with if/continue-on-error unset",
-                      POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml"))
+                      "\n".join(POLICY.workflow_errors(data, yaml.safe_dump(data), "host-security.yml")))
+
+    def test_bandit_diagnostics_include_fixed_order_expected_command_and_task_args(self):
+        expected = (
+            "python -m bandit --ini .bandit -r "
+            "firmware/circuitpython addons/universe-badge/apps/bm83_remote scripts -ll"
+        )
+        data = self.host_security_workflow()
+        data["jobs"]["host-security"]["steps"][-1]["run"] = "python -m bandit -r scripts -ll"
+        self.assertEqual(POLICY.production_bandit_errors(data, "host-security.yml"), [
+            "host security must retain literal production Bandit arguments with if/continue-on-error unset"
+            + ": expected " + expected,
+        ])
+        task = self.security_task()
+        task["args"].remove("scripts")
+        self.assertEqual(POLICY.task_errors([task]), [
+            "BM83 security task must retain literal production Bandit arguments"
+            + ': expected args ["-m", "bandit", "--ini", ".bandit", "-r", '
+              '"firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts", "-ll"]',
+        ])
 
     def test_host_security_accepts_required_scan_with_reordered_targets(self):
         data = self.host_security_workflow()

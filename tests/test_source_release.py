@@ -455,3 +455,108 @@ def test_crlf_checkout_of_matching_tagged_packager_preserves_archive_bytes(commi
     module = load_executing_packager(script, repo)
     second = module.package(commit, "v1.0.0-rc.1", tmp_path / "crlf", scope=scope)
     assert Path(first["archive"]).read_bytes() == Path(second["archive"]).read_bytes()
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+@pytest.mark.parametrize("annotated", [False, True])
+def test_existing_version_tag_must_peel_to_requested_commit(committed_rc, tmp_path, entry_point, scope, annotated):
+    repo, commit = committed_rc
+    version = "v1.0.0-rc.1"
+    if annotated:
+        git(repo, "tag", "-a", version, "-m", "annotated release fixture", commit)
+        assert git(repo, "rev-parse", "refs/tags/" + version).decode().strip() != commit
+    else:
+        git(repo, "tag", version, commit)
+    options = {"scope": scope} if scope is not None else {}
+    result = getattr(release, entry_point)("HEAD", version, tmp_path / "output", **options)
+    assert result["source_commit"] == commit
+    manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["source_commit"] == commit and manifest["version"] == version
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+@pytest.mark.parametrize("annotated", [False, True])
+def test_existing_version_tag_mismatch_refused_before_source_or_output(committed_rc, tmp_path, monkeypatch,
+                                                                     entry_point, scope, annotated):
+    repo, tagged_commit = committed_rc
+    version = "v1.0.0-rc.1"
+    if annotated:
+        git(repo, "tag", "-a", version, "-m", "annotated release fixture", tagged_commit)
+    else:
+        git(repo, "tag", version, tagged_commit)
+    (repo / "release-context.txt").write_bytes(b"different committed context\n")
+    git(repo, "add", "release-context.txt")
+    git(repo, "commit", "-m", "different candidate commit")
+    requested_commit = git(repo, "rev-parse", "HEAD").decode().strip()
+    original_git = release.git
+
+    def references_only(*arguments):
+        if arguments[0] not in ("rev-parse", "show-ref"):
+            pytest.fail("Source read before refusing a mismatched version tag")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", references_only)
+    output = tmp_path / "output"
+    options = {"scope": scope} if scope is not None else {}
+    with pytest.raises(ValueError, match="Version tag .*not requested commit") as error:
+        getattr(release, entry_point)("HEAD", version, output, **options)
+    assert "refs/tags/" + version in str(error.value)
+    assert tagged_commit in str(error.value) and requested_commit in str(error.value)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+def test_untagged_version_allowed_even_when_same_named_branch_differs(committed_rc, tmp_path, entry_point, scope):
+    repo, commit = committed_rc
+    version = "v1.0.0-rc.1"
+    git(repo, "branch", version, "HEAD^")
+    options = {"scope": scope} if scope is not None else {}
+    result = getattr(release, entry_point)("HEAD", version, tmp_path / "output", **options)
+    assert result["source_commit"] == commit
+    assert Path(result["archive"]).is_file()
+
+
+@pytest.mark.parametrize("include_mpy", [False, True])
+def test_unknown_scope_has_its_own_diagnostic_before_git(tmp_path, monkeypatch, include_mpy):
+    monkeypatch.setattr(release, "git", lambda *args: pytest.fail("Git accessed for an unknown release scope"))
+    output = tmp_path / "output"
+    with pytest.raises(ValueError, match="Unknown release scope") as error:
+        release.package("HEAD", "v1.0.0-rc.1", output, scope="unknown-scope", include_mpy=include_mpy)
+    message = str(error.value)
+    assert "unknown-scope" in message
+    assert "application-source" in message and "controller-badge-source" in message
+    assert "Compiled assets" not in message
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+def test_tag_probe_errors_are_not_treated_as_untagged(committed_rc, tmp_path, monkeypatch, entry_point, scope):
+    _, commit = committed_rc
+    original_git = release.git
+
+    def failed_tag_probe(*arguments):
+        if arguments[0] == "show-ref":
+            raise subprocess.CalledProcessError(128, arguments, stderr=b"fixture tag-probe error")
+        if arguments[0] != "rev-parse":
+            pytest.fail("Source read after a failed tag probe")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", failed_tag_probe)
+    output = tmp_path / "output"
+    options = {"scope": scope} if scope is not None else {}
+    with pytest.raises(subprocess.CalledProcessError) as error:
+        getattr(release, entry_point)(commit, "v1.0.0-rc.1", output, **options)
+    assert error.value.returncode == 128
+    assert not output.exists()

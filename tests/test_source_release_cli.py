@@ -12,6 +12,8 @@ import zipfile
 
 import pytest
 
+from tests.release_fixture_support import git_environment, set_hostile_git_environment
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts/package_source_release.py"
 SPEC = importlib.util.spec_from_file_location("source_release_cli", SCRIPT)
@@ -72,21 +74,13 @@ def test_only_canonical_release_entry_point_is_shipped():
     assert "scripts/package_source_release.py" in release.RC_FIXED_FILES
 
 
-def git_environment():
-    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
-    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_SYSTEM=os.devnull,
-                       GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
-    return environment
-
-
 def git(repo, *args):
     return subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, stdin=subprocess.DEVNULL, env=git_environment()
     ).stdout
 
 
-@pytest.fixture
-def cli_repository(tmp_path):
+def make_cli_repository(tmp_path):
     repo = tmp_path / "repository"
     repo.mkdir()
     template = tmp_path / "empty-git-template"
@@ -113,6 +107,11 @@ def cli_repository(tmp_path):
     commit = git(repo, "rev-parse", "HEAD").decode().strip()
     (repo / release.SOURCE_ROOT / "main.py").write_bytes(b"uncommitted change must not enter archive\n")
     return repo, commit
+
+
+@pytest.fixture
+def cli_repository(tmp_path):
+    return make_cli_repository(tmp_path)
 
 
 def invoke_cli(repo, output, *, scope="application-source", revision="HEAD", version="v1.0.0-rc.1"):
@@ -194,32 +193,13 @@ def test_cli_requires_complete_compiler_options_before_package(tmp_path, monkeyp
 
 
 def test_cli_fixture_ignores_hostile_git_configuration(tmp_path, monkeypatch):
-    hooks = tmp_path / "hostile-hooks"
-    hooks.mkdir()
-    hook = hooks / "pre-commit"
-    hook.write_bytes(b"#!/bin/sh\nexit 93\n")
-    hook.chmod(0o755)
-    configuration = tmp_path / "hostile-gitconfig"
-    configuration.write_text(
-        '[core]\n hooksPath = "' + hooks.as_posix() + '"\n'
-        '[commit]\n gpgSign = true\n'
-        '[gpg]\n program = "' + (tmp_path / 'missing-fixture-signer').as_posix() + '"\n', encoding="utf-8"
-    )
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(configuration))
-    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(configuration))
-    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
-    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
-    monkeypatch.setenv("GIT_CONFIG_KEY_0", "commit.gpgsign")
-    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
-    unused_git_directory = tmp_path / "must-not-be-used-as-git-dir"
-    monkeypatch.setenv("GIT_DIR", str(unused_git_directory))
-    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "inherited-author@example.invalid")
-    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "inherited-committer@example.invalid")
-    repo, commit = cli_repository.__wrapped__(tmp_path)
-    assert not unused_git_directory.exists()
-    assert git(repo, "show", "-s", "--format=%ae %ce", commit).strip() == (
-        b"release-cli-test@example.invalid release-cli-test@example.invalid"
+    unused = set_hostile_git_environment(tmp_path, monkeypatch)
+    repo, commit = make_cli_repository(tmp_path)
+    assert git(repo, "show", "-s", "--format=%an <%ae>|%cn <%ce>", commit).strip() == (
+        b"Release CLI Test <release-cli-test@example.invalid>|Release CLI Test <release-cli-test@example.invalid>"
     )
     assert git(repo, "config", "--get", "commit.gpgsign").strip() == b"false"
+    assert not (repo / ".git/hostile-template-marker").exists()
     process = invoke_cli(repo, tmp_path / "output", revision=commit)
     assert process.returncode == 0, process.stderr.decode()
+    assert all(not path.exists() for path in unused.values())

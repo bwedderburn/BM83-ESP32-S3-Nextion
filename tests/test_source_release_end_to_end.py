@@ -17,6 +17,8 @@ import zipfile
 
 import pytest
 
+from tests.release_fixture_support import git_environment, set_hostile_git_environment
+
 
 REPO = Path(__file__).resolve().parents[1]
 BASH = shutil.which("bash")
@@ -77,14 +79,20 @@ def _make_tree(tmp_path, real_compiler=None):
              | {declaration["BADGE_ROOT"] + name for name in declaration["BADGE_SOURCES"]})
     repo = tmp_path / "repository with spaces"
     repo.mkdir()
-    environment = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
-                       PYTHONDONTWRITEBYTECODE="1")
+    environment = git_environment()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     for name in ("MPY_CROSS", "MPY_CROSS_OPT_LEVEL", "MPY_CROSS_ALLOW_UNPINNED", "BASH_ENV"):
         environment.pop(name, None)
-    _git(repo, environment, "init", "-q")
+    template = tmp_path / "empty-git-template"
+    hooks = tmp_path / "disabled-hooks"
+    template.mkdir()
+    hooks.mkdir()
+    _git(repo, environment, "init", "-q", "--template=" + str(template))
     for name, value in (("user.name", "Release E2E"), ("user.email", "e2e@example.invalid"),
-                        ("commit.gpgsign", "false"), ("core.autocrlf", "false"),
-                        ("core.hooksPath", os.devnull)):
+                        ("commit.gpgsign", "false"), ("tag.gpgsign", "false"),
+                        ("core.hooksPath", str(hooks)), ("core.autocrlf", "false"),
+                        ("core.excludesFile", os.devnull), ("core.attributesFile", os.devnull),
+                        ("core.fsmonitor", "false")):
         _git(repo, environment, "config", name, value)
     committed = {}
     for name in sorted(paths):
@@ -220,6 +228,18 @@ def _verify_pipeline(tree, tmp_path, *, synthetic_compiler):
 
 def test_real_build_and_rc_cli_produce_reproducible_four_asset_release(release_tree, tmp_path):
     _verify_pipeline(release_tree, tmp_path, synthetic_compiler=True)
+
+
+def test_end_to_end_fixture_ignores_hostile_git_configuration(tmp_path, monkeypatch):
+    unused = set_hostile_git_environment(tmp_path, monkeypatch)
+    tree = _make_tree(tmp_path)
+    assert _git(tree["repo"], tree["env"], "show", "-s", "--format=%an <%ae>|%cn <%ce>", tree["commit"]) == (
+        "Release E2E <e2e@example.invalid>|Release E2E <e2e@example.invalid>"
+    )
+    assert _git(tree["repo"], tree["env"], "config", "--get", "commit.gpgsign") == "false"
+    assert not (tree["repo"] / ".git/hostile-template-marker").exists()
+    _verify_pipeline(tree, tmp_path, synthetic_compiler=True)
+    assert all(not path.exists() for path in unused.values())
 
 
 @pytest.mark.parametrize("scenario,error", [
