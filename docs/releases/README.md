@@ -84,6 +84,10 @@ source at the requested revision, allowing CRLF/LF checkout conversion; a newer
 packager refuses an older revision with different packager source before creating
 output. The `prepare_release.py` shim has
 been retired; `--ref` remains an alias for `--revision` in the canonical CLI.
+On current `main`, the [version-tag guard](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/145b18624ced044bb001a3463438d378917feeb1/scripts/package_source_release.py#L220-L261)
+requires an existing `refs/tags/<version>` to peel to the requested commit and
+refuses any tag it cannot verify before reading sources or writing output;
+untagged candidate versions remain allowed.
 
 For published assets, use the packager at their own tag. Start with a clean checkout of
 `v1.0.0-rc.1` at exact commit `888b089c5a75865bb2bf8c76833f0eddc0fbd290`,

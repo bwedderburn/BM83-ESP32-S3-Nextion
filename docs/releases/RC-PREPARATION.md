@@ -47,6 +47,10 @@ script, allowing CRLF/LF checkout conversion. Reproduce
 the published files using their own tagged packager, preserving its original
 allowlist and behavior. `--ref` aliases `--revision` in the canonical CLI.
 The commands below specify the scope and version explicitly on both versions.
+On current `main`, the [version-tag guard](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/145b18624ced044bb001a3463438d378917feeb1/scripts/package_source_release.py#L220-L261)
+requires an existing `refs/tags/<version>` to peel to the requested commit and
+refuses any tag it cannot verify before reading sources or writing output;
+untagged candidate versions remain allowed.
 
 The packager reads committed Git objects with replacement objects disabled. It
 selects explicit reviewed paths, requires the profile's expected inputs and

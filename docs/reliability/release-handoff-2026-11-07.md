@@ -60,14 +60,39 @@ The following commits completed their automatic post-landing main workflows succ
 | `e6d8901` — release-review follow-ups | [42435140948](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140948) | [42435140949](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140949) | [42435140954](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42435140954) |
 | `4f8a6f1` — owner-required check documentation | [42436344333](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344333) | [42436344315](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344315) | [42436344346](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42436344346) |
 | `533332c` — C1 host-only release tooling follow-ups | [42709319776](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42709319776) | [42709320117](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42709320117) | [42709319931](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42709319931) |
+| [`45072fd`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/45072fd039a5bf5acfbcede854d0be8400485422) — six justified Bandit suppressions | [42728914767](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42728914767) | [42728914916](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42728914916) | [42728914444](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42728914444) |
+| [`145b186`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/145b18624ced044bb001a3463438d378917feeb1) — N1 broken-tag refusal and host configuration checks | [42737167490](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42737167490) | [42737167659](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42737167659) | [42737167376](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42737167376) |
 
 The `f6243be` [Build CircuitPython drag-and-drop dist](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42426961027)
 workflow also passed. It ran for `f6243be` because that commit changed
 `tools/mpy_cross_pin.env`, which matched the workflow's path filter.
+The `45072fd` [Build CircuitPython drag-and-drop dist](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/actions/runs/42728914878)
+workflow also passed; its change under `firmware/circuitpython/` matched the
+[workflow's path filter](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/45072fd039a5bf5acfbcede854d0be8400485422/.github/workflows/build-circuitpython-dist.yml#L7-L14).
 These runs record actual execution for their respective commits;
 the host-security runs executed their configured policy, Bandit and dependency
 audit steps. Codacy success records completed analysis/upload. None of these
 results establishes physical acceptance or a new native-runtime build.
+
+On 2026-11-09, [`45072fd`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/45072fd039a5bf5acfbcede854d0be8400485422)
+suppressed six low-severity Bandit false positives with justified inline `nosec`
+comments: four B105 protocol command names in
+[`badge_hosts.py`](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/45072fd039a5bf5acfbcede854d0be8400485422/firmware/circuitpython/lib/remote/badge_hosts.py#L90-L109),
+and the B404 `subprocess` import and B603 configured companion launch in the
+[Windows receiver](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/blob/45072fd039a5bf5acfbcede854d0be8400485422/tools/windows_volume_app_receiver.py#L14-L137),
+whose launch uses validated paths and no shell. The affected alerts were
+[#2747](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/security/code-scanning/2747),
+[#2748](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/security/code-scanning/2748),
+[#2749](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/security/code-scanning/2749),
+[#2750](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/security/code-scanning/2750),
+[#2751](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/security/code-scanning/2751)
+and [#2752](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/security/code-scanning/2752).
+The [commit's compiler verification](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/45072fd039a5bf5acfbcede854d0be8400485422)
+records byte-identical `badge_hosts.mpy` before and after pinned `-O2`
+compilation. Fresh read-only `gh api` checks on 2026-11-09 found all six alerts
+`fixed`, with dismissal fields `null`, and no open code-scanning alerts at that
+readback. These are application-bytecode and scan results, not physical
+acceptance.
 
 Standing CI-record rule: commits touching `.github/workflows/` or
 `scripts/check_reliability_setup.py` must record their post-landing workflow run

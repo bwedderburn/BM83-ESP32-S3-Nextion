@@ -430,6 +430,12 @@ matched Music with `src=mac`. CrowPanel passive telemetry showed fresh playback
 snapshots with an advancing clock. Playback state/position were restored and
 volumes were unchanged. Existing files, keys and profiles were preserved.
 
+Follow-up (2026-11-09): the official simulator has no raw sockets and cannot
+produce the UDP receive-error frame. The non-would-block receive-error path and
+recovery are covered by [N2's host test](../../tests/test_badge_receive_error.py)
+([c14b108](https://github.com/bwedderburn/BM83-ESP32-S3-Nextion/commit/c14b108bd46059bad903e3250cc1fec9b38b8c7a));
+its on-badge rendering remains unverified. This adds no device authorization.
+
 Recovery SHA256 values:
 
 | Artifact | SHA256 |

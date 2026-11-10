@@ -551,8 +551,8 @@ from utils import _sanitize_text, _fmt_ms
 
 ## Version Information
 
-- **CircuitPython**: 10.x
-- **Python (for tests)**: 3.9, 3.10, 3.11
+- **CircuitPython**: pinned 10.3.1 ([mpy-cross pin](../../tools/mpy_cross_pin.env), [native source pins](../../tools/circuitpython-runtime/source-pins.json))
+- **Python (for tests)**: [3.11, 3.12 and 3.13](../../.github/workflows/python-package.yml)
 - **Hardware**: ESP32-S3 DevKitC-1
 - **BM83 Firmware**: MSPK2 v1.3.4+
 - **Nextion Display**: NX3224F028 (or compatible)
