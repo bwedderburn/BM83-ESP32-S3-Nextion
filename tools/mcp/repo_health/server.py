@@ -288,7 +288,7 @@ def repo_dependency_report() -> str:
             for ver in sorted(set(cp_pat.findall(f.read_text(encoding="utf-8", errors="replace")))):
                 report["circuitpython_refs"].append({"file": name, "version": ver})
     report["notes"] = [
-        "Dev tools (flake8/pytest/bandit) are installed unpinned in CI — resolve 'current' with pip index/PyPI.",
+        "Dev tools (flake8/pytest/bandit) are pinned exactly in requirements-reliability.txt, updated by Dependabot and audited by pip-audit in CI.",
         "mpy-cross is pinned (version + sha256) in tools/mpy_cross_pin.env; it must match the device's CircuitPython.",
         "Python 3.9 reached end-of-life in October 2025.",
     ]

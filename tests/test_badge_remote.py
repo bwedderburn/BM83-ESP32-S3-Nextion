@@ -4,6 +4,7 @@ All keys are throwaway test constants and every socket is an in-memory fake;
 no network listener is opened.
 """
 import binascii
+import errno
 import hashlib
 import hmac
 import json
@@ -329,6 +330,83 @@ def test_state_failure_still_dispatches_recorded_command():
     assert link.client.queue_command("BT_PREV")
     link.run(1)
     assert link.dispatched == [b"BT_PREV"]
+
+
+def test_receiver_failures_preserve_key_and_replay_identity_within_activation():
+    class ReceiveErrorSocket(ServerSocket):
+        fail_receive = False
+
+        def recvfrom_into(self, buffer):
+            if self.fail_receive:
+                self.fail_receive = False
+                raise OSError(errno.ECONNRESET, "injected receive failure")
+            return super().recvfrom_into(buffer)
+
+    sock = ReceiveErrorSocket()
+    server = make_server(sock)
+    unit = Unit()
+    hello = request(server, {"v": 1, "type": "hello", "nonce": "11" * 8})
+    sock.inbox.append((hello, CLIENT_ADDR))
+    assert poll_at(server, unit, 0.0) == ()
+    welcome = replies(sock)[-1]
+    command = request(server, {"v": 1, "type": "cmd", "unit": server.unit,
+                               "client": welcome["client"], "seq": 7, "token": "BT_NEXT"})
+    sock.inbox.append((command, CLIENT_ADDR))
+    assert poll_at(server, unit, 0.1) == [b"BT_NEXT"]
+
+    def replay_identity():
+        # Duplicate requests may refresh LRU touches, but not replay identity.
+        clients = tuple((entry[0], entry[1], entry[3], entry[4], entry[5])
+                        for entry in server._clients)
+        return (server.unit, server._ble_session, server._next_client,
+                server._hello_count, bytes(server._seen_hellos), clients)
+
+    original_key = bytes(server._profile["key"])
+    original_identity = replay_identity()
+
+    def assert_identity():
+        assert server._profile["key"] == original_key == KEY
+        assert replay_identity() == original_identity
+        assert server.enabled and server._socket is sock and not sock.closed
+
+    reply_count = len(sock.replies)
+    sock.fail_receive = True
+    assert poll_at(server, unit, 0.2) == ()
+    assert not sock.fail_receive and len(sock.replies) == reply_count
+    assert_identity()
+
+    forged = request(server, {"v": 1, "type": "hello", "nonce": "22" * 8},
+                     key=bytes(reversed(KEY)))
+    sock.inbox.append((forged, CLIENT_ADDR))
+    assert poll_at(server, unit, 0.3) == ()
+    assert len(sock.replies) == reply_count
+    assert_identity()
+
+    state_calls = []
+
+    def broken_state():
+        state_calls.append(True)
+        raise RuntimeError("injected snapshot failure")
+
+    sock.inbox.append((command, CLIENT_ADDR))
+    assert poll_at(server, broken_state, 0.4) == ()
+    assert state_calls == [True] and len(sock.replies) == reply_count
+    assert_identity()
+
+    sock.inbox.append((command, CLIENT_ADDR))
+    sock.fail_sends = 1
+    assert poll_at(server, unit, 0.5) == ()
+    assert sock.fail_sends == 0 and len(sock.replies) == reply_count
+    assert_identity()
+
+    sock.inbox.extend([(hello, CLIENT_ADDR), (command, CLIENT_ADDR)])
+    assert poll_at(server, unit, 0.6) == ()
+    recovered_welcome, recovered_state = replies(sock)[-2:]
+    assert recovered_welcome == welcome
+    assert recovered_state["type"] == "state" and recovered_state["dup"] is True
+    assert (recovered_state["unit"], recovered_state["client"], recovered_state["seq"]) == (
+        welcome["unit"], welcome["client"], 7)
+    assert_identity()
 
 
 def test_wrong_key_client_gets_no_reply_and_never_authenticates():
