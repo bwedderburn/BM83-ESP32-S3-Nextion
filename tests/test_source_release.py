@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import zipfile
 
@@ -494,8 +495,9 @@ def test_existing_version_tag_must_peel_to_requested_commit(committed_rc, tmp_pa
     ("package_controller_badge", None),
 ])
 @pytest.mark.parametrize("annotated", [False, True])
+@pytest.mark.parametrize("legacy_git", [False, True])
 def test_existing_version_tag_mismatch_refused_before_source_or_output(committed_rc, tmp_path, monkeypatch,
-                                                                     entry_point, scope, annotated):
+                                                                     entry_point, scope, annotated, legacy_git):
     repo, tagged_commit = committed_rc
     version = "v1.0.0-rc.1"
     if annotated:
@@ -511,6 +513,8 @@ def test_existing_version_tag_mismatch_refused_before_source_or_output(committed
     def references_only(*arguments):
         if arguments[0] not in ("rev-parse", "show-ref"):
             pytest.fail("Source read before refusing a mismatched version tag")
+        if legacy_git and arguments[:2] == ("show-ref", "--exists"):
+            raise subprocess.CalledProcessError(129, arguments, stderr=b"unknown option exists")
         return original_git(*arguments)
 
     monkeypatch.setattr(release, "git", references_only)
@@ -584,30 +588,36 @@ def test_tag_probe_errors_are_not_treated_as_untagged(committed_rc, tmp_path, mo
     ("package", "application-source"), ("package", "controller-badge-source"),
     ("package_controller_badge", None),
 ])
-@pytest.mark.parametrize("tagged", [False, True])
+@pytest.mark.parametrize("present", [False, True])
 def test_exists_probe_present_and_missing_results(committed_rc, tmp_path, monkeypatch,
-                                                 entry_point, scope, tagged):
-    repo, commit = committed_rc
+                                                 entry_point, scope, present):
+    _, commit = committed_rc
     tag_ref = "refs/tags/v1.0.0-rc.1"
-    if tagged:
-        git(repo, "tag", "-a", "v1.0.0-rc.1", "-m", "modern probe matching commit", commit)
     original_git = release.git
     probes = []
 
     def modern_probe(*arguments):
         if arguments[0] == "show-ref":
-            assert arguments == ("show-ref", "--exists", tag_ref)
             probes.append(arguments)
-            if not tagged:
-                raise subprocess.CalledProcessError(2, arguments, stderr=b"")
-            return b""
+            if arguments[1] == "--exists":
+                if not present:
+                    raise subprocess.CalledProcessError(2, arguments, stderr=b"")
+                return b""
         return original_git(*arguments)
 
     monkeypatch.setattr(release, "git", modern_probe)
+    output = tmp_path / "output"
     options = {"scope": scope} if scope is not None else {}
-    result = getattr(release, entry_point)(commit, "v1.0.0-rc.1", tmp_path / "output", **options)
-    assert result["source_commit"] == commit and Path(result["archive"]).is_file()
-    assert probes
+    if present:
+        # No file names the tag, so only the probe's answer sends it to the exact peel.
+        with pytest.raises(ValueError, match="Version tag refs/tags/v1.0.0-rc.1 does not resolve to a commit: "):
+            getattr(release, entry_point)(commit, "v1.0.0-rc.1", output, **options)
+        assert probes == [("show-ref", "--exists", tag_ref), ("show-ref", "--verify", "--hash", tag_ref)]
+        assert not output.exists()
+    else:
+        result = getattr(release, entry_point)(commit, "v1.0.0-rc.1", output, **options)
+        assert result["source_commit"] == commit and Path(result["archive"]).is_file()
+        assert set(probes) == {("show-ref", "--exists", tag_ref)}
 
 
 @pytest.mark.parametrize("entry_point,scope", [
@@ -712,8 +722,9 @@ def test_broken_or_noncommit_version_tags_refused_before_source_or_output(
     ("package_controller_badge", None),
 ])
 @pytest.mark.parametrize("storage", ["loose", "packed"])
-def test_legacy_missing_probe_cannot_hide_existing_unresolvable_tag(
-        committed_rc, tmp_path, monkeypatch, entry_point, scope, storage):
+@pytest.mark.parametrize("legacy_git", [False, True])
+def test_missing_probe_cannot_hide_existing_unresolvable_tag(
+        committed_rc, tmp_path, monkeypatch, entry_point, scope, storage, legacy_git):
     repo, commit = committed_rc
     version = "v1.0.0-rc.1"
     tag_ref = "refs/tags/" + version
@@ -728,21 +739,22 @@ def test_legacy_missing_probe_cannot_hide_existing_unresolvable_tag(
     original_git = release.git
     probes = []
 
-    def ambiguous_legacy_probe(*arguments):
+    def ambiguous_probe(*arguments):
         if arguments[0] == "show-ref":
             probes.append(arguments)
-            code = 129 if arguments[1] == "--exists" else 1
+            code = (129 if legacy_git else 2) if arguments[1] == "--exists" else 1
             raise subprocess.CalledProcessError(code, arguments, stderr=b"")
         if arguments[0] != "rev-parse":
-            pytest.fail("Source blob read after an unresolved legacy tag")
+            pytest.fail("Source blob read after an unresolved tag")
         return original_git(*arguments)
 
-    monkeypatch.setattr(release, "git", ambiguous_legacy_probe)
+    monkeypatch.setattr(release, "git", ambiguous_probe)
     output = tmp_path / "output"
     options = {"scope": scope} if scope is not None else {}
     with pytest.raises(ValueError, match="Version tag .* does not resolve to a commit"):
         getattr(release, entry_point)(commit, version, output, **options)
-    assert probes == [("show-ref", "--exists", tag_ref), ("show-ref", "--verify", "--quiet", tag_ref)]
+    legacy_probe = [("show-ref", "--verify", "--quiet", tag_ref)] if legacy_git else []
+    assert probes == [("show-ref", "--exists", tag_ref), *legacy_probe, ("show-ref", "--verify", "--hash", tag_ref)]
     assert not output.exists()
 
 
@@ -761,8 +773,9 @@ def test_legacy_git_fallback_allows_only_absent_or_matching_commit_tags(
     probes = []
 
     def legacy_probe(*arguments):
-        if arguments[:2] == ("show-ref", "--exists"):
+        if arguments[0] == "show-ref":
             probes.append(arguments)
+        if arguments[:2] == ("show-ref", "--exists"):
             raise subprocess.CalledProcessError(129, arguments, stderr=b"unknown option exists")
         return original_git(*arguments)
 
@@ -770,7 +783,7 @@ def test_legacy_git_fallback_allows_only_absent_or_matching_commit_tags(
     options = {"scope": scope} if scope is not None else {}
     result = getattr(release, entry_point)(commit, version, tmp_path / "output", **options)
     assert result["source_commit"] == commit and Path(result["archive"]).is_file()
-    assert probes
+    assert ("show-ref", "--verify", "--quiet", "refs/tags/" + version) in probes
 
 
 @pytest.mark.parametrize("fixture_name", ["committed_source", "committed_rc"])
@@ -795,3 +808,378 @@ def test_inprocess_tag_checks_use_fixture_git_environment(tmp_path, monkeypatch,
     result = release.package(commit, "v1.0.0-rc.1", tmp_path / "output", scope=scope)
     assert result["source_commit"] == commit and probes
     assert all(not path.exists() for path in unused.values())
+
+
+def route_tag_probe(monkeypatch, legacy_git, *, source_reads=False):
+    """Run the packager's own git(), answering `show-ref --exists` as Git before 2.43 when asked."""
+    original_git = release.git
+    calls = []
+
+    def probe(*arguments):
+        calls.append(arguments)
+        if not source_reads and arguments[0] not in ("rev-parse", "show-ref"):
+            pytest.fail("Source read before refusing a version tag")
+        if legacy_git and arguments[:2] == ("show-ref", "--exists"):
+            raise subprocess.CalledProcessError(129, arguments, stderr=b"unknown option exists")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", probe)
+    return calls
+
+
+def write_packed_refs(repo, *entries):
+    """Write packed-refs lines in the given order under a header that claims sorted order."""
+    (repo / ".git/packed-refs").write_bytes(b"# pack-refs with: peeled fully-peeled sorted \n" + b"".join(
+        object_id.encode() + b" " + name.encode() + b"\n" for object_id, name in entries))
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+@pytest.mark.parametrize("stray_ref", [
+    "refs/tags/refs/tags/v1.0.0-rc.1", "refs/heads/refs/tags/v1.0.0-rc.1",
+    "refs/refs/tags/v1.0.0-rc.1", "refs/remotes/refs/tags/v1.0.0-rc.1",
+])
+@pytest.mark.parametrize("target", ["refs/tags/missing-fixture-tag", "refs/tags/v1.0.0-rc.1"],
+                         ids=["dangling", "self-loop"])
+def test_broken_tag_cannot_borrow_a_stray_ref_at_the_requested_commit(
+        committed_rc, tmp_path, monkeypatch, legacy_git, stray_ref, target):
+    repo, commit = committed_rc
+    # `git tag refs/tags/v1.0.0-rc.1` creates the first stray name; Git's fallback
+    # names for an unresolvable refs/tags/v1.0.0-rc.1 include all four.
+    git(repo, "update-ref", stray_ref, commit)
+    (repo / ".git/refs/tags/v1.0.0-rc.1").write_bytes(b"ref: " + target.encode() + b"\n")
+    route_tag_probe(monkeypatch, legacy_git)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value).startswith("Version tag refs/tags/v1.0.0-rc.1 does not resolve to a commit: ")
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+def test_out_of_order_packed_tag_at_another_commit_is_refused(committed_rc, tmp_path, monkeypatch, legacy_git):
+    repo, commit = committed_rc
+    earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
+    # The header claims sorted order, so Git 2.43's lookup misses the last line,
+    # while `git push --tags` reads every line and would publish the tag.
+    write_packed_refs(repo, (earlier, "refs/heads/fixture-one"), (commit, "refs/heads/fixture-two"),
+                      (earlier, "refs/tags/v1.0.0-rc.2"), (earlier, "refs/tags/zz-later"),
+                      (earlier, "refs/tags/v1.0.0-rc.1"))
+    route_tag_probe(monkeypatch, legacy_git)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    message = str(error.value)
+    assert (message.startswith("Version tag refs/tags/v1.0.0-rc.1 does not resolve to a commit: ")
+            or message.endswith(" resolves to " + earlier + ", not requested commit " + commit))
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+@pytest.mark.parametrize("suffix", ["\0", "\0fixture", "\0 fixture"], ids=["nul", "nul-text", "nul-space-text"])
+def test_packed_tag_name_ended_by_a_nul_byte_is_refused(committed_rc, tmp_path, monkeypatch, legacy_git, suffix):
+    repo, commit = committed_rc
+    earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
+    # Git's exact lookup misses this line. Git before 2.50 lists and pushes it as the version tag;
+    # Git 2.50 and later refuse to list it ("packed refname contains embedded NULL").
+    write_packed_refs(repo, (earlier, "refs/tags/v1.0.0-rc.1" + suffix))
+    listed = subprocess.run(["git", "for-each-ref", "--format=%(refname)", "refs/tags/"], cwd=repo,
+                            capture_output=True, env=git_environment())
+    assert listed.returncode != 0 or listed.stdout.split() == [b"refs/tags/v1.0.0-rc.1"]
+    route_tag_probe(monkeypatch, legacy_git)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value).startswith("Version tag refs/tags/v1.0.0-rc.1 does not resolve to a commit: ")
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+def test_loose_tag_in_another_letter_case_is_refused(committed_rc, tmp_path, monkeypatch, legacy_git):
+    repo, commit = committed_rc
+    if not (repo / ".git/head").exists():
+        pytest.skip("Only a case-insensitive file system answers a lookup from another letter case")
+    earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
+    git(repo, "tag", "v1.0.0-rc.1", earlier)
+    git(repo, "pack-refs", "--all")
+    # `git push --tags` publishes the packed v1.0.0-rc.1, but Git's lookup reads this loose file.
+    (repo / ".git/refs/tags/V1.0.0-RC.1").write_bytes(commit.encode() + b"\n")
+    route_tag_probe(monkeypatch, legacy_git)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value) == "Version tag refs/tags/v1.0.0-rc.1 has a loose ref in another letter case"
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+def test_loose_tag_listed_in_another_letter_case_is_refused_portably(committed_rc, tmp_path, monkeypatch, legacy_git):
+    repo, commit = committed_rc
+    earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
+    git(repo, "tag", "v1.0.0-rc.1", earlier)
+    git(repo, "pack-refs", "--all")
+    (repo / ".git/refs/tags/v1.0.0-rc.1").write_bytes(commit.encode() + b"\n")
+    tags = (repo / ".git/refs/tags").resolve()
+    real_listdir = os.listdir
+
+    def listdir(path):
+        # List the loose tag as a case-insensitive file system stores it, without needing one.
+        names = real_listdir(path)
+        if Path(path).resolve() != tags:
+            return names
+        return ["V1.0.0-RC.1" if name == "v1.0.0-rc.1" else name for name in names]
+
+    monkeypatch.setattr(release.os, "listdir", listdir)
+    route_tag_probe(monkeypatch, legacy_git)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value) == "Version tag refs/tags/v1.0.0-rc.1 has a loose ref in another letter case"
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+@pytest.mark.parametrize("fixture_first", [False, True])
+def test_duplicate_packed_tag_entries_are_refused(committed_rc, tmp_path, monkeypatch, legacy_git, fixture_first):
+    repo, commit = committed_rc
+    earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
+    entries = [(commit, "refs/tags/v1.0.0-rc.1"), (earlier, "refs/tags/v1.0.0-rc.1")]
+    write_packed_refs(repo, *(entries if fixture_first else reversed(entries)))
+    # Git's lookup returns one line while `git push --tags` publishes the other. Request the
+    # commit the lookup reports, so only the duplicate count can refuse.
+    requested = git(repo, "rev-parse", "--verify", "refs/tags/v1.0.0-rc.1^{commit}").decode().strip()
+    route_tag_probe(monkeypatch, legacy_git)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(requested, "v1.0.0-rc.1", output)
+    assert str(error.value) == "Version tag refs/tags/v1.0.0-rc.1 has 2 packed-refs entries"
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+@pytest.mark.parametrize("moved_to_requested", [True, False])
+def test_tag_moved_after_pack_refs_follows_its_loose_ref(
+        committed_rc, tmp_path, monkeypatch, legacy_git, moved_to_requested):
+    repo, commit = committed_rc
+    earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
+    packed, moved = (earlier, commit) if moved_to_requested else (commit, earlier)
+    # One packed line under a loose ref is a normal re-tag, not a duplicate; push publishes the loose value.
+    git(repo, "tag", "v1.0.0-rc.1", packed)
+    git(repo, "pack-refs", "--all")
+    git(repo, "tag", "-f", "v1.0.0-rc.1", moved)
+    route_tag_probe(monkeypatch, legacy_git, source_reads=moved_to_requested)
+    output = tmp_path / "output"
+    if moved_to_requested:
+        result = release.package(commit, "v1.0.0-rc.1", output)
+        assert result["source_commit"] == commit and Path(result["archive"]).is_file()
+    else:
+        with pytest.raises(ValueError) as error:
+            release.package(commit, "v1.0.0-rc.1", output)
+        assert str(error.value) == ("Version tag refs/tags/v1.0.0-rc.1 resolves to " + earlier
+                                    + ", not requested commit " + commit)
+        assert not output.exists()
+
+
+@pytest.mark.parametrize("variable", ["GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"])
+def test_caller_object_store_cannot_supply_the_requested_commit(committed_rc, tmp_path, monkeypatch, variable):
+    repo, commit = committed_rc
+    other = tmp_path / "other-object-store"
+    git(tmp_path, "clone", "--quiet", "--no-checkout", str(repo), str(other))
+    git(other, "-c", "user.name=Release Test", "-c", "user.email=release-test@example.invalid",
+        "commit", "--allow-empty", "-m", "commit outside the packaged repository")
+    outside = git(other, "rev-parse", "HEAD").decode().strip()
+    monkeypatch.setenv(variable, str(other / ".git/objects"))
+    result = release.package(commit, "v1.0.0-rc.1", tmp_path / "output")
+    assert result["source_commit"] == commit
+    # Only REPO's own object store is read, so a commit found only through the caller's store is unknown.
+    with pytest.raises(subprocess.CalledProcessError):
+        release.package(outside, "v1.0.0-rc.1", tmp_path / "outside-output")
+    assert not (tmp_path / "outside-output").exists()
+
+
+@pytest.mark.parametrize("legacy_git", [False, True])
+def test_caller_git_dir_cannot_hide_a_mismatched_tag(committed_rc, tmp_path, monkeypatch, legacy_git):
+    repo, commit = committed_rc
+    untagged = tmp_path / "untagged-clone"
+    git(tmp_path, "clone", "--quiet", "--no-checkout", str(repo), str(untagged))
+    earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
+    git(repo, "tag", "v1.0.0-rc.1", earlier)
+    # Git hooks export GIT_DIR; the packager must still read its own repository.
+    monkeypatch.setenv("GIT_DIR", str(untagged / ".git"))
+    route_tag_probe(monkeypatch, legacy_git)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value) == ("Version tag refs/tags/v1.0.0-rc.1 resolves to " + earlier
+                                + ", not requested commit " + commit)
+    assert not output.exists()
+
+
+def test_forced_fallback_caller_git_common_dir_cannot_hide_a_truncated_tag(committed_rc, tmp_path, monkeypatch):
+    repo, commit = committed_rc
+    untagged = shutil.copytree(repo / ".git", tmp_path / "untagged-common-dir")
+    (repo / ".git/refs/tags/v1.0.0-rc.1").write_bytes(b"deadbeef\n")
+    monkeypatch.setenv("GIT_COMMON_DIR", str(untagged))
+    route_tag_probe(monkeypatch, legacy_git=True)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value).startswith("Version tag refs/tags/v1.0.0-rc.1 does not resolve to a commit: ")
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("tag_state", ["absent", "truncated"])
+def test_forced_fallback_trace_output_neither_refuses_nor_hides_a_tag(committed_rc, tmp_path, monkeypatch, tag_state):
+    repo, commit = committed_rc
+    if tag_state == "truncated":
+        (repo / ".git/refs/tags/v1.0.0-rc.1").write_bytes(b"deadbeef\n")
+    monkeypatch.setenv("GIT_TRACE", "1")
+    with pytest.raises(subprocess.CalledProcessError) as noisy:
+        release.git("show-ref", "--verify", "--quiet", "refs/tags/v1.0.0-rc.1")
+    assert noisy.value.returncode == 1 and noisy.value.stderr.strip()
+    calls = route_tag_probe(monkeypatch, legacy_git=True, source_reads=tag_state == "absent")
+    output = tmp_path / "output"
+    if tag_state == "absent":
+        result = release.package(commit, "v1.0.0-rc.1", output)
+        assert result["source_commit"] == commit and Path(result["archive"]).is_file()
+    else:
+        with pytest.raises(ValueError) as error:
+            release.package(commit, "v1.0.0-rc.1", output)
+        assert str(error.value).startswith("Version tag refs/tags/v1.0.0-rc.1 does not resolve to a commit: ")
+        assert not output.exists()
+    assert ("show-ref", "--verify", "--quiet", "refs/tags/v1.0.0-rc.1") in calls
+
+
+def unreadable_tag_metadata(tmp_path, trigger):
+    """Return the loose and packed-refs paths Git reports, making one unreadable as asked."""
+    loose, packed = tmp_path / "tags" / "v1.0.0-rc.1", tmp_path / "packed-refs"
+    if trigger == "packed-refs-directory":
+        packed.mkdir()
+    elif trigger == "loose-path-below-file":
+        loose.parent.write_bytes(b"not a directory\n")
+    return {"refs/tags/v1.0.0-rc.1": loose, "packed-refs": packed}
+
+
+@pytest.mark.parametrize("exists_code", [0, 2, 129], ids=["present", "missing", "legacy-missing"])
+@pytest.mark.parametrize("trigger", [
+    "git-path-failure", "packed-refs-directory",
+    pytest.param("loose-path-below-file", marks=pytest.mark.skipif(
+        os.name == "nt", reason="Windows reports a path below a regular file as missing")),
+])
+def test_unreadable_tag_metadata_is_refused_before_source_or_output(
+        committed_rc, tmp_path, monkeypatch, exists_code, trigger):
+    _, commit = committed_rc
+    git_paths = unreadable_tag_metadata(tmp_path, trigger)
+    original_git = release.git
+
+    def unreadable_metadata(*arguments):
+        if arguments[0] == "show-ref":
+            code = exists_code if arguments[1] == "--exists" else 1
+            if code:
+                raise subprocess.CalledProcessError(code, arguments, stderr=b"")
+            return b""
+        if arguments[:2] == ("rev-parse", "--git-path"):
+            if trigger == "git-path-failure":
+                raise subprocess.CalledProcessError(128, arguments, stderr=b"fixture git-path error\n")
+            return os.fsencode(git_paths[arguments[2]]) + b"\n"
+        if arguments[0] != "rev-parse":
+            pytest.fail("Source read after unreadable tag metadata")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", unreadable_metadata)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    cause = error.value.__cause__
+    reason = "fixture git-path error" if trigger == "git-path-failure" else str(cause)
+    assert str(error.value) == "Version tag refs/tags/v1.0.0-rc.1 metadata check failed: " + reason
+    assert trigger == "git-path-failure" or (isinstance(cause, OSError) and not isinstance(cause, FileNotFoundError))
+    assert not output.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows file names are Unicode, so a non-UTF-8 path cannot exist")
+@pytest.mark.parametrize("legacy_git", [False, True])
+@pytest.mark.parametrize("tag_state", ["absent", "matching", "truncated"])
+def test_linked_worktree_of_a_repository_under_a_non_utf8_path(committed_rc, tmp_path, monkeypatch, legacy_git,
+                                                               tag_state):
+    repo, commit = committed_rc
+    parent = Path(os.fsdecode(os.fsencode(tmp_path) + b"/common-dir-\xff"))
+    try:
+        parent.mkdir()
+    except OSError:
+        pytest.skip("The file system refuses a non-UTF-8 directory name")
+    repo = repo.rename(parent / "repository")
+    # Git prints absolute --git-path results into the non-UTF-8 common directory here.
+    worktree = tmp_path / "linked-worktree"
+    git(repo, "worktree", "add", "--detach", str(worktree), commit)
+    if tag_state == "matching":
+        git(repo, "tag", "v1.0.0-rc.1", commit)
+    elif tag_state == "truncated":
+        (repo / ".git/refs/tags/v1.0.0-rc.1").write_bytes(b"deadbeef\n")
+    monkeypatch.setattr(release, "REPO", worktree)
+    route_tag_probe(monkeypatch, legacy_git, source_reads=tag_state != "truncated")
+    output = tmp_path / "output"
+    if tag_state == "truncated":
+        with pytest.raises(ValueError, match="^Version tag refs/tags/v1.0.0-rc.1 (probe failed|does not resolve)"):
+            release.package(commit, "v1.0.0-rc.1", output)
+        assert not output.exists()
+    else:
+        result = release.package(commit, "v1.0.0-rc.1", output)
+        assert result["source_commit"] == commit and Path(result["archive"]).is_file()
+
+
+@pytest.mark.parametrize("stderr", [b"", b" \n\t\n"], ids=["empty", "whitespace"])
+@pytest.mark.parametrize("site", ["exists-probe", "legacy-probe", "git-path", "exact-ref", "peel"])
+def test_blank_git_stderr_reports_the_exit_status(committed_rc, tmp_path, monkeypatch, site, stderr):
+    repo, commit = committed_rc
+    tag_ref = "refs/tags/v1.0.0-rc.1"
+    prefix = {"exists-probe": "probe failed", "legacy-probe": "probe failed", "git-path": "metadata check failed",
+              "exact-ref": "does not resolve to a commit", "peel": "does not resolve to a commit"}[site]
+    failing = {
+        "exists-probe": ("show-ref", "--exists", tag_ref),
+        "legacy-probe": ("show-ref", "--verify", "--quiet", tag_ref),
+        "git-path": ("rev-parse", "--git-path", tag_ref),
+        "exact-ref": ("show-ref", "--verify", "--hash", tag_ref),
+    }.get(site)
+    if site in ("exact-ref", "peel"):
+        git(repo, "tag", "-a", "v1.0.0-rc.1", "-m", "matching annotated commit", commit)
+    if site == "peel":
+        tag_object = git(repo, "rev-parse", tag_ref).decode().strip()
+        failing = ("rev-parse", "--verify", "--end-of-options", tag_object + "^{commit}")
+    original_git = release.git
+
+    def silent_failure(*arguments):
+        if arguments == failing:
+            raise subprocess.CalledProcessError(128, arguments, stderr=stderr)
+        if site == "legacy-probe" and arguments[:2] == ("show-ref", "--exists"):
+            raise subprocess.CalledProcessError(129, arguments, stderr=b"unknown option exists")
+        if arguments[0] not in ("rev-parse", "show-ref"):
+            pytest.fail("Source read after a failed tag check")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", silent_failure)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value) == "Version tag " + tag_ref + " " + prefix + ": Git exited with status 128"
+    assert not output.exists()
+
+
+def test_exact_peel_requires_a_full_object_id(committed_rc, tmp_path, monkeypatch):
+    repo, commit = committed_rc
+    git(repo, "tag", "v1.0.0-rc.1", commit)
+    original_git = release.git
+
+    def symbolic_hash(*arguments):
+        if arguments[:3] == ("show-ref", "--verify", "--hash"):
+            return b"HEAD\n"
+        if arguments[0] not in ("rev-parse", "show-ref"):
+            pytest.fail("Source read after a tag hash that is not an object ID")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", symbolic_hash)
+    output = tmp_path / "output"
+    with pytest.raises(ValueError) as error:
+        release.package(commit, "v1.0.0-rc.1", output)
+    assert str(error.value) == ("Version tag refs/tags/v1.0.0-rc.1 does not resolve to a commit: "
+                                "show-ref printed no full object ID")
+    assert not output.exists()
