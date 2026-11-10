@@ -879,9 +879,12 @@ def test_out_of_order_packed_tag_at_another_commit_is_refused(committed_rc, tmp_
 def test_packed_tag_name_ended_by_a_nul_byte_is_refused(committed_rc, tmp_path, monkeypatch, legacy_git, suffix):
     repo, commit = committed_rc
     earlier = git(repo, "rev-parse", "HEAD^").decode().strip()
-    # Git's lookup misses this line, but Git lists and pushes it as the version tag.
+    # Git's exact lookup misses this line. Git before 2.50 lists and pushes it as the version tag;
+    # Git 2.50 and later refuse to list it ("packed refname contains embedded NULL").
     write_packed_refs(repo, (earlier, "refs/tags/v1.0.0-rc.1" + suffix))
-    assert git(repo, "for-each-ref", "--format=%(refname)", "refs/tags/").split() == [b"refs/tags/v1.0.0-rc.1"]
+    listed = subprocess.run(["git", "for-each-ref", "--format=%(refname)", "refs/tags/"], cwd=repo,
+                            capture_output=True, env=git_environment())
+    assert listed.returncode != 0 or listed.stdout.split() == [b"refs/tags/v1.0.0-rc.1"]
     route_tag_probe(monkeypatch, legacy_git)
     output = tmp_path / "output"
     with pytest.raises(ValueError) as error:
