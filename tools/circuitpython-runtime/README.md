@@ -24,6 +24,11 @@ their constraints do not add those tools to this recipe. Click `8.5.0` is an
 explicit local override of the pinned ESP-IDF's upstream `click<8.2` bound,
 validated for the recorded Linux/Python 3.11.18 environment.
 
+The active recipe pins pyparsing 3.3.3 and explicitly overrides Espressif's
+v6.0 constraint ceiling of `<3.3`. The pinned ESP-IDF linker-generator suite
+passed 135 tests with both 3.2.5 and 3.3.3. The 45 rendered linker fixtures
+and tested Kconfig outputs matched byte for byte across the two versions.
+
 The optional ESP-IDF MQTT tests use Paho's legacy callback API. The constraint
 excludes 2.0.0 because it requires a callback API argument to Client(). Offline
 checks of the pinned IDF MQTT example covered client setup and callback delivery
@@ -34,8 +39,8 @@ The active raw-byte dependency hashes in `source-pins.json` are:
 
 | Input | SHA256 |
 | --- | --- |
-| `requirements-build.txt` | `e0c1f8197c9a62b3a7ff875574036be301eee1a62008db4c58a947f9573a2f2b` |
-| `espidf.constraints.v6.0.txt` | `abd640a6a24a5ca8e1fe6c7181279bdc863401631472aa1829e29b513cd32230` |
+| `requirements-build.txt` | `92682c3c8de9380d226d62ba03e225bdd0575659cbd327f86d4250520ceb37c3` |
+| `espidf.constraints.v6.0.txt` | `27e41a315367e1b73c91e138d4ca8ff45846d3e8ec8ff6ac44e0333c6481f739` |
 
 The [3 November dependency validation](VALIDATION-DEPENDENCIES-2026-11-03.md)
 records real offline host-tool preflight and two clean native builds of these

@@ -20,7 +20,7 @@ cryptography>=50.0.0,<50.1
 --only-binary cryptography
 
 # pyparsing: Min version was set based on https://github.com/pyparsing/pyparsing/issues/482
-pyparsing>=3.1.0,<3.3
+pyparsing>=3.3.3,<3.4
 
 # pyelftools
 
