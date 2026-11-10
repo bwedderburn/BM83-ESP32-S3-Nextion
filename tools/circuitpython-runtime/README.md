@@ -24,16 +24,22 @@ their constraints do not add those tools to this recipe. Click `8.5.0` is an
 explicit local override of the pinned ESP-IDF's upstream `click<8.2` bound,
 validated for the recorded Linux/Python 3.11.18 environment.
 
+The optional ESP-IDF MQTT tests use Paho's legacy callback API. The constraint
+excludes 2.0.0 because it requires a callback API argument to Client(). Offline
+checks of the pinned IDF MQTT example covered client setup and callback delivery
+with Paho 1.6.1, 2.1.0 and 2.2.0. The native build requirements list the packages
+installed by the builder.
+
 The active raw-byte dependency hashes in `source-pins.json` are:
 
 | Input | SHA256 |
 | --- | --- |
 | `requirements-build.txt` | `e0c1f8197c9a62b3a7ff875574036be301eee1a62008db4c58a947f9573a2f2b` |
-| `espidf.constraints.v6.0.txt` | `0728b440d5b5f6fb517d954b74889bc9e8e4b1e079b1a92237f7e43036d4edc5` |
+| `espidf.constraints.v6.0.txt` | `abd640a6a24a5ca8e1fe6c7181279bdc863401631472aa1829e29b513cd32230` |
 
 The [3 November dependency validation](VALIDATION-DEPENDENCIES-2026-11-03.md)
 records real offline host-tool preflight and two clean native builds of these
-combined inputs. Raw comparison passed for all ten recorded artifacts, and
+dependency inputs recorded there. Raw comparison passed for all ten recorded artifacts, and
 both builds passed the default offline image validator with no writes. This
 dated evidence does not qualify later source or patch changes, or establish
 hardware acceptance. The November 1 reports retain their original inputs and
