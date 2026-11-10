@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import secrets
 import socket
-import subprocess
+import subprocess  # nosec B404 - launches the configured companion only
 import sys
 from tempfile import NamedTemporaryFile
 import time
@@ -134,7 +134,7 @@ def window_for(pythonw):
 def open_window(config):
     hwnd = window_for(config.pythonw)
     if hwnd is None:
-        subprocess.Popen([str(config.pythonw), str(config.app)], cwd=config.app.parent)
+        subprocess.Popen([str(config.pythonw), str(config.app)], cwd=config.app.parent)  # nosec B603 - validated config paths, no shell
         deadline = time.monotonic() + 4
         while hwnd is None and time.monotonic() < deadline:
             time.sleep(0.1)

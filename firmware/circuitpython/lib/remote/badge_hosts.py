@@ -90,9 +90,9 @@ class BadgeHosts:
 
     def request(self, token, value, client, seq):
         """Return (accepted policy intent, error), with BLE work deferred to tick."""
-        if token == "HOST_STATUS":
+        if token == "HOST_STATUS":  # nosec B105 - command name, not a credential
             return False, None
-        if token == "HOST_OPEN_WINDOWS":
+        if token == "HOST_OPEN_WINDOWS":  # nosec B105 - command name, not a credential
             return False, None if self.launch.request(client, seq) else "Windows launcher unavailable"
         status = self.ble.snapshot_host_status()
         if status.get("version") != 1 or not status.get("ready"):
@@ -100,12 +100,12 @@ class BadgeHosts:
         target = None
         generation, peers = status.get("peer_generation"), status.get("peers", ())
         coherent = generation is not None and generation == status.get("bond_generation")
-        if token == "HOST_SELECT":
+        if token == "HOST_SELECT":  # nosec B105 - command name, not a credential
             target, supplied = value.get("target"), value.get("generation")
             if (not valid_id(target) or type(supplied) is not int or not coherent or supplied != generation
                     or not any(peer["id"] == target and peer["resumable"] for peer in peers)):
                 return False, "Refresh saved hosts"
-        if token == "HOST_ENROLL" and (not coherent or len(peers) >= 8):
+        if token == "HOST_ENROLL" and (not coherent or len(peers) >= 8):  # nosec B105 - command name, not a credential
             return False, "No available pairing slot"
         if not self.ble.request_host_policy(HOST_MODES[token], target, 60):
             return False, "Volume host request refused"
