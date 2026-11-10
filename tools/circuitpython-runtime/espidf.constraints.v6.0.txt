@@ -74,10 +74,9 @@ argcomplete<3.7.1; python_version < "3.10"
 # 1.3.2 is not supported in 3.11. See https://gitlab.freedesktop.org/dbus/dbus-python/-/issues/45
 dbus-python<1.3; python_version > "3.10"
 
-# paho mqtt 2.0
-# https://github.com/eclipse/paho.mqtt.python/blob/master/ChangeLog.txt#L1
-# got a few breaking changes
-paho-mqtt<3
+# Optional IDF MQTT tests use Client() and the legacy callback signatures.
+# Paho 2.0.0 requires a callback API argument; 2.1.0 restores the legacy default.
+paho-mqtt!=2.0.0,<3
 
 # IDFCI-2426
 # https://github.com/secdev/scapy/issues/4512
