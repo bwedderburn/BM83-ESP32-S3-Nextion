@@ -17,7 +17,9 @@ import zipfile
 
 import pytest
 
-from tests.release_fixture_support import git_environment, set_hostile_git_environment
+from tests.release_fixture_support import (
+    HOSTILE_DEFAULT_BRANCH, HOSTILE_GIT_CONFIG_NAME, git_environment, set_hostile_git_environment,
+)
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -237,6 +239,8 @@ def test_end_to_end_fixture_ignores_hostile_git_configuration(tmp_path, monkeypa
         "Release E2E <e2e@example.invalid>|Release E2E <e2e@example.invalid>"
     )
     assert _git(tree["repo"], tree["env"], "config", "--get", "commit.gpgsign") == "false"
+    assert _git(tree["repo"], tree["env"], "symbolic-ref", "--short", "HEAD") != HOSTILE_DEFAULT_BRANCH
+    assert HOSTILE_GIT_CONFIG_NAME not in _git(tree["repo"], tree["env"], "config", "--list", "--show-origin")
     assert not (tree["repo"] / ".git/hostile-template-marker").exists()
     _verify_pipeline(tree, tmp_path, synthetic_compiler=True)
     assert all(not path.exists() for path in unused.values())

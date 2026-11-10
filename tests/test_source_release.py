@@ -10,6 +10,8 @@ import zipfile
 
 import pytest
 
+from tests.release_fixture_support import git_environment, set_hostile_git_environment
+
 REPO = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("source_release", REPO / "scripts/package_source_release.py")
 release = importlib.util.module_from_spec(SPEC)
@@ -17,8 +19,7 @@ SPEC.loader.exec_module(release)
 
 
 def git(repo, *args, input_bytes=None):
-    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
-    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_SYSTEM=os.devnull, GIT_CONFIG_GLOBAL=os.devnull)
+    environment = git_environment()
     return subprocess.run(
         ["git", "-c", "core.hooksPath=" + os.devnull, "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
          "-c", "core.attributesFile=" + os.devnull, "-c", "core.excludesFile=" + os.devnull, *args],
@@ -27,7 +28,18 @@ def git(repo, *args, input_bytes=None):
 
 
 @pytest.fixture
-def committed_source(tmp_path, monkeypatch):
+def isolated_git_environment(monkeypatch):
+    environment = git_environment()
+    for key in list(os.environ):
+        if key.upper().startswith("GIT_"):
+            monkeypatch.delenv(key)
+    for key, value in environment.items():
+        if key.upper().startswith("GIT_"):
+            monkeypatch.setenv(key, value)
+
+
+@pytest.fixture
+def committed_source(tmp_path, monkeypatch, isolated_git_environment):
     repo = tmp_path / "repository"
     repo.mkdir()
 
@@ -542,13 +554,17 @@ def test_unknown_scope_has_its_own_diagnostic_before_git(tmp_path, monkeypatch, 
     ("package", "application-source"), ("package", "controller-badge-source"),
     ("package_controller_badge", None),
 ])
-def test_tag_probe_errors_are_not_treated_as_untagged(committed_rc, tmp_path, monkeypatch, entry_point, scope):
+@pytest.mark.parametrize("returncode", [1, 128])
+def test_tag_probe_errors_are_not_treated_as_untagged(committed_rc, tmp_path, monkeypatch,
+                                                   entry_point, scope, returncode):
     _, commit = committed_rc
     original_git = release.git
+    probes = []
 
     def failed_tag_probe(*arguments):
         if arguments[0] == "show-ref":
-            raise subprocess.CalledProcessError(128, arguments, stderr=b"fixture tag-probe error")
+            probes.append(arguments)
+            raise subprocess.CalledProcessError(returncode, arguments, stderr=b"fixture tag-probe error")
         if arguments[0] != "rev-parse":
             pytest.fail("Source read after a failed tag probe")
         return original_git(*arguments)
@@ -556,7 +572,226 @@ def test_tag_probe_errors_are_not_treated_as_untagged(committed_rc, tmp_path, mo
     monkeypatch.setattr(release, "git", failed_tag_probe)
     output = tmp_path / "output"
     options = {"scope": scope} if scope is not None else {}
-    with pytest.raises(subprocess.CalledProcessError) as error:
+    with pytest.raises(ValueError, match="Version tag .* probe failed") as error:
         getattr(release, entry_point)(commit, "v1.0.0-rc.1", output, **options)
-    assert error.value.returncode == 128
+    assert "refs/tags/v1.0.0-rc.1" in str(error.value)
+    assert "fixture tag-probe error" in str(error.value)
+    assert probes == [("show-ref", "--exists", "refs/tags/v1.0.0-rc.1")]
     assert not output.exists()
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+@pytest.mark.parametrize("tagged", [False, True])
+def test_exists_probe_present_and_missing_results(committed_rc, tmp_path, monkeypatch,
+                                                 entry_point, scope, tagged):
+    repo, commit = committed_rc
+    tag_ref = "refs/tags/v1.0.0-rc.1"
+    if tagged:
+        git(repo, "tag", "-a", "v1.0.0-rc.1", "-m", "modern probe matching commit", commit)
+    original_git = release.git
+    probes = []
+
+    def modern_probe(*arguments):
+        if arguments[0] == "show-ref":
+            assert arguments == ("show-ref", "--exists", tag_ref)
+            probes.append(arguments)
+            if not tagged:
+                raise subprocess.CalledProcessError(2, arguments, stderr=b"")
+            return b""
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", modern_probe)
+    options = {"scope": scope} if scope is not None else {}
+    result = getattr(release, entry_point)(commit, "v1.0.0-rc.1", tmp_path / "output", **options)
+    assert result["source_commit"] == commit and Path(result["archive"]).is_file()
+    assert probes
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+def test_legacy_probe_error_retains_git_stderr(committed_rc, tmp_path, monkeypatch, entry_point, scope):
+    _, commit = committed_rc
+    original_git = release.git
+    probes = []
+
+    def failing_legacy_probe(*arguments):
+        if arguments[0] == "show-ref":
+            probes.append(arguments)
+            if arguments[1] == "--exists":
+                raise subprocess.CalledProcessError(129, arguments, stderr=b"unknown option exists")
+            raise subprocess.CalledProcessError(128, arguments, stderr=b"fixture legacy-probe error")
+        if arguments[0] != "rev-parse":
+            pytest.fail("Source read after a legacy tag probe error")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", failing_legacy_probe)
+    output = tmp_path / "output"
+    options = {"scope": scope} if scope is not None else {}
+    with pytest.raises(ValueError, match="Version tag refs/tags/v1.0.0-rc.1 probe failed") as error:
+        getattr(release, entry_point)(commit, "v1.0.0-rc.1", output, **options)
+    assert "fixture legacy-probe error" in str(error.value)
+    assert probes == [("show-ref", "--exists", "refs/tags/v1.0.0-rc.1"),
+                      ("show-ref", "--verify", "--quiet", "refs/tags/v1.0.0-rc.1")]
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+@pytest.mark.parametrize("legacy_git", [False, True])
+@pytest.mark.parametrize("ref_kind", [
+    "truncated", "garbage", "dangling-symbolic", "missing-object", "lightweight-tree", "annotated-tree", "blob",
+])
+def test_broken_or_noncommit_version_tags_refused_before_source_or_output(
+        committed_rc, tmp_path, monkeypatch, entry_point, scope, legacy_git, ref_kind):
+    repo, commit = committed_rc
+    version = "v1.0.0-rc.1"
+    tag_ref = "refs/tags/" + version
+    tag_path = repo / ".git" / tag_ref
+    tag_path.parent.mkdir(parents=True, exist_ok=True)
+    if ref_kind == "annotated-tree":
+        tree = git(repo, "rev-parse", "HEAD^{tree}").decode().strip()
+        git(repo, "tag", "-a", version, "-m", "tree is not a release commit", tree)
+    else:
+        if ref_kind == "lightweight-tree":
+            contents = git(repo, "rev-parse", "HEAD^{tree}")
+        elif ref_kind == "blob":
+            contents = git(repo, "hash-object", "-w", "--stdin", input_bytes=b"not a release commit\n")
+        else:
+            contents = {
+                "truncated": b"deadbeef\n", "garbage": b"not-an-object-id\n",
+                "dangling-symbolic": b"ref: refs/tags/missing-fixture-tag\n",
+                "missing-object": b"f" * 40 + b"\n",
+            }[ref_kind]
+        tag_path.write_bytes(contents)
+    original_git = release.git
+    probes = []
+
+    def references_only(*arguments):
+        if arguments[0] not in ("rev-parse", "show-ref"):
+            pytest.fail("Source blob read before refusing an invalid version tag")
+        if arguments[:2] == ("show-ref", "--exists"):
+            probes.append(arguments)
+            if legacy_git:
+                raise subprocess.CalledProcessError(129, arguments, stderr=b"unknown option exists")
+            try:
+                return original_git(*arguments)
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode != 129:
+                    raise
+                # Older hosts lack --exists: emulate only its known-fixture
+                # lookup result; the actual malformed ref and commit peel stay real.
+                if ref_kind in ("truncated", "garbage"):
+                    raise subprocess.CalledProcessError(1, arguments, stderr=b"invalid fixture ref format") from exc
+                return b""
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", references_only)
+    output = tmp_path / "output"
+    options = {"scope": scope} if scope is not None else {}
+    with pytest.raises(ValueError, match="Version tag refs/tags/v1.0.0-rc.1") as error:
+        getattr(release, entry_point)(commit, version, output, **options)
+    if not legacy_git and ref_kind in ("truncated", "garbage"):
+        assert "probe failed" in str(error.value)
+    elif not legacy_git or ref_kind in ("lightweight-tree", "annotated-tree", "blob"):
+        assert "does not resolve to a commit" in str(error.value)
+    else:
+        assert "probe failed" in str(error.value) or "does not resolve to a commit" in str(error.value)
+    assert probes == [("show-ref", "--exists", tag_ref)]
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+@pytest.mark.parametrize("storage", ["loose", "packed"])
+def test_legacy_missing_probe_cannot_hide_existing_unresolvable_tag(
+        committed_rc, tmp_path, monkeypatch, entry_point, scope, storage):
+    repo, commit = committed_rc
+    version = "v1.0.0-rc.1"
+    tag_ref = "refs/tags/" + version
+    if storage == "loose":
+        path = repo / ".git" / tag_ref
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"ref: refs/tags/missing-fixture-tag\n")
+    else:
+        (repo / ".git/packed-refs").write_bytes(
+            b"# pack-refs with: peeled fully-peeled sorted\n" + b"f" * 40 + b" " + tag_ref.encode() + b"\n"
+        )
+    original_git = release.git
+    probes = []
+
+    def ambiguous_legacy_probe(*arguments):
+        if arguments[0] == "show-ref":
+            probes.append(arguments)
+            code = 129 if arguments[1] == "--exists" else 1
+            raise subprocess.CalledProcessError(code, arguments, stderr=b"")
+        if arguments[0] != "rev-parse":
+            pytest.fail("Source blob read after an unresolved legacy tag")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", ambiguous_legacy_probe)
+    output = tmp_path / "output"
+    options = {"scope": scope} if scope is not None else {}
+    with pytest.raises(ValueError, match="Version tag .* does not resolve to a commit"):
+        getattr(release, entry_point)(commit, version, output, **options)
+    assert probes == [("show-ref", "--exists", tag_ref), ("show-ref", "--verify", "--quiet", tag_ref)]
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("entry_point,scope", [
+    ("package", "application-source"), ("package", "controller-badge-source"),
+    ("package_controller_badge", None),
+])
+@pytest.mark.parametrize("tagged", [False, True])
+def test_legacy_git_fallback_allows_only_absent_or_matching_commit_tags(
+        committed_rc, tmp_path, monkeypatch, entry_point, scope, tagged):
+    repo, commit = committed_rc
+    version = "v1.0.0-rc.1"
+    if tagged:
+        git(repo, "tag", "-a", version, "-m", "matching annotated commit", commit)
+    original_git = release.git
+    probes = []
+
+    def legacy_probe(*arguments):
+        if arguments[:2] == ("show-ref", "--exists"):
+            probes.append(arguments)
+            raise subprocess.CalledProcessError(129, arguments, stderr=b"unknown option exists")
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", legacy_probe)
+    options = {"scope": scope} if scope is not None else {}
+    result = getattr(release, entry_point)(commit, version, tmp_path / "output", **options)
+    assert result["source_commit"] == commit and Path(result["archive"]).is_file()
+    assert probes
+
+
+@pytest.mark.parametrize("fixture_name", ["committed_source", "committed_rc"])
+def test_inprocess_tag_checks_use_fixture_git_environment(tmp_path, monkeypatch, request, fixture_name):
+    unused = set_hostile_git_environment(tmp_path, monkeypatch)
+    repo, commit = request.getfixturevalue(fixture_name)
+    assert {key: value for key, value in os.environ.items() if key.upper().startswith("GIT_")} == {
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+    }
+    git(repo, "tag", "-a", "v1.0.0-rc.1", "-m", "isolated in-process tag", commit)
+    original_git = release.git
+    probes = []
+
+    def observe_tag_probe(*arguments):
+        if arguments[:2] == ("show-ref", "--exists"):
+            probes.append(arguments)
+        return original_git(*arguments)
+
+    monkeypatch.setattr(release, "git", observe_tag_probe)
+    scope = "controller-badge-source" if fixture_name == "committed_rc" else "application-source"
+    result = release.package(commit, "v1.0.0-rc.1", tmp_path / "output", scope=scope)
+    assert result["source_commit"] == commit and probes
+    assert all(not path.exists() for path in unused.values())

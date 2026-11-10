@@ -29,13 +29,14 @@ OUT_OF_SCOPE_EVENTS = ("schedule", "workflow_dispatch", "push")
 # not reserve exemptions for workflows that could be added in the future.
 OUT_OF_SCOPE_WORKFLOWS = ("codacy.yml",)
 REQUIRED_WORKFLOWS = ("python-package.yml", "host-security.yml", "codacy.yml")
-PRODUCTION_BANDIT_TARGETS = frozenset({
+ORDERED_PRODUCTION_BANDIT_TARGETS = (
     "firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts",
-})
-EXPECTED_PRODUCTION_BANDIT_COMMAND = (
-    "python -m bandit --ini .bandit -r "
-    "firmware/circuitpython addons/universe-badge/apps/bm83_remote scripts -ll"
 )
+PRODUCTION_BANDIT_TARGETS = frozenset(ORDERED_PRODUCTION_BANDIT_TARGETS)
+EXPECTED_PRODUCTION_BANDIT_COMMAND = " ".join((
+    "python", "-m", "bandit", "--ini", ".bandit", "-r",
+    *ORDERED_PRODUCTION_BANDIT_TARGETS, "-ll",
+))
 
 
 def is_out_of_scope(text, name):

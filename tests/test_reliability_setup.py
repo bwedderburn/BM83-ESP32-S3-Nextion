@@ -1,6 +1,8 @@
 """Policy failures must remain visible, without requiring GitHub or hardware."""
 
 import importlib.util
+import json
+import shlex
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -149,6 +151,18 @@ class ReliabilityPolicyTests(unittest.TestCase):
             + ': expected args ["-m", "bandit", "--ini", ".bandit", "-r", '
               '"firmware/circuitpython", "addons/universe-badge/apps/bm83_remote", "scripts", "-ll"]',
         ])
+
+    def test_expected_bandit_command_matches_policy_and_committed_configuration(self):
+        expected = POLICY.EXPECTED_PRODUCTION_BANDIT_COMMAND
+        self.assertTrue(POLICY.matches_production_bandit_args(shlex.split(expected)))
+        workflow = yaml.safe_load((ROOT / ".github/workflows/host-security.yml").read_text(encoding="utf-8"))
+        scans = [step["run"] for step in workflow["jobs"]["host-security"]["steps"]
+                 if step.get("run", "").startswith("python -m bandit ")]
+        self.assertEqual(scans, [expected])
+        tasks = json.loads((ROOT / ".vscode/tasks.json").read_text(encoding="utf-8"))["tasks"]
+        security = [task for task in tasks if task["label"] == "BM83: security (host only)"]
+        self.assertEqual(len(security), 1)
+        self.assertEqual(security[0]["args"], shlex.split(expected)[1:])
 
     def test_host_security_accepts_required_scan_with_reordered_targets(self):
         data = self.host_security_workflow()

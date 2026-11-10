@@ -12,7 +12,9 @@ import zipfile
 
 import pytest
 
-from tests.release_fixture_support import git_environment, set_hostile_git_environment
+from tests.release_fixture_support import (
+    HOSTILE_DEFAULT_BRANCH, HOSTILE_GIT_CONFIG_NAME, git_environment, set_hostile_git_environment,
+)
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts/package_source_release.py"
@@ -192,6 +194,15 @@ def test_cli_requires_complete_compiler_options_before_package(tmp_path, monkeyp
     assert not output.exists()
 
 
+def test_git_environment_retains_only_its_four_safe_git_variables(tmp_path, monkeypatch):
+    set_hostile_git_environment(tmp_path, monkeypatch)
+    environment = git_environment()
+    assert {name: value for name, value in environment.items() if name.upper().startswith("GIT_")} == {
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+    }
+
+
 def test_cli_fixture_ignores_hostile_git_configuration(tmp_path, monkeypatch):
     unused = set_hostile_git_environment(tmp_path, monkeypatch)
     repo, commit = make_cli_repository(tmp_path)
@@ -199,6 +210,8 @@ def test_cli_fixture_ignores_hostile_git_configuration(tmp_path, monkeypatch):
         b"Release CLI Test <release-cli-test@example.invalid>|Release CLI Test <release-cli-test@example.invalid>"
     )
     assert git(repo, "config", "--get", "commit.gpgsign").strip() == b"false"
+    assert git(repo, "symbolic-ref", "--short", "HEAD").decode().strip() != HOSTILE_DEFAULT_BRANCH
+    assert HOSTILE_GIT_CONFIG_NAME.encode() not in git(repo, "config", "--list", "--show-origin")
     assert not (repo / ".git/hostile-template-marker").exists()
     process = invoke_cli(repo, tmp_path / "output", revision=commit)
     assert process.returncode == 0, process.stderr.decode()

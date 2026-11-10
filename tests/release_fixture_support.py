@@ -3,6 +3,10 @@
 import os
 
 
+HOSTILE_GIT_CONFIG_NAME = "hostile-gitconfig"
+HOSTILE_DEFAULT_BRANCH = "hostile-fixture-branch"
+
+
 def git_environment():
     """Keep the host environment without inherited Git repository/config/identity selectors."""
     environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
@@ -23,12 +27,13 @@ def set_hostile_git_environment(tmp_path, monkeypatch):
     (template / "hooks/pre-commit").write_bytes(hook.read_bytes())
     (template / "hooks/pre-commit").chmod(0o755)
     (template / "hostile-template-marker").write_bytes(b"must not enter fixture repository\n")
-    configuration = tmp_path / "hostile-gitconfig"
+    configuration = tmp_path / HOSTILE_GIT_CONFIG_NAME
     configuration.write_text(
         '[core]\n hooksPath = "' + hooks.as_posix() + '"\n'
         '[commit]\n gpgSign = true\n'
         '[gpg]\n program = "' + (tmp_path / "missing-fixture-signer").as_posix() + '"\n'
-        '[init]\n templateDir = "' + template.as_posix() + '"\n', encoding="utf-8"
+        '[init]\n templateDir = "' + template.as_posix() + '"\n'
+        ' defaultBranch = ' + HOSTILE_DEFAULT_BRANCH + '\n', encoding="utf-8"
     )
     unused = {
         "GIT_DIR": tmp_path / "must-not-be-used-as-git-dir",
@@ -38,9 +43,10 @@ def set_hostile_git_environment(tmp_path, monkeypatch):
     }
     values = {
         "GIT_CONFIG_GLOBAL": str(configuration), "GIT_CONFIG_SYSTEM": str(configuration),
-        "GIT_CONFIG_COUNT": "3", "GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "true",
+        "GIT_CONFIG_COUNT": "4", "GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "true",
         "GIT_CONFIG_KEY_1": "core.hooksPath", "GIT_CONFIG_VALUE_1": str(hooks),
         "GIT_CONFIG_KEY_2": "init.templateDir", "GIT_CONFIG_VALUE_2": str(template),
+        "GIT_CONFIG_KEY_3": "init.defaultBranch", "GIT_CONFIG_VALUE_3": HOSTILE_DEFAULT_BRANCH,
         "GIT_TEMPLATE_DIR": str(template),
         "GIT_AUTHOR_NAME": "Inherited Author", "GIT_AUTHOR_EMAIL": "inherited-author@example.invalid",
         "GIT_COMMITTER_NAME": "Inherited Committer", "GIT_COMMITTER_EMAIL": "inherited-committer@example.invalid",

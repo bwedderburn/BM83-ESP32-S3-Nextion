@@ -160,8 +160,6 @@ def package(revision, version, output, *, scope="application-source", include_mp
             "payload_files": len(members), "manifest": str(manifest_path), "checksums": str(checksum_path)}
 
 
-
-
 RC_FIXED_FILES = frozenset({
     "LICENSE", "README.md", "setup.py", "build_mpy.sh",
     "docs/guides/deployment.md", "docs/guides/ble-volume-handoff.md",
@@ -195,6 +193,52 @@ PRIVATE_NAMES = frozenset({
 })
 
 
+def legacy_tag_exists(tag_ref):
+    """Distinguish absent legacy refs from loose or packed refs Git cannot resolve."""
+    try:
+        git("show-ref", "--verify", "--quiet", tag_ref)
+        return True
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode != 1 or exc.stderr:
+            raise
+    paths = []
+    for name in (tag_ref, "packed-refs"):
+        path = Path(git("rev-parse", "--git-path", name).decode("utf-8").strip())
+        paths.append(path if path.is_absolute() else REPO / path)
+    try:
+        paths[0].lstat()
+    except FileNotFoundError:
+        try:
+            packed = paths[1].read_bytes()
+        except FileNotFoundError:
+            return False
+        return any(fields[-1] == tag_ref.encode("utf-8") for line in packed.splitlines()
+                   if line and not line.startswith((b"#", b"^")) and (fields := line.split()))
+    return True
+
+
+def version_tag_exists(tag_ref):
+    """Only an explicit missing-ref result permits an untagged release."""
+    try:
+        git("show-ref", "--exists", tag_ref)
+        return True
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode == 2:
+            return False
+        if exc.returncode == 129:
+            try:
+                return legacy_tag_exists(tag_ref)
+            except subprocess.CalledProcessError as legacy_exc:
+                exc = legacy_exc
+            except (OSError, UnicodeError) as legacy_exc:
+                stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+                raise ValueError("Version tag " + tag_ref + " metadata check failed: " + str(legacy_exc)
+                                 + "; Git stderr: " + (stderr.strip() if stderr else "unavailable")) from legacy_exc
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+        raise ValueError("Version tag " + tag_ref + " probe failed: "
+                         + (stderr.strip() if stderr else "Git exited with status " + str(exc.returncode))) from exc
+
+
 def resolve_release_commit(revision, version):
     """Bind an existing version tag to its commit; permit an untagged candidate."""
     if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.]+)?", version):
@@ -203,19 +247,17 @@ def resolve_release_commit(revision, version):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("Expected a full Git commit SHA")
     tag_ref = "refs/tags/" + version
-    try:
-        git("show-ref", "--verify", "--quiet", tag_ref)
-    except subprocess.CalledProcessError as exc:
-        if exc.returncode == 1:
-            return commit
-        raise
+    if not version_tag_exists(tag_ref):
+        return commit
     try:
         tagged_commit = git("rev-parse", "--verify", "--end-of-options", tag_ref + "^{commit}").decode().strip()
     except subprocess.CalledProcessError as exc:
         raise ValueError("Version tag " + tag_ref + " does not resolve to a commit") from exc
     if tagged_commit != commit:
-        raise ValueError("Version tag " + tag_ref + " resolves to " + tagged_commit
-                         + ", not requested commit " + commit)
+        raise ValueError(
+            "Version tag " + tag_ref + " resolves to " + tagged_commit
+            + ", not requested commit " + commit
+        )
     return commit
 
 
