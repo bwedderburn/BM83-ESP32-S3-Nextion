@@ -464,6 +464,18 @@ def package_controller_badge(commit, version, output, *, include_mpy=False,
             "manifest": str(manifest_path), "checksums": str(checksum_path), "artifacts": records}
 
 
+def cli_failure_message(exc):
+    """State a refusal or a failed Git/compiler command on one line, naming the command."""
+    if isinstance(exc, subprocess.CalledProcessError):
+        command = [str(part) for part in exc.cmd] if isinstance(exc.cmd, (list, tuple)) else [str(exc.cmd)]
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr or ""
+        message = (" ".join([Path(command[0]).name, *command[1:]]) + " failed with exit status "
+                   + str(exc.returncode) + (": " + stderr if stderr.strip() else ""))
+    else:
+        message = str(exc)
+    return "; ".join(line.strip() for line in message.splitlines() if line.strip()) or type(exc).__name__
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", "--ref", dest="revision", required=True,
@@ -482,9 +494,16 @@ def main():
         parser.error("Compiled assets require the controller-badge-source scope")
     if args.include_mpy and (args.compiler is None or not re.fullmatch(r"[0-9a-fA-F]{64}", args.compiler_sha256 or "")):
         parser.error("--include-mpy requires --compiler and observed --compiler-sha256")
-    print(json.dumps(package(args.revision, args.version, args.output, scope=args.scope,
-                             include_mpy=args.include_mpy, compiler=args.compiler,
-                             compiler_sha256=args.compiler_sha256), indent=2))
+    try:
+        result = package(args.revision, args.version, args.output, scope=args.scope,
+                         include_mpy=args.include_mpy, compiler=args.compiler,
+                         compiler_sha256=args.compiler_sha256)
+    except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        # Decoding defects, and any RuntimeError other than missing Git, keep their traceback.
+        if isinstance(exc, UnicodeError) or (isinstance(exc, RuntimeError) and GIT_EXECUTABLE is not None):
+            raise
+        parser.exit(1, parser.prog + ": error: " + cli_failure_message(exc) + "\n")
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
