@@ -29,20 +29,27 @@ def test_status_receive_error_preserves_pending_and_recovers_on_valid_reply():
     remote.step(2)
     pending = remote.pending
     assert pending is not None and pending["command"] == "STATUS"
+    before = dict(pending)
     sent = list(sock.sent)
     sock.fail_receive = True
     remote.step(3)
 
     assert not sock.fail_receive
     assert remote.feedback.startswith("UDP receive error:")
-    assert remote.pending is pending
+    # Same record, unchanged retry state: attempts, send and start times, no stall flag.
+    assert remote.pending is pending and remote.pending == before
     assert sock.sent == sent
+
+    # No reply by the first retry window, 150 ms after the send: one resend of the same wire.
+    remote.step(152)
+    assert remote.pending is pending
+    assert sock.sent == sent + [(pending["wire"], PEER)]
 
     state = {"v": 1, "type": "state", "unit": remote.unit,
              "client": remote.client, "seq": remote.seq, "dup": False,
              "np": snapshot()}
     sock.incoming.append((protocol.encode(KEY, state, 1200), PEER))
-    remote.step(4)
+    remote.step(153)
 
     assert remote.feedback == "Audio unit responding"
     assert remote.pending is None

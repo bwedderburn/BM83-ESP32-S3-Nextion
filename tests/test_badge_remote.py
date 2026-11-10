@@ -343,7 +343,9 @@ def test_receiver_failures_preserve_key_and_replay_identity_within_activation():
             return super().recvfrom_into(buffer)
 
     sock = ReceiveErrorSocket()
-    server = make_server(sock)
+    # Distinct nonzero draws: regenerating the unit or BLE session would change replay_identity().
+    draws = iter(range(1, 1 << 24))
+    server = make_server(sock, urandom=lambda size: next(draws).to_bytes(size, "big"))
     unit = Unit()
     hello = request(server, {"v": 1, "type": "hello", "nonce": "11" * 8})
     sock.inbox.append((hello, CLIENT_ADDR))

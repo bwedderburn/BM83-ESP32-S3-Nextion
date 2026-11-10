@@ -197,6 +197,7 @@ def test_failed_deinit_blocks_tx_and_clears_peer_until_single_owner_recovery(tra
 
 
 def test_current_behavior_lost_callback_keeps_all_frame_types_blocked_without_timeout(transport):
+    """Current behavior, a known gap: a lost completion callback keeps every frame type blocked with no timeout."""
     remote, module, clock = transport
     radio = module.radios[0]
     assert send(remote, "host")

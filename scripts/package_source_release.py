@@ -4,6 +4,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -35,16 +36,24 @@ HOST_MANAGEMENT_SOURCES = frozenset({
     "lib/utils/phase1_metrics.py",
 })
 APPLICATION_SOURCES = BASE_APPLICATION_SOURCES | HOST_MANAGEMENT_SOURCES
+# Caller variables that select another repository, work tree, index or object store
+# (Git hooks export GIT_DIR); REPO alone selects the repository read here.
+REPOSITORY_SELECTION_VARIABLES = frozenset({
+    "GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+})
 
 
 def git(*args):
     """Read Git data with fixed verbs and argument lists; never execute a shell."""
     if GIT_EXECUTABLE is None:
         raise RuntimeError("Git is required to read committed release source")
+    environment = {name: value for name, value in os.environ.items()
+                   if name.upper() not in REPOSITORY_SELECTION_VARIABLES}
     # Fixed Git verbs; blob reads use resolved object IDs from the commit tree.
     return subprocess.run(  # nosec B603
         [GIT_EXECUTABLE, "--no-pager", "--no-replace-objects", *args],
-        cwd=REPO, check=True, capture_output=True
+        cwd=REPO, check=True, capture_output=True, env=environment
     ).stdout
 
 
@@ -193,50 +202,80 @@ PRIVATE_NAMES = frozenset({
 })
 
 
-def legacy_tag_exists(tag_ref):
-    """Distinguish absent legacy refs from loose or packed refs Git cannot resolve."""
-    try:
-        git("show-ref", "--verify", "--quiet", tag_ref)
-        return True
-    except subprocess.CalledProcessError as exc:
-        if exc.returncode != 1 or exc.stderr:
-            raise
-    paths = []
-    for name in (tag_ref, "packed-refs"):
-        path = Path(git("rev-parse", "--git-path", name).decode("utf-8").strip())
-        paths.append(path if path.is_absolute() else REPO / path)
-    try:
-        paths[0].lstat()
-    except FileNotFoundError:
-        try:
-            packed = paths[1].read_bytes()
-        except FileNotFoundError:
-            return False
-        return any(fields[-1] == tag_ref.encode("utf-8") for line in packed.splitlines()
-                   if line and not line.startswith((b"#", b"^")) and (fields := line.split()))
-    return True
+def git_failure(exc):
+    """Git's stderr for a refusal message, or its exit status when that stderr is blank."""
+    stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
+    return (stderr or "").strip() or "Git exited with status " + str(exc.returncode)
 
 
-def version_tag_exists(tag_ref):
-    """Only an explicit missing-ref result permits an untagged release."""
+def tag_resolves(tag_ref):
+    """Ask Git whether the exact ref resolves; a failed probe is a refusal, never "untagged"."""
     try:
         git("show-ref", "--exists", tag_ref)
         return True
     except subprocess.CalledProcessError as exc:
         if exc.returncode == 2:
             return False
-        if exc.returncode == 129:
-            try:
-                return legacy_tag_exists(tag_ref)
-            except subprocess.CalledProcessError as legacy_exc:
-                exc = legacy_exc
-            except (OSError, UnicodeError) as legacy_exc:
-                stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
-                raise ValueError("Version tag " + tag_ref + " metadata check failed: " + str(legacy_exc)
-                                 + "; Git stderr: " + (stderr.strip() if stderr else "unavailable")) from legacy_exc
-        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr
-        raise ValueError("Version tag " + tag_ref + " probe failed: "
-                         + (stderr.strip() if stderr else "Git exited with status " + str(exc.returncode))) from exc
+        if exc.returncode != 129:
+            raise ValueError("Version tag " + tag_ref + " probe failed: " + git_failure(exc)) from exc
+    # Git before 2.43 lacks --exists. Its exit 1 means only "not resolved", even with
+    # trace or warning output on stderr; the loose and packed file check then decides.
+    try:
+        git("show-ref", "--verify", "--quiet", tag_ref)
+        return True
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode == 1:
+            return False
+        raise ValueError("Version tag " + tag_ref + " probe failed: " + git_failure(exc)) from exc
+
+
+def tag_ref_files(tag_ref):
+    """Report whether a loose ref file exists and count the packed-refs lines naming the ref exactly."""
+    paths = []
+    for name in (tag_ref, "packed-refs"):
+        path = Path(os.fsdecode(git("rev-parse", "--git-path", name).strip()))
+        paths.append(path if path.is_absolute() else REPO / path)
+    try:
+        paths[0].lstat()
+        loose = True
+    except FileNotFoundError:
+        loose = False
+    if loose and paths[0].name not in os.listdir(paths[0].parent):
+        # A case-insensitive file system answers Git's lookup from another letter case of the name.
+        raise ValueError("Version tag " + tag_ref + " has a loose ref in another letter case")
+    try:
+        packed = paths[1].read_bytes()
+    except FileNotFoundError:
+        packed = b""
+    # Git lists and pushes a packed name only up to its first NUL byte.
+    return loose, sum(fields[-1] == tag_ref.encode("utf-8") for line in packed.splitlines()
+                      if line and not line.startswith((b"#", b"^")) and (fields := line.split(b"\0", 1)[0].split()))
+
+
+def version_tag_exists(tag_ref):
+    """Permit an untagged release only when Git reports the ref missing and no file names it."""
+    resolved = tag_resolves(tag_ref)
+    try:
+        loose, packed = tag_ref_files(tag_ref)
+    except (OSError, UnicodeError, subprocess.CalledProcessError) as exc:
+        reason = git_failure(exc) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+        raise ValueError("Version tag " + tag_ref + " metadata check failed: " + reason) from exc
+    if packed > 1:
+        # Git's lookup and `git push --tags` can each take a different one of these entries.
+        raise ValueError("Version tag " + tag_ref + " has " + str(packed) + " packed-refs entries")
+    return resolved or loose or packed == 1
+
+
+def peel_version_tag(tag_ref):
+    """Peel the exact ref by object ID, so Git cannot fall back to another ref name."""
+    try:
+        object_id = git("show-ref", "--verify", "--hash", tag_ref).decode("ascii", errors="replace").strip()
+        if not re.fullmatch(r"[0-9a-f]{40}", object_id):
+            raise ValueError("Version tag " + tag_ref + " does not resolve to a commit: "
+                             "show-ref printed no full object ID")
+        return git("rev-parse", "--verify", "--end-of-options", object_id + "^{commit}").decode().strip()
+    except subprocess.CalledProcessError as exc:
+        raise ValueError("Version tag " + tag_ref + " does not resolve to a commit: " + git_failure(exc)) from exc
 
 
 def resolve_release_commit(revision, version):
@@ -249,10 +288,7 @@ def resolve_release_commit(revision, version):
     tag_ref = "refs/tags/" + version
     if not version_tag_exists(tag_ref):
         return commit
-    try:
-        tagged_commit = git("rev-parse", "--verify", "--end-of-options", tag_ref + "^{commit}").decode().strip()
-    except subprocess.CalledProcessError as exc:
-        raise ValueError("Version tag " + tag_ref + " does not resolve to a commit") from exc
+    tagged_commit = peel_version_tag(tag_ref)
     if tagged_commit != commit:
         raise ValueError(
             "Version tag " + tag_ref + " resolves to " + tagged_commit
@@ -428,6 +464,18 @@ def package_controller_badge(commit, version, output, *, include_mpy=False,
             "manifest": str(manifest_path), "checksums": str(checksum_path), "artifacts": records}
 
 
+def cli_failure_message(exc):
+    """State a refusal or a failed Git/compiler command on one line, naming the command."""
+    if isinstance(exc, subprocess.CalledProcessError):
+        command = [str(part) for part in exc.cmd] if isinstance(exc.cmd, (list, tuple)) else [str(exc.cmd)]
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr or ""
+        message = (" ".join([Path(command[0]).name, *command[1:]]) + " failed with exit status "
+                   + str(exc.returncode) + (": " + stderr if stderr.strip() else ""))
+    else:
+        message = str(exc)
+    return "; ".join(line.strip() for line in message.splitlines() if line.strip()) or type(exc).__name__
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revision", "--ref", dest="revision", required=True,
@@ -446,9 +494,16 @@ def main():
         parser.error("Compiled assets require the controller-badge-source scope")
     if args.include_mpy and (args.compiler is None or not re.fullmatch(r"[0-9a-fA-F]{64}", args.compiler_sha256 or "")):
         parser.error("--include-mpy requires --compiler and observed --compiler-sha256")
-    print(json.dumps(package(args.revision, args.version, args.output, scope=args.scope,
-                             include_mpy=args.include_mpy, compiler=args.compiler,
-                             compiler_sha256=args.compiler_sha256), indent=2))
+    try:
+        result = package(args.revision, args.version, args.output, scope=args.scope,
+                         include_mpy=args.include_mpy, compiler=args.compiler,
+                         compiler_sha256=args.compiler_sha256)
+    except (ValueError, OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+        # Decoding defects, and any RuntimeError other than missing Git, keep their traceback.
+        if isinstance(exc, UnicodeError) or (isinstance(exc, RuntimeError) and GIT_EXECUTABLE is not None):
+            raise
+        parser.exit(1, parser.prog + ": error: " + cli_failure_message(exc) + "\n")
+    print(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":
