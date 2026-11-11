@@ -163,14 +163,15 @@ static void golden_commands() {
         "42484331a1b2c3d411223344ffffffff0100000000000000000000000000a5c0",
         "42484331a1b2c3d411223344ffffffff02000000030102030405060708002bfd",
         "42484331a1b2c3d411223344ffffffff0300000000000000000000000002003ce211",
-        "42484331a1b2c3d411223344ffffffff0400000003010203040506070805506920c3a9bb14"};
+        "42484331a1b2c3d411223344ffffffff0400000003010203040506070805506920c3a9bb14",
+        "42484331a1b2c3d411223344ffffffff05000000030102030405060708005bfb"};
     uint8_t frame[64], golden[360], seconds[2] = {0,60}; const uint8_t alias[] = {'P','i',' ',0xC3,0xA9};
-    for (unsigned op = 0; op <= 4; ++op) {
+    for (unsigned op = 0; op <= 5; ++op) {
         const uint8_t *payload = op == 3 ? seconds : op == 4 ? alias : nullptr;
         const size_t bytes = op == 3 ? 2 : op == 4 ? 5 : 0;
         const size_t actual = hp::command(frame, sizeof(frame), 0xA1B2C3D4U, 0x11223344U, 0xFFFFFFFFU,
-                                         static_cast<hp::Opcode>(op), op == 0 ? 1 : op == 2 || op == 4 ? 3 : 0,
-                                         op == 2 || op == 4 ? A : nullptr, payload, bytes);
+                                         static_cast<hp::Opcode>(op), op == 0 ? 1 : op == 2 || op == 4 || op == 5 ? 3 : 0,
+                                         op == 2 || op == 4 || op == 5 ? A : nullptr, payload, bytes);
         const size_t wanted = unhex(expected[op], golden); assert(actual == wanted && !memcmp(frame, golden, actual));
     }
 }
@@ -409,6 +410,79 @@ static void native_enrollment_timeout_is_closed_not_successful() {
     assert(c.result == hp::FAILED); // An advertising/incompletely closed window is not the normal terminal case.
 }
 
+
+static size_t remaining_host(uint8_t *body, uint32_t generation) {
+    memset(body, 0, 278); body[0] = 1; hp::put32(body + 1, generation); body[5] = 1;
+    memcpy(body + 6, B, 8); body[14] = hp::RESUMABLE;
+    return 16;
+}
+
+static void forget_requires_paused_confirmation_and_new_inventory() {
+    hp::Control c(77); seed(c); uint8_t body[278], frame[64];
+    assert(!c.can_forget(6) && !c.begin(hp::FORGET, 6, frame, sizeof(frame)));
+    status_body(body, 0, 10, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, A);
+    report(c, body, 3, 10);
+    assert(c.can_forget(12));
+    const hp::Status paused = c.decoder.status;
+    const uint16_t active[] = {hp::ADVERTISING, hp::CONNECTED_FLAG};
+    for (uint16_t flag : active) {
+        c.decoder.status.flags |= flag; assert(!c.can_forget(12)); c.decoder.status = paused;
+    }
+    const uint16_t required[] = {hp::READY, hp::PERSISTED};
+    for (uint16_t flag : required) {
+        c.decoder.status.flags &= ~flag; assert(!c.can_forget(12)); c.decoder.status = paused;
+    }
+    c.decoder.status.requested_mode = hp::AUTO; assert(!c.can_forget(12)); c.decoder.status = paused;
+    c.decoder.status.applied_mode = hp::AUTO; assert(!c.can_forget(12)); c.decoder.status = paused;
+    c.decoder.status.state = hp::WAITING; assert(!c.can_forget(12)); c.decoder.status = paused;
+    c.decoder.status.error_domain = 2; assert(!c.can_forget(12)); c.decoder.status = paused;
+    c.decoder.status.error_code = 9; assert(!c.can_forget(12)); c.decoder.status = paused;
+    c.decoder.status.flags |= hp::ENCRYPTED | hp::BONDED | hp::HID_READY | hp::FILTER_READY;
+    c.decoder.status.enrollment_remaining = 1; memcpy(c.decoder.status.connected, A, 8);
+    assert(c.can_forget(12)); c.decoder.status = paused; // Cached observations add no admission gates.
+    c.decoder.status.bond_generation = 4; assert(!c.can_forget(12)); c.decoder.status = paused;
+    c.decoder.list.peers[0].flags |= hp::PEER_CONNECTED; assert(!c.can_forget(12));
+    c.decoder.list.peers[0].flags = 0; assert(c.can_forget(12)); // A non-resumable saved host can be forgotten.
+    c.clear_selection(); assert(!c.can_forget(12)); assert(c.choose(0, 12));
+    assert(c.begin(hp::FORGET, 12, frame, sizeof(frame)) == 32);
+    assert(c.last_opcode() == hp::FORGET && frame[16] == 5 && ble_status::read32(frame + 17) == 3);
+    assert(!memcmp(frame + 21, A, 8) && !c.can_forget(12));
+    assert(!c.begin(hp::FORGET, 12, frame, sizeof(frame)));
+    const uint32_t request = ble_status::read32(frame + 12);
+    status_body(body, request, 20, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, nullptr, 3);
+    body[1] = 3; report(c, body, 4, 20); assert(c.result == hp::PENDING);
+    size_t size = remaining_host(body, 3);
+    assert(publish(c.decoder, body, size, 2, 5, 22)); c.tick(23);
+    assert(c.result == hp::PENDING); // A missing host at the old generation is insufficient.
+    status_body(body, request, 20, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, nullptr, 4);
+    body[1] = 3; report(c, body, 6, 24); assert(c.result == hp::PENDING); // Old list cannot confirm new status.
+    size = list_body(body, 4);
+    assert(publish(c.decoder, body, size, 2, 7, 26)); c.tick(27);
+    assert(c.result == hp::PENDING); // A coherent list still containing the target cannot confirm.
+    status_body(body, request, 20, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, A, 4);
+    body[1] = 3; report(c, body, 8, 28); assert(c.result == hp::PENDING);
+    size = remaining_host(body, 4);
+    assert(publish(c.decoder, body, size, 2, 9, 30)); c.tick(31);
+    assert(c.result == hp::PENDING); // The observed target must also be cleared or changed.
+    status_body(body, request, 10, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, nullptr, 4);
+    body[1] = 3; report(c, body, 10, 32); assert(c.result == hp::PENDING);
+    status_body(body, request, 20, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, nullptr, 4);
+    body[1] = 1; report(c, body, 11, 34); assert(c.result == hp::PENDING);
+    body[1] = 3; report(c, body, 12, 36); assert(c.result == hp::CONFIRMED);
+    assert(c.last_opcode() == hp::FORGET && !c.selection(38));
+    assert(!hp::command(frame, sizeof(frame), 101, 77, 1, hp::FORGET, 3));
+    const uint8_t payload[] = {'x'};
+    assert(!hp::command(frame, sizeof(frame), 101, 77, 1, hp::FORGET, 3, A, payload, 1));
+    assert(!hp::command(frame, sizeof(frame), 101, 77, 1, static_cast<hp::Opcode>(6), 3, A));
+    assert(!hp::command(frame, sizeof(frame), 101, 77, 1, static_cast<hp::Opcode>(6), 3));
+    hp::Control superseded(77); seed(superseded);
+    status_body(body, 0, 10, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, A);
+    report(superseded, body, 3, 10);
+    assert(superseded.begin(hp::FORGET, 12, frame, sizeof(frame)));
+    assert(superseded.begin(hp::DISCONNECT, 13, frame, sizeof(frame)));
+    assert(superseded.last_opcode() == hp::DISCONNECT);
+}
+
 int main(int argc, char **argv) {
     assert(argc >= 2);
     if (!strcmp(argv[1], "codec")) codec_and_aliases();
@@ -426,6 +500,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "admission-lost")) admission_lost_never_retries_mutation();
     else if (!strcmp(argv[1], "link-history")) local_link_loss_keeps_boot_and_sequence_history();
     else if (!strcmp(argv[1], "enroll-timeout")) native_enrollment_timeout_is_closed_not_successful();
+    else if (!strcmp(argv[1], "forget")) forget_requires_paused_confirmation_and_new_inventory();
     else return 2;
     return 0;
 }

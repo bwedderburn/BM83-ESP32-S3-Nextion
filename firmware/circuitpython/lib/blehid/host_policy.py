@@ -1,4 +1,4 @@
-"""Owner for the project native BLE policy API; no pairing or bond deletion.
+"""Owner for the project native BLE policy API and explicit single-host Forget.
 
 The adapter owns persistence, admission and enrollment deadlines. UI calls only
 queue intent here; native calls happen from the UART-first main-loop tail.
@@ -25,6 +25,14 @@ def valid_alias(value):
 
 def u32(value):
     return type(value) is int and 0 <= value <= 0xFFFFFFFF
+
+
+def clean_paused(status):
+    return bool(status and status.get("state") == "PAUSED"
+                and status.get("requested_mode") == status.get("applied_mode") == "PAUSED"
+                and status.get("persisted") is True
+                and status.get("connected") is False and status.get("advertising") is False
+                and status.get("error_domain") == "NONE" and status.get("error_code") == 0)
 
 
 def checked_status(value):
@@ -74,6 +82,7 @@ class NativeHostPolicy:
         self._input_identity = None
         self._peer_connection_generation = None
         self._expected_alias = None
+        self._expected_forget = None
         self._input_blocked = False
         self._operation_failed = False
         try:
@@ -89,6 +98,10 @@ class NativeHostPolicy:
         except Exception:
             self.claimed = True
             self.owner_error = 10
+        try:
+            self.forget_supported = self.version == 1 and callable(getattr(adapter, "forget_host", None))
+        except Exception:
+            self.forget_supported = False
 
     def request(self, mode, target=None, timeout_s=60):
         if self.version != 1 or mode not in MODES:
@@ -103,6 +116,7 @@ class NativeHostPolicy:
         self._input_blocked = True
         self.expected_operation = None
         self._expected_alias = None
+        self._expected_forget = None
         self.owner_error = 0
         self._operation_failed = False
         self.input_generation = (self.input_generation + 1) & 0xFFFFFFFF
@@ -114,6 +128,27 @@ class NativeHostPolicy:
         self.pending = ("ALIAS", identity, alias)
         self.expected_operation = None
         self._expected_alias = (identity, alias)
+        self._expected_forget = None
+        self.owner_error = 0
+        self._operation_failed = False
+        return True
+
+    def forget(self, identity, generation):
+        if (not self.forget_supported or not self.ready() or not clean_paused(self.status)
+                or not valid_id(identity) or not u32(generation)
+                or generation != self.status["bond_generation"] or self.peer_generation != generation):
+            return False
+        target = None
+        for peer in self.peers:
+            if peer["id"] == identity:
+                target = peer
+                break
+        if target is None or target["connected"]:
+            return False
+        self.pending = ("FORGET", identity, generation)
+        self.expected_operation = None
+        self._expected_forget = (identity, generation)
+        self._expected_alias = None
         self.owner_error = 0
         self._operation_failed = False
         return True
@@ -129,6 +164,9 @@ class NativeHostPolicy:
                 native_call = True
                 if action == "ALIAS":
                     operation = self.adapter.set_host_alias(target, extra)
+                    self.peer_generation = None
+                elif action == "FORGET":
+                    operation = self.adapter.forget_host(target, extra)
                     self.peer_generation = None
                 else:
                     operation = self.adapter.set_host_policy(action, target_id=target, timeout_s=extra)
@@ -227,7 +265,14 @@ class NativeHostPolicy:
         value.update(version=self.version, ready=self.ready(), owner_error=self.owner_error,
                      request_operation_id=self.expected_operation or 0,
                      request_pending=self.pending is not None,
-                     peers=self.peers, peer_generation=self.peer_generation)
+                     peers=self.peers, peer_generation=self.peer_generation,
+                     forget_supported=self.forget_supported)
+        value["forget_complete"] = bool(self._expected_forget is not None
+            and self.expected_operation is not None and self.ready() and clean_paused(self.status)
+            and self.status["operation_id"] == self.expected_operation
+            and self.peer_generation == self.status["bond_generation"] != self._expected_forget[1]
+            and self.status["target_id"] != self._expected_forget[0]
+            and all(p["id"] != self._expected_forget[0] for p in self.peers))
         value["alias_complete"] = bool(self._expected_alias is not None and self.ready()
             and self.status["persisted"] and self.status["state"] != "ERROR"
             and self.status["error_domain"] == "NONE" and not self.status["error_code"]

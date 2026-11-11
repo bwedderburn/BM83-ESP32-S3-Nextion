@@ -12,9 +12,11 @@ hp::Control g_control;
 espnow_log_fn g_log = nullptr;
 lv_obj_t *g_modal = nullptr, *g_status = nullptr, *g_hosts = nullptr;
 lv_obj_t *g_hint = nullptr;
-lv_obj_t *g_disconnect = nullptr, *g_connect = nullptr, *g_enroll = nullptr, *g_rename = nullptr;
+lv_obj_t *g_disconnect = nullptr, *g_connect = nullptr, *g_enroll = nullptr, *g_rename = nullptr, *g_forget = nullptr;
 lv_obj_t *g_open_windows = nullptr, *g_launch_status = nullptr;
 lv_obj_t *g_alias_modal = nullptr, *g_alias_text = nullptr, *g_alias_error = nullptr;
+lv_obj_t *g_forget_modal = nullptr, *g_forget_error = nullptr;
+uint8_t g_forget_id[8] = {};
 bool g_refreshing = false;
 char g_options[440] = {};
 
@@ -97,6 +99,12 @@ void status_text(uint32_t now, char *out, size_t capacity) {
     }
     if (!g_control.admitted(now)) { snprintf(out, capacity, "Loading saved volume hosts..."); return; }
     if (g_control.result == hp::REJECTED) {
+        if (g_control.last_opcode() == hp::FORGET && state.request_error == 8) {
+            snprintf(out, capacity, "Disconnect first, then Forget."); return;
+        }
+        if (g_control.last_opcode() == hp::FORGET && state.request_error == 9) {
+            snprintf(out, capacity, "This audio unit's runtime cannot forget hosts yet."); return;
+        }
         snprintf(out, capacity, "Request rejected (code %u). Refresh the host selection.", state.request_error); return;
     }
     if (g_control.result == hp::ENROLLMENT_ENDED && state.state == hp::PAUSED_STATE &&
@@ -119,6 +127,9 @@ void status_text(uint32_t now, char *out, size_t capacity) {
     }
     if (g_control.result == hp::PENDING || state.state == hp::SWITCHING || !(state.flags & hp::READY)) {
         snprintf(out, capacity, "Waiting for the controller to confirm the request..."); return;
+    }
+    if (g_control.result == hp::CONFIRMED && g_control.last_opcode() == hp::FORGET) {
+        snprintf(out, capacity, "Host forgotten on this unit. Other saved hosts are kept. Remove this unit on that host, then use Pair new host."); return;
     }
     if (state.requested_mode == hp::PAUSED && state.applied_mode == hp::PAUSED &&
         state.state == hp::PAUSED_STATE && (state.flags & hp::PERSISTED) &&
@@ -151,9 +162,10 @@ void close_alias(lv_event_t *) {
 }
 void close_modal(lv_event_t *) {
     if (g_modal) lv_obj_del(g_modal);
-    g_modal = g_status = g_hosts = g_hint = g_disconnect = g_connect = g_enroll = g_rename = nullptr;
+    g_modal = g_status = g_hosts = g_hint = g_disconnect = g_connect = g_enroll = g_rename = g_forget = nullptr;
     g_open_windows = g_launch_status = nullptr;
     g_alias_modal = g_alias_text = g_alias_error = nullptr;
+    g_forget_modal = g_forget_error = nullptr; memset(g_forget_id, 0, sizeof(g_forget_id));
     g_options[0] = 0;
     // Closing a page does not issue a policy command or cancel native work.
 }
@@ -186,7 +198,7 @@ void save_alias(lv_event_t *) {
 }
 void rename(lv_event_t *) {
     const hp::Peer *peer = g_control.selection(millis());
-    if (!peer || !g_control.can_alias(millis()) || g_alias_modal) return;
+    if (!peer || !g_control.can_alias(millis()) || g_alias_modal || g_forget_modal) return;
     g_alias_modal = lv_obj_create(g_modal); lv_obj_set_size(g_alias_modal, 748, 402); lv_obj_center(g_alias_modal);
     lv_obj_clear_flag(g_alias_modal, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(g_alias_modal, lv_color_hex(0x101B28), 0);
@@ -204,6 +216,38 @@ void rename(lv_event_t *) {
     lv_obj_set_style_text_font(keyboard, &lv_font_montserrat_16, LV_PART_ITEMS);
     alias_keymap(keyboard, ALIAS_LOWER_KEYS);
     lv_obj_add_event_cb(keyboard, alias_key_pressed, LV_EVENT_VALUE_CHANGED, nullptr);
+}
+void close_forget(lv_event_t *) {
+    if (g_forget_modal) lv_obj_del(g_forget_modal);
+    g_forget_modal = g_forget_error = nullptr; memset(g_forget_id, 0, sizeof(g_forget_id));
+}
+void confirm_forget(lv_event_t *) {
+    const uint32_t now = millis();
+    const hp::Peer *peer = g_control.selection(now);
+    if (!g_control.can_forget(now) || !peer || !hp::same_id(peer->id, g_forget_id)) {
+        text(g_forget_error, "Host status changed. Close and select the host again."); return;
+    }
+    if (send_request(hp::FORGET)) close_forget(nullptr);
+}
+void forget(lv_event_t *) {
+    const uint32_t now = millis();
+    const hp::Peer *peer = g_control.selection(now);
+    if (!g_control.can_forget(now) || !peer || g_forget_modal || g_alias_modal) return;
+    memcpy(g_forget_id, peer->id, sizeof(g_forget_id));
+    g_forget_modal = lv_obj_create(g_modal); lv_obj_set_size(g_forget_modal, 708, 224); lv_obj_center(g_forget_modal);
+    lv_obj_clear_flag(g_forget_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(g_forget_modal, lv_color_hex(0x101B28), 0);
+    lv_obj_set_style_pad_all(g_forget_modal, 0, 0);
+    char name[96];
+    snprintf(name, sizeof(name), "Forget %s (%02x%02x%02x%02x)?",
+             peer->alias[0] ? peer->alias : "saved host", peer->id[4], peer->id[5], peer->id[6], peer->id[7]);
+    label(g_forget_modal, name, 20, 16, 668, &lv_font_montserrat_18);
+    label(g_forget_modal, "Removes this host on the audio unit. Other saved hosts are kept.",
+          20, 62, 668, &lv_font_montserrat_16);
+    g_forget_error = label(g_forget_modal, "Remove this unit on that host, then use Pair new host.",
+                           20, 106, 668, &lv_font_montserrat_14);
+    button(g_forget_modal, "Cancel", 350, 162, 150, close_forget);
+    button(g_forget_modal, "Confirm", 520, 162, 150, confirm_forget);
 }
 void refresh(uint32_t now) {
     if (!g_modal) return;
@@ -232,6 +276,7 @@ void refresh(uint32_t now) {
     enabled(g_disconnect, g_control.can_manage(now));
     enabled(g_connect, g_control.can_connect(now));
     enabled(g_rename, g_control.can_alias(now));
+    enabled(g_forget, g_control.can_forget(now));
     enabled(g_enroll, coherent && !g_control.holding() && g_control.decoder.list.count < hp::MAX_PEERS);
     text(g_hint, !coherent ? "Waiting for a fresh saved-host list."
               : g_control.decoder.list.count == hp::MAX_PEERS ? "All saved host slots are in use. Existing pairings stay saved."
@@ -271,9 +316,10 @@ void ble_host_ui_show(lv_obj_t *screen) {
     lv_obj_set_style_text_font(g_hosts, metadata_fonts::album(), 0);
     lv_obj_add_event_cb(g_hosts, choose, LV_EVENT_VALUE_CHANGED, nullptr);
     g_connect = button(g_modal, "Connect", 500, 148, 220, connect);
-    g_disconnect = button(g_modal, "Disconnect", 20, 210, 220, disconnect);
-    g_enroll = button(g_modal, "Pair new host", 260, 210, 220, enroll);
-    g_rename = button(g_modal, "Rename", 500, 210, 220, rename);
+    g_disconnect = button(g_modal, "Disconnect", 20, 210, 165, disconnect);
+    g_enroll = button(g_modal, "Pair new host", 205, 210, 165, enroll);
+    g_rename = button(g_modal, "Rename", 390, 210, 165, rename);
+    g_forget = button(g_modal, "Forget", 575, 210, 165, forget);
     g_hint = label(g_modal, "Waiting for a fresh saved-host list.", 20, 282, 700, &lv_font_montserrat_14);
     label(g_modal, "Host names are your labels; other hosts keep Bluetooth on.", 20, 324, 700, &lv_font_montserrat_14);
     g_open_windows = button(g_modal, "Open Windows app", 20, 352, 220, open_windows);

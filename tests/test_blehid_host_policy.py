@@ -253,3 +253,212 @@ def test_arm_observation_failure_blocks_gesture_without_native_pause_or_repeated
     adapter.arm_host_input = lambda *_args: True
     owner.tick()  # Read-only observation recovery; an old gesture remains cancelled by its epoch.
     assert owner.allows_input() and adapter.calls == []
+
+
+class ForgetAdapter(Adapter):
+    def forget_host(self, identity, generation):
+        self.calls.append(("FORGET", identity, generation))
+        if self.fail:
+            raise RuntimeError("injected native forget refusal")
+        operation = self.next_operation
+        self.next_operation += 1
+        return operation
+
+
+def forget_owner():
+    adapter = ForgetAdapter()
+    owner = NativeHostPolicy(adapter)
+    owner.tick()
+    return adapter, owner
+
+
+def finish_forget(adapter, owner):
+    adapter.status.update(operation_id=2, bond_generation=2, policy_generation=2, target_id=None)
+    adapter.peers = [peer(OTHER, generation=2)]
+    owner.tick()
+
+
+def test_forget_is_optional_on_claimed_version_one_and_capability_fault_keeps_owner():
+    adapter = Adapter()
+    owner = NativeHostPolicy(adapter)
+    owner.tick()
+    assert owner.claimed and owner.version == 1 and owner.ready()
+    assert owner.snapshot()["forget_supported"] is False
+    assert owner.forget(HOST, 1) is False and adapter.calls == []
+    assert owner.request("PAUSED")
+    owner.tick()
+    assert adapter.calls == [("PAUSED", None, 60)]
+
+    class FaultyCapability(Adapter):
+        @property
+        def forget_host(self):
+            raise RuntimeError("optional capability getter")
+
+    owner = NativeHostPolicy(FaultyCapability())
+    owner.tick()
+    assert owner.claimed and owner.version == 1 and owner.ready()
+    assert owner.snapshot()["forget_supported"] is False
+
+
+def test_forget_queues_once_and_completes_only_after_its_new_coherent_observation():
+    adapter, owner = forget_owner()
+    assert owner.snapshot()["forget_supported"] is True
+    assert owner.forget(HOST, 1)
+    assert owner.pending == ("FORGET", HOST, 1) and adapter.calls == []
+    assert not owner.snapshot()["forget_complete"]
+    owner.tick()
+    assert adapter.calls == [("FORGET", HOST, 1)]
+    assert owner.expected_operation == 2 and not owner.snapshot()["forget_complete"]
+    assert owner.peer_generation == 1  # Re-read after native call, even with the same cached generation.
+    adapter.status["operation_id"] = 2
+    owner.tick()
+    assert not owner.snapshot()["forget_complete"]  # The host is still present.
+    finish_forget(adapter, owner)
+    assert owner.snapshot()["forget_complete"]
+    owner.tick()
+    assert adapter.calls == [("FORGET", HOST, 1)]
+    assert owner.snapshot()["state"] == owner.snapshot()["requested_mode"] == owner.snapshot()["applied_mode"] == "PAUSED"
+
+
+@pytest.mark.parametrize("changes", [
+    dict(state="WAITING"), dict(requested_mode="AUTO"), dict(applied_mode="AUTO"),
+    dict(persisted=False), dict(connected=True), dict(advertising=True),
+    dict(error_domain="NVS"), dict(error_code=1),
+])
+def test_forget_refuses_each_unclean_paused_observation_without_queue_or_native_call(changes):
+    adapter, owner = forget_owner()
+    adapter.status.update(changes)
+    owner.tick()
+    assert not owner.forget(HOST, 1)
+    assert owner.pending is None and adapter.calls == []
+
+
+@pytest.mark.parametrize("identity,generation", [
+    (None, 1), ("", 1), ("0000000000000000", 1), ("not-an-identity", 1),
+    (HOST, True), (HOST, 1.0), (HOST, "1"), (HOST, -1), (HOST, 0x100000000),
+    (HOST, 0), (HOST, 2), ("9999999999999999", 1),
+])
+def test_forget_refuses_invalid_unlisted_or_stale_identity_and_generation(identity, generation):
+    adapter, owner = forget_owner()
+    assert not owner.forget(identity, generation)
+    assert owner.pending is None and adapter.calls == []
+
+
+@pytest.mark.parametrize("block", ["pending", "operation", "owner_error", "list", "connected_peer"])
+def test_forget_refuses_pending_busy_faulted_or_unconnected_list_race(block):
+    adapter, owner = forget_owner()
+    if block == "pending":
+        assert owner.alias(HOST, "pending alias")
+    elif block == "operation":
+        owner.expected_operation = 99
+    elif block == "owner_error":
+        owner.owner_error = 10
+    elif block == "list":
+        owner.peer_generation = None
+    else:
+        owner.peers = (peer(connected=True), peer(OTHER))
+    before = owner.pending
+    assert not owner.forget(HOST, 1)
+    assert owner.pending == before and adapter.calls == []
+
+
+def test_forget_accepts_a_listed_nonresumable_peer_and_refreshes_equal_generation_list():
+    adapter, owner = forget_owner()
+    adapter.peers[0]["resumable"] = False
+    owner.peers = (peer(resumable=False), peer(OTHER))
+    assert owner.forget(HOST, 1)
+    # The native call may fail after a partial delete. Force a re-read even when the
+    # first post-call native status still carries the previous bond generation.
+    adapter.peers = [peer(alias="observed after call", resumable=False), peer(OTHER)]
+    owner.tick()
+    assert owner.peers[0]["alias"] == "observed after call"
+    assert adapter.calls == [("FORGET", HOST, 1)]
+
+
+@pytest.mark.parametrize("change", ["operation", "missing_operation", "generation", "peer_generation",
+                                   "target", "present", "state", "requested", "applied",
+                                   "persisted", "connected", "advertising", "domain", "error", "owner_error"])
+def test_forget_completion_requires_every_observed_condition(change):
+    adapter, owner = forget_owner()
+    assert owner.forget(HOST, 1)
+    owner.tick()
+    finish_forget(adapter, owner)
+    assert owner.snapshot()["forget_complete"]
+    if change == "operation":
+        owner.status["operation_id"] = 99
+    elif change == "missing_operation":
+        owner.expected_operation = None
+    elif change == "generation":
+        owner._expected_forget = (HOST, 2)
+    elif change == "peer_generation":
+        owner.peer_generation = None
+    elif change == "target":
+        owner.status["target_id"] = HOST
+    elif change == "present":
+        owner.peers = (peer(generation=2), peer(OTHER, generation=2))
+    elif change == "state":
+        owner.status["state"] = "WAITING"
+    elif change == "requested":
+        owner.status["requested_mode"] = "AUTO"
+    elif change == "applied":
+        owner.status["applied_mode"] = "AUTO"
+    elif change == "persisted":
+        owner.status["persisted"] = False
+    elif change == "connected":
+        owner.status["connected"] = True
+    elif change == "advertising":
+        owner.status["advertising"] = True
+    elif change == "domain":
+        owner.status["error_domain"] = "NVS"
+    elif change == "error":
+        owner.status["error_code"] = 1
+    else:
+        owner.owner_error = 7
+    assert not owner.snapshot()["forget_complete"]
+
+
+def test_request_alias_and_forget_clear_other_operation_expectations():
+    adapter, owner = forget_owner()
+    assert owner.forget(HOST, 1)
+    assert owner.request("PAUSED")
+    assert owner._expected_forget is None
+    owner.tick()
+    adapter.status["operation_id"] = 2
+    owner.tick()
+    assert owner.forget(HOST, 1)
+    owner.tick()
+    adapter.status["operation_id"] = 3
+    owner.tick()
+    assert owner.alias(HOST, "new alias")
+    assert owner._expected_forget is None
+    owner.tick()
+    adapter.status["operation_id"] = 4
+    owner.tick()
+    assert owner._expected_alias == (HOST, "new alias")
+    assert owner.forget(HOST, 1)
+    assert owner._expected_alias is None
+
+
+def test_forget_native_exception_is_owner_error_seven_with_no_retry():
+    adapter, owner = forget_owner()
+    adapter.fail = True
+    assert owner.forget(HOST, 1)
+    owner.tick()
+    owner.tick()
+    assert adapter.calls == [("FORGET", HOST, 1)]
+    assert owner.pending is None and owner.owner_error == 7
+    assert not owner.snapshot()["forget_complete"]
+
+
+def test_ble_forget_wrapper_and_claim_query_do_not_use_legacy_erase():
+    adapter, owner = forget_owner()
+    ble = BleHid(True, "unchanged")
+    assert not ble.host_policy_claimed() and not ble.request_host_forget(HOST, 1)
+    ble._host_policy = owner
+    assert ble.host_policy_claimed()
+    assert ble.request_host_forget(HOST, 1)
+    assert adapter.calls == []
+    owner.tick()
+    assert adapter.calls == [("FORGET", HOST, 1)]
+    ble._erase_stage = "busy"
+    assert not ble.request_host_forget(OTHER, 1)

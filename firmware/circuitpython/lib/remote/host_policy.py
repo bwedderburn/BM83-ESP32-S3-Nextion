@@ -7,7 +7,7 @@ For a new client, LIST's generation field is a one-use recent STATUS packet
 sequence. Only observed successful native TX callbacks for every STATUS
 fragment issue that challenge; a queued send alone never establishes a client.
 """
-from blehid.host_policy import valid_alias, valid_id
+from blehid.host_policy import clean_paused, valid_alias, valid_id
 from utils.ticks import ticks_add, ticks_diff
 from .now_playing import crc16
 
@@ -42,14 +42,14 @@ def decode_command(frame):
         return None
     frame = bytes(frame)
     if (frame[:4] != b"BHC1" or len(frame) != 32 + frame[29] or frame[29] > 24
-            or crc16(frame[:-2]) != int.from_bytes(frame[-2:], "big") or frame[16] > 4
+            or crc16(frame[:-2]) != int.from_bytes(frame[-2:], "big") or frame[16] > 5
             or not int.from_bytes(frame[4:8], "big") or not int.from_bytes(frame[8:12], "big")):
         return None
     target = "".join("%02x" % b for b in frame[21:29])
     target = None if target == "0000000000000000" else target
     payload, opcode = frame[30:-2], frame[16]
-    if (opcode in (0, 1, 3) and target is not None or opcode in (2, 4) and not valid_id(target)
-            or opcode in (0, 1, 2) and payload
+    if (opcode in (0, 1, 3) and target is not None or opcode in (2, 4, 5) and not valid_id(target)
+            or opcode in (0, 1, 2, 5) and payload
             or opcode == 3 and (len(payload) != 2 or not 5 <= int.from_bytes(payload, "big") <= 120)):
         return None
     if opcode == 4:
@@ -150,6 +150,7 @@ class HostPolicyPublisher:
         self._retired_clients = []
         self._policy_request = False
         self._alias_pending = False
+        self._forget_pending = False
         self._sequence = 0
         self._frames, self._index = (), 0
         self._started = self._next_status = self._next_list = None
@@ -202,7 +203,7 @@ class HostPolicyPublisher:
 
     def note_legacy_request(self):
         self._echo_suppressed = True
-        self._policy_request = self._alias_pending = False
+        self._policy_request = self._alias_pending = self._forget_pending = False
         self.result = self.error = 0
         self._next_status = None
 
@@ -246,23 +247,24 @@ class HostPolicyPublisher:
         self.client, self.request, self._last_request = client, request, request
         self._rejection = None
         self._echo_suppressed = False
-        self.result, self.error, self._policy_request, self._alias_pending = 2, 0, False, False
+        self.result, self.error = 2, 0
+        self._policy_request = self._alias_pending = self._forget_pending = False
         self._next_status = None
         if status.get("version") != 1:
-            self.error = 1
+            self.error = 10 if command["opcode"] == 5 else 1
             return False
         try:
             return self._request_action(command, status)
         except Exception:
             # A host-control failure must not stop the media and UART loop.
             self.result, self.error = 2, 10
-            self._policy_request = self._alias_pending = False
+            self._policy_request = self._alias_pending = self._forget_pending = False
             return False
 
     def _request_action(self, command, status):
         opcode, target = command["opcode"], command["target"]
         peers = status.get("peers", ())
-        if opcode in (2, 4):
+        if opcode in (2, 4, 5):
             if not status.get("ready"):
                 self.error = 10
                 return False
@@ -282,7 +284,17 @@ class HostPolicyPublisher:
         if opcode == 0:
             self.result, self._list_dirty = 4, True
             return False
-        if opcode == 4:
+        if opcode == 5:
+            if not status.get("forget_supported"):
+                self.error = 9
+                return False
+            if not clean_paused(status) or peer["connected"]:
+                self.error = 8
+                return False
+            okay = self.ble.request_host_forget(target, command["bond_generation"])
+            self._forget_pending = bool(okay)
+            self._policy_request = bool(okay)
+        elif opcode == 4:
             okay = self.ble.request_host_alias(target, command["payload"].decode("utf8"))
             self._alias_pending = bool(okay)
             self._policy_request = bool(okay)  # Alias also has a native operation identity.
@@ -305,6 +317,10 @@ class HostPolicyPublisher:
             self.result, self.error = 2, status["owner_error"]
         if self._alias_pending and status.get("alias_complete"):
             self._alias_pending = False
+            if not status.get("owner_error"):
+                self.result, self._list_dirty, self._next_status = 3, True, None
+        if self._forget_pending and status.get("forget_complete"):
+            self._forget_pending = False
             if not status.get("owner_error"):
                 self.result, self._list_dirty, self._next_status = 3, True, None
         generation = status.get("peer_generation")

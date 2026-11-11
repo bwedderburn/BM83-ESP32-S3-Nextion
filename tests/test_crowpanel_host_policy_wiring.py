@@ -14,7 +14,7 @@ def section(source, start, end):
 
 def test_ui_exposes_explicit_actions_and_never_falls_back_to_legacy_tokens():
     source = (CPP / "ble_host_ui.cpp").read_text()
-    for caption in ('"Disconnect"', '"Connect"', '"Pair new host"', '"Rename"'):
+    for caption in ('"Disconnect"', '"Connect"', '"Pair new host"', '"Rename"', '"Forget"'):
         assert caption in source
     send = section(source, "bool send_request(", "void close_alias(")
     assert "g_control.begin(" in send and "espnow_send_host_request(" in send
@@ -85,3 +85,33 @@ def test_rename_keys_keep_digits_visible_in_both_letter_cases():
         assert case_key in keys and "Space" in keys and "1#" not in keys
         punctuation.update(keys)
     assert set(string.punctuation) <= punctuation
+
+
+
+def test_forget_confirmation_rechecks_the_named_selection_and_sends_only_on_confirm():
+    source = (CPP / "ble_host_ui.cpp").read_text()
+    opening = section(source, "void forget(", "void refresh(")
+    assert "g_control.can_forget(now)" in opening
+    assert "memcpy(g_forget_id, peer->id" in opening
+    assert "peer->alias" in opening and "peer->id[4]" in opening and "peer->id[7]" in opening
+    assert '"Confirm", 520, 162, 150, confirm_forget' in opening
+    assert "send_request(" not in opening
+    confirm = section(source, "void confirm_forget(", "void forget(")
+    assert confirm.index("g_control.can_forget(now)") < confirm.index("send_request(hp::FORGET)")
+    assert confirm.index("hp::same_id(peer->id, g_forget_id)") < confirm.index("send_request(hp::FORGET)")
+    assert "enabled(g_forget, g_control.can_forget(now));" in source
+    close = section(source, "void close_modal(", "void choose(")
+    assert "g_forget = nullptr" in close and "g_forget_modal = g_forget_error = nullptr" in close
+    for caption, x in (("Disconnect", 20), ("Pair new host", 205), ("Rename", 390), ("Forget", 575)):
+        assert f'"{caption}", {x}, 210, 165,' in source
+
+
+def test_forget_success_precedes_generic_paused_message_and_has_specific_refusals():
+    source = (CPP / "ble_host_ui.cpp").read_text()
+    status = section(source, "void status_text(", "bool send_request(")
+    success = status.index("g_control.result == hp::CONFIRMED && g_control.last_opcode() == hp::FORGET")
+    paused = status.index('"Disconnected. Saved pairings are kept."')
+    message = status.index('"Host forgotten on this unit. Other saved hosts are kept. Remove this unit on that host, then use Pair new host."')
+    assert success < message < paused
+    assert 'state.request_error == 8' in status and '"Disconnect first, then Forget."' in status
+    assert 'state.request_error == 9' in status and '"This audio unit\'s runtime cannot forget hosts yet."' in status

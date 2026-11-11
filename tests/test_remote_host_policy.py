@@ -1,5 +1,7 @@
 """Wire and production dispatcher tests for authenticated-by-peer host intent."""
 from copy import deepcopy
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -10,7 +12,7 @@ from remote.ble_status import BleStatusPublisher, encode_status
 from remote.host_policy import (HostPolicyPublisher, decode_command, decode_fragment, encode_command,
                                 fragments, list_payload, number, status_payload)
 from remote.now_playing import crc16
-from tests.test_blehid_host_policy import Adapter, HOST, OTHER, connected, peer
+from tests.test_blehid_host_policy import Adapter, ForgetAdapter, HOST, OTHER, connected, peer
 from tests.test_main_mute import CODE
 from tests.test_remote_espnow import OTHER_MAC_B, REMOTE_MAC_B, make_remote
 
@@ -28,6 +30,7 @@ class Backend:
     def snapshot_host_status(self): return self.owner.snapshot()
     def request_host_policy(self, mode, target=None, timeout_s=60): return self.owner.request(mode, target, timeout_s)
     def request_host_alias(self, target, alias): return self.owner.alias(target, alias)
+    def request_host_forget(self, target, generation): return self.owner.forget(target, generation)
     def request_pause(self): return self.owner.request("PAUSED")
     def request_enable(self): return self.owner.request("AUTO")
 
@@ -361,3 +364,157 @@ def test_native_tx_callback_failure_cannot_be_relabelled_successful_status_hands
     assert not publisher.request_host(decode_command(encode_command(1, 2, 1, 0, 1)))
     assert remote.tx_completion(first) is True and remote.tx_completion(second) is False
     assert not publisher._established and publisher._challenges == []
+
+
+def forget_publisher():
+    backend, sink, clock = Backend(), Sink(), Clock()
+    backend.adapter = ForgetAdapter()
+    backend.owner = NativeHostPolicy(backend.adapter)
+    backend.owner.tick()
+    publisher = HostPolicyPublisher(sink, backend, 1, clock)
+    admit(publisher, sink)
+    return backend, sink, clock, publisher
+
+
+def forget_command(sequence=7, generation=1, target=HOST):
+    return decode_command(encode_command(1, 2, sequence, 5, generation, target))
+
+
+def test_every_golden_command_decodes_and_reencodes_including_forget():
+    path = Path(__file__).with_name("fixtures") / "ble_host_policy_v1.json"
+    fixture = json.loads(path.read_text())
+    assert fixture["commands"]["forget"] == "42484331a1b2c3d411223344ffffffff05000000030102030405060708005bfb"
+    for name, value in fixture["commands"].items():
+        frame = bytes.fromhex(value)
+        command = decode_command(frame)
+        assert command is not None, name
+        assert encode_command(command["controller_session"], command["client_session"], command["sequence"],
+                              command["opcode"], command["bond_generation"], command["target"],
+                              command["payload"]) == frame, name
+    assert len(bytes.fromhex(fixture["commands"]["forget"])) == 32
+
+
+def test_forget_wire_shape_is_select_shape_with_no_payload_and_opcode_six_is_invalid():
+    assert forget_command()["opcode"] == 5
+    for target, payload in ((None, b""), (HOST, b"x")):
+        with pytest.raises(ValueError):
+            encode_command(1, 2, 1, 5, 1, target, payload)
+    body = bytearray(encode_command(1, 2, 1, 5, 1, HOST)[:-2])
+    body[16] = 6
+    assert decode_command(recalc(bytes(body))) is None
+    with pytest.raises(ValueError):
+        encode_command(1, 2, 1, 6, 1, HOST)
+
+
+@pytest.mark.parametrize("reason,expected", [
+    ("not_ready", 10), ("version", 10), ("stale", 4), ("unlisted", 5), ("unsupported", 9),
+    ("unclean", 8), ("connected_peer", 8),
+])
+def test_forget_rejection_order_uses_deployed_errors_and_performs_no_native_work(reason, expected):
+    backend, sink, clock, publisher = forget_publisher()
+    status = backend.owner.snapshot()
+    command = forget_command()
+    if reason == "not_ready":
+        status.update(ready=False, peer_generation=999, forget_supported=False, advertising=True)
+    elif reason == "version":
+        status.update(version=0, ready=False, peer_generation=999, forget_supported=False)
+    elif reason == "stale":
+        command["bond_generation"] = 999
+        status.update(forget_supported=False, advertising=True)
+    elif reason == "unlisted":
+        command["target"] = "9999999999999999"
+        status.update(forget_supported=False, advertising=True)
+    elif reason == "unsupported":
+        status.update(forget_supported=False, advertising=True)
+    elif reason == "unclean":
+        status["advertising"] = True
+    else:
+        status["peers"] = (peer(connected=True), peer(OTHER))
+    backend.snapshot_host_status = lambda: status
+    assert not publisher.request_host(command)
+    assert (publisher.result, publisher.error) == (2, expected)
+    assert not publisher._policy_request and not publisher._forget_pending
+    assert backend.adapter.calls == [] and backend.owner.pending is None
+
+
+def test_forget_missing_optional_native_method_reports_error_nine_with_version_one():
+    backend, sink, clock = Backend(), Sink(), Clock()
+    publisher = HostPolicyPublisher(sink, backend, 1, clock)
+    admit(publisher, sink)
+    assert backend.owner.version == 1 and backend.owner.ready()
+    assert not publisher.request_host(forget_command())
+    assert (publisher.result, publisher.error) == (2, 9)
+    assert backend.adapter.calls == []
+
+
+def test_forget_accepts_nonresumable_target_but_enqueue_is_not_completed():
+    backend, sink, clock, publisher = forget_publisher()
+    backend.owner.peers = (peer(resumable=False), peer(OTHER))
+    assert not publisher.request_host(forget_command())
+    assert (publisher.result, publisher.error) == (1, 0)
+    assert publisher._policy_request and publisher._forget_pending
+    assert backend.adapter.calls == []
+    backend.owner.tick()
+    assert backend.adapter.calls == [("FORGET", HOST, 1)]
+    _, body = drain_one(publisher, sink)
+    assert body[1:3] == bytes((1, 0)) and int.from_bytes(body[11:15], "big") == 2
+    assert not backend.owner.snapshot()["forget_complete"]
+    backend.adapter.status.update(operation_id=2, policy_generation=2, bond_generation=2, target_id=None)
+    backend.adapter.peers = [peer(OTHER, generation=2)]
+    backend.owner.tick()
+    _, body = drain_one(publisher, sink)
+    assert body[1:3] == bytes((3, 0)) and int.from_bytes(body[11:15], "big") == 2
+    assert not publisher._forget_pending and publisher._policy_request
+
+
+def test_forget_native_refusal_and_completed_replay_preserve_the_original_result():
+    backend, sink, clock, publisher = forget_publisher()
+    command = forget_command()
+    backend.request_host_forget = lambda *_args: False
+    assert not publisher.request_host(command)
+    assert (publisher.result, publisher.error) == (2, 6)
+    assert not publisher.request_host(command)
+    assert (publisher.result, publisher.error) == (2, 6) and backend.adapter.calls == []
+
+    backend.request_host_forget = lambda identity, generation: backend.owner.forget(identity, generation)
+    command = forget_command(sequence=8)
+    assert not publisher.request_host(command)
+    assert not publisher.request_host(command)
+    assert backend.owner.pending == ("FORGET", HOST, 1)
+    backend.owner.tick()
+    backend.adapter.status.update(operation_id=2, policy_generation=2, bond_generation=2, target_id=None)
+    backend.adapter.peers = [peer(OTHER, generation=2)]
+    backend.owner.tick()
+    drain_one(publisher, sink)
+    assert publisher.result == 3
+    assert not publisher.request_host(command)
+    assert publisher.result == 3 and backend.adapter.calls == [("FORGET", HOST, 1)]
+
+
+def test_forget_pending_is_cleared_by_legacy_policy_and_exception_resets():
+    backend, sink, clock, publisher = forget_publisher()
+    assert not publisher.request_host(forget_command())
+    assert publisher._forget_pending
+    publisher.note_legacy_request()
+    assert not publisher._forget_pending and not publisher._alias_pending and not publisher._policy_request
+    assert not publisher.request_host(forget_command(sequence=8))
+    # Still queued in the owner, so the second request is honestly refused.
+    assert (publisher.result, publisher.error) == (2, 10)
+    assert not publisher._forget_pending
+    backend.owner.request("PAUSED")
+    backend.owner.tick()
+    backend.adapter.status["operation_id"] = 2
+    backend.owner.tick()
+    assert not publisher.request_host(forget_command(sequence=9))
+    assert publisher._forget_pending
+    assert publisher.request_host(decode_command(encode_command(1, 2, 10, 1)))
+    assert not publisher._forget_pending
+    backend.owner.tick()
+    backend.adapter.status["operation_id"] = 3
+    backend.owner.tick()
+    def fail(*_args):
+        raise RuntimeError("forget wrapper failure")
+    backend.request_host_forget = fail
+    assert not publisher.request_host(forget_command(sequence=11))
+    assert (publisher.result, publisher.error) == (2, 10)
+    assert not publisher._forget_pending and not publisher._alias_pending and not publisher._policy_request

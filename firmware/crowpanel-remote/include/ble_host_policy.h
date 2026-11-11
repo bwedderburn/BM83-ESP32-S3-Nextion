@@ -8,7 +8,7 @@ static const size_t MAX_PEERS = 8, MAX_ALIAS = 24, MAX_BODY = 360;
 static const size_t FRAGMENT_DATA = 45, MAX_FRAGMENTS = 8, STATUS_BYTES = 63;
 static const uint32_t FRESH_MS = 5000, ASSEMBLY_MS = 2000, REQUEST_MS = 15000;
 static const uint32_t HANDSHAKE_RETRY_MS = 750, HANDSHAKE_DEADLINE_MS = 2500, HANDSHAKE_COOLDOWN_MS = 1000;
-enum Opcode { LIST = 0, DISCONNECT = 1, SELECT = 2, ENROLL = 3, ALIAS = 4 };
+enum Opcode { LIST = 0, DISCONNECT = 1, SELECT = 2, ENROLL = 3, ALIAS = 4, FORGET = 5 };
 enum Mode { PAUSED = 0, AUTO = 1, ENROLL_MODE = 2, UNKNOWN_MODE = 255 };
 enum State { PAUSED_STATE = 0, SWITCHING = 1, WAITING = 2, ENROLLING = 3,
              CONNECTED = 4, ERROR_STATE = 5, UNSUPPORTED = 6 };
@@ -64,6 +64,13 @@ struct Status {
     uint32_t reason, last_disconnect_generation;
     uint8_t target[8], connected[8];
 };
+inline bool clean_paused(const Status &status) {
+    const uint16_t required = READY | PERSISTED;
+    const uint16_t active = ADVERTISING | CONNECTED_FLAG;
+    return status.requested_mode == PAUSED && status.applied_mode == PAUSED && status.state == PAUSED_STATE &&
+           (status.flags & required) == required && !(status.flags & active) &&
+           !status.error_domain && !status.error_code;
+}
 struct Peer { uint8_t id[8], flags; char alias[MAX_ALIAS + 1]; };
 struct PeerList { uint32_t bond_generation; uint8_t count; Peer peers[MAX_PEERS]; };
 
@@ -218,10 +225,10 @@ private:
 inline size_t command(uint8_t *out, size_t capacity, uint32_t controller, uint32_t client,
                       uint32_t request, Opcode op, uint32_t generation,
                       const uint8_t *target = nullptr, const uint8_t *payload = nullptr, size_t payload_size = 0) {
-    if (!out || !controller || !client || capacity < 32 + payload_size || payload_size > MAX_ALIAS || op < LIST || op > ALIAS) return 0;
+    if (!out || !controller || !client || capacity < 32 + payload_size || payload_size > MAX_ALIAS || op < LIST || op > FORGET) return 0;
     const bool has_target = target && !id_none(target);
-    if ((op == SELECT || op == ALIAS) != has_target) return 0;
-    if ((op == LIST || op == DISCONNECT || op == SELECT) && payload_size) return 0;
+    if ((op == SELECT || op == ALIAS || op == FORGET) != has_target) return 0;
+    if ((op == LIST || op == DISCONNECT || op == SELECT || op == FORGET) && payload_size) return 0;
     if (op == ALIAS && !valid_alias(payload, payload_size)) return 0;
     if (op == ENROLL && (!payload || payload_size != 2 || ble_status::read16(payload) < 5 || ble_status::read16(payload) > 120)) return 0;
     memcpy(out, "BHC1", 4); put32(out + 4, controller); put32(out + 8, client); put32(out + 12, request);
@@ -260,6 +267,12 @@ public:
         return can_manage(now) && !holding() && peer && (peer->flags & RESUMABLE);
     }
     bool can_alias(uint32_t now) const { return can_manage(now) && !holding() && selection(now); }
+    bool can_forget(uint32_t now) const {
+        const Peer *peer = selection(now);
+        return can_manage(now) && !holding() && peer && !(peer->flags & PEER_CONNECTED) &&
+               clean_paused(decoder.status);
+    }
+    Opcode last_opcode() const { return opcode_; }
 
     // Discovery is read-only. Unknown/rebooted clients establish admission with
     // a recent complete STATUS sequence, not by sending a mutating command.
@@ -294,21 +307,22 @@ public:
         const Peer *peer = selection(now);
         if (op == SELECT && (!peer || !(peer->flags & RESUMABLE))) return 0;
         if (op == ALIAS && !peer) return 0;
+        if (op == FORGET && !can_forget(now)) return 0;
         uint8_t seconds[2]; put16(seconds, enrollment_seconds);
         const size_t alias_size = alias ? strlen(alias) : 0;
         const uint8_t *payload = op == ENROLL ? seconds : reinterpret_cast<const uint8_t *>(alias);
         const size_t bytes = op == ENROLL ? 2 : op == ALIAS ? alias_size : 0;
         const uint32_t request = sequence_ + 1;
         const size_t length = command(frame, capacity, decoder.session, client_session, request, op,
-                                      op == LIST ? decoder.status_sequence : (op == SELECT || op == ALIAS) ? decoder.status.bond_generation : 0,
-                                      (op == SELECT || op == ALIAS) ? peer->id : nullptr,
+                                      op == LIST ? decoder.status_sequence : (op == SELECT || op == ALIAS || op == FORGET) ? decoder.status.bond_generation : 0,
+                                      (op == SELECT || op == ALIAS || op == FORGET) ? peer->id : nullptr,
                                       payload, bytes);
         if (!length) return 0;
         sequence_ = request; request_ = request; opcode_ = op; session_ = decoder.session;
         baseline_ = decoder.status_sequence; baseline_operation_ = decoder.status.native_operation;
-        operation_ = 0; observed_own_ = false;
+        operation_ = 0; observed_own_ = false; bond_generation_ = decoder.status.bond_generation;
         sent_at_ = now; timeout_ = REQUEST_MS + (op == ENROLL ? enrollment_seconds * 1000U : 0);
-        memset(target_, 0, sizeof(target_)); if (peer && (op == SELECT || op == ALIAS)) memcpy(target_, peer->id, 8);
+        memset(target_, 0, sizeof(target_)); if (peer && (op == SELECT || op == ALIAS || op == FORGET)) memcpy(target_, peer->id, 8);
         memset(alias_, 0, sizeof(alias_)); if (op == ALIAS && bytes) memcpy(alias_, alias, bytes);
         pending_ = true; result = PENDING; return length;
     }
@@ -369,6 +383,10 @@ public:
                         if (connected) { finish(CONFIRMED); return; }
                         if (s.state == ENROLLING) result = PAIRING;
                         else if (persisted && s.state == PAUSED_STATE && s.requested_mode == PAUSED && s.applied_mode == PAUSED) { finish(ENROLLMENT_ENDED); return; }
+                    } else if (opcode_ == FORGET && s.request_result == 3 && clean_paused(s) &&
+                               !same_id(s.target, target_) && s.bond_generation != bond_generation_ &&
+                               decoder.coherent_list(now) && !decoder.find(target_, now)) {
+                        finish(CONFIRMED); return;
                     } else if (opcode_ == ALIAS && s.request_result == 3 && persisted) {
                         const Peer *peer = decoder.find(target_, now);
                         if (peer && strcmp(peer->alias, alias_) == 0) { finish(CONFIRMED); return; }
@@ -385,14 +403,14 @@ private:
     uint8_t selected_id_[8], target_[8];
     uint8_t handshake_frame_[32], handshake_attempts_;
     char alias_[MAX_ALIAS + 1];
-    uint32_t sequence_, request_, session_, observed_session_, baseline_, baseline_operation_, operation_, sent_at_, timeout_;
+    uint32_t sequence_, request_, session_, observed_session_, baseline_, baseline_operation_, operation_, bond_generation_, sent_at_, timeout_;
     uint32_t admission_session_, handshake_request_, handshake_session_, handshake_started_, handshake_last_send_,
              handshake_retry_at_, challenge_session_, last_challenge_;
     Opcode opcode_;
     void clear() {
         decoder.reset(); result = IDLE; selected_ = pending_ = observed_own_ = false;
         memset(selected_id_, 0, 8); memset(target_, 0, 8); memset(alias_, 0, sizeof(alias_));
-        sequence_ = request_ = session_ = observed_session_ = baseline_ = baseline_operation_ = operation_ = sent_at_ = timeout_ = 0; opcode_ = LIST;
+        sequence_ = request_ = session_ = observed_session_ = baseline_ = baseline_operation_ = operation_ = bond_generation_ = sent_at_ = timeout_ = 0; opcode_ = LIST;
         reset_admission();
     }
     void reset_admission() {

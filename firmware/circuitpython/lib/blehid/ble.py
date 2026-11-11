@@ -530,6 +530,13 @@ class BleHid:
         return bool(self._host_policy is not None and self._erase_stage == _ERASE_IDLE
                     and self._host_policy.alias(identity, alias))
 
+    def request_host_forget(self, identity, generation):
+        return bool(self._host_policy is not None and self._erase_stage == _ERASE_IDLE
+                    and self._host_policy.forget(identity, generation))
+
+    def host_policy_claimed(self):
+        return self._host_policy is not None
+
     def input_generation(self):
         """Changes on ownership/connection/readiness transitions to cancel old holds."""
         return self._host_policy.input_generation if self._host_policy is not None else 0

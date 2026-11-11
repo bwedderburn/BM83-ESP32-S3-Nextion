@@ -25,7 +25,7 @@ def host_policy_binary(tmp_path_factory):
     return binary
 
 
-@pytest.mark.parametrize("scenario", ("codec", "fragments", "ordering", "completion", "generations", "operations", "golden-commands", "durability", "supersession", "handshake", "handshake-reboots", "admission-lost", "link-history", "enroll-timeout"))
+@pytest.mark.parametrize("scenario", ("codec", "fragments", "ordering", "completion", "generations", "operations", "golden-commands", "durability", "supersession", "handshake", "handshake-reboots", "admission-lost", "link-history", "enroll-timeout", "forget"))
 def test_production_host_policy(host_policy_binary, scenario):
     run = subprocess.run(  # nosec B603 - locally built executable, fixed scenario argument
         [str(host_policy_binary), scenario], text=True, capture_output=True)
