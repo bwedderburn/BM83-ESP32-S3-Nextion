@@ -351,12 +351,14 @@ static bool forget_key_matches(int type, const union ble_store_value *key_row,
 }
 static int forget_family(nvs_handle_t handle, int type, const hp_address_t *target,
     bool require_absent) {
+    const char *prefix=store_prefix(type);
+    if (!prefix) { return HP_STORAGE; }
     unsigned count; int rc=forget_ram_count(type,&count);
     if (rc) { return rc; }
     uint32_t matched=0; unsigned saved_count=0;
     unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
     for (unsigned slot=1;slot<=limit;slot++) {
-        char key[16]; snprintf(key,sizeof(key),"%s_%u",store_prefix(type),slot);
+        char key[16]; snprintf(key,sizeof(key),"%s_%u",prefix,slot);
         union ble_store_value saved; memset(&saved,0,sizeof(saved));
         size_t size=store_size(type);
         rc=nvs_get_blob(handle,key,&saved,&size);
@@ -403,9 +405,11 @@ static int forget_records(void *unused, const hp_address_t *target, bool apply) 
     }
     for (unsigned family=0;apply && !rc && family<sizeof(families)/sizeof(families[0]);family++) {
         int type=families[family];
+        const char *prefix=store_prefix(type);
+        if (!prefix) { rc=HP_STORAGE; break; }
         unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
         for (unsigned slot=1;!rc && slot<=limit;slot++) {
-            char key[16]; snprintf(key,sizeof(key),"%s_%u",store_prefix(type),slot);
+            char key[16]; snprintf(key,sizeof(key),"%s_%u",prefix,slot);
             union ble_store_value saved; memset(&saved,0,sizeof(saved));
             size_t size=store_size(type);
             rc=nvs_get_blob(handle,key,&saved,&size);

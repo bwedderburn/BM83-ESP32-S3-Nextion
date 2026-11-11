@@ -28,24 +28,26 @@ def test_production_core_fault_injection(tmp_path):
     assert "PASS production host-policy core" in result.stdout
 
 
-def test_production_esp32_bridge_bodies_with_fault_injection(tmp_path):
-    compiler = shutil.which("gcc")
-    if compiler is None:
-        pytest.skip("Production ESP32 bridge harness requires established Linux/WSL GCC")
-    source = (RECIPE / "native/HostPolicy.c").read_text()
+def _bridge_translation_unit(source, cases, extra_declarations=""):
     header = (RECIPE / "native/HostPolicy.h").read_text()
-    # Replace only EXTERNAL headers/types/APIs with faithful host stubs. Every
-    # production function body (queues, service, NVS verification, filters,
-    # snapshots and GAP callbacks) is compiled verbatim, not reimplemented.
+    # Only external headers are stubbed; production function bodies stay intact.
     strip_headers = lambda value: "\n".join(line for line in value.splitlines()
                                             if not line.startswith(("#include", "#pragma once"))) + "\n"
     qstrs = set(re.findall(r"MP_QSTR_(\w+)", source))
     qstrs.update(re.findall(r"HP_(?:UINT|BOOL)\((\w+)\)", source))
     declarations = "enum {" + ",".join("MP_QSTR_" + value for value in sorted(qstrs)) + "};\n"
+    return ('#include "host_policy_port_stubs.h"\n' + declarations + extra_declarations +
+            strip_headers(header) + strip_headers(source) + cases)
+
+
+def test_production_esp32_bridge_bodies_with_fault_injection(tmp_path):
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("Production ESP32 bridge harness requires established Linux/WSL GCC")
+    source = (RECIPE / "native/HostPolicy.c").read_text()
     combined = tmp_path / "production-port-under-test.c"
-    combined.write_text('#include "host_policy_port_stubs.h"\n' + declarations +
-                        strip_headers(header) + strip_headers(source) +
-                        (RECIPE / "tests/host_policy_port_test.c").read_text())
+    combined.write_text(_bridge_translation_unit(
+        source, (RECIPE / "tests/host_policy_port_test.c").read_text()))
     executable = tmp_path / "production-port-tests"
     subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wmissing-prototypes", "-Wold-style-definition",
                     "-Wno-misleading-indentation",
@@ -55,6 +57,81 @@ def test_production_esp32_bridge_bodies_with_fault_injection(tmp_path):
                    check=True, capture_output=True, text=True, timeout=30)
     result = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=10)
     assert "PASS production ESP32 bridge bodies" in result.stdout
+
+
+@pytest.mark.parametrize("stage", ["family_validation", "apply"])
+def test_forget_null_store_prefix_refuses_before_nvs_access(tmp_path, stage):
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("Production ESP32 bridge harness requires established Linux/WSL GCC")
+    source = (RECIPE / "native/HostPolicy.c").read_text()
+    # Inject a failed prefix lookup without replacing the production lookup
+    # body or any Forget body. Normal lookups still use the real mapping.
+    source, renamed = re.subn(r"(?m)^(static const char \*)store_prefix(\(int type\))",
+                              r"\1production_store_prefix\2", source)
+    assert renamed == 1
+    cases = (RECIPE / "tests/host_policy_port_test.c").read_text()
+    cases = cases.replace("store_prefix(", "production_store_prefix(")
+    cases = cases.replace("int main(void){", "static int baseline_main(void){", 1)
+    cases = cases.replace("int nvs_get_blob(", "static int original_nvs_get_blob(", 1)
+    cases = cases.replace("void nvs_close(", "static void original_nvs_close(", 1)
+    declarations = """
+static bool prefix_failure;
+static unsigned prefix_failure_after_reads, prefix_nvs_reads, prefix_nvs_closes;
+static const char *store_prefix(int type);
+"""
+    injected = r"""
+static const char *store_prefix(int type) {
+    if (prefix_failure && prefix_nvs_reads >= prefix_failure_after_reads) return NULL;
+    return production_store_prefix(type);
+}
+int nvs_get_blob(nvs_handle_t h,const char *key,void *value,size_t *size) {
+    prefix_nvs_reads++;
+    return original_nvs_get_blob(h,key,value,size);
+}
+void nvs_close(nvs_handle_t h) {
+    prefix_nvs_closes++;
+    original_nvs_close(h);
+}
+int main(void) {
+    baseline_main();
+    reset();
+    hp_address_t target=core.peers[0].address;
+    memset(records,0,sizeof(records));
+    memset(nvs_records,0,sizeof(nvs_records));
+    memset(&test_store,0,sizeof(test_store));
+    prefix_nvs_reads=prefix_nvs_closes=0;
+    prefix_failure_after_reads=FAIL_AFTER;
+    prefix_failure=true;
+    TEST_CALL
+    assert(prefix_nvs_reads==FAIL_AFTER);
+    assert(prefix_nvs_closes==EXPECTED_CLOSES);
+    assert(!test_nimble_lock_depth && !test_lock_depth);
+    assert(!erased_rows && !deletes && !nvs_commits);
+    puts("PASS null prefix refused before NVS access with cleanup intact");
+    return 0;
+}
+"""
+    # Empty five-family validation reads 8+8+8+24+8 slots. Fail the next lookup
+    # to exercise the apply loop before its first read, erase or commit.
+    if stage == "apply":
+        injected = injected.replace("FAIL_AFTER", "56").replace("EXPECTED_CLOSES", "1")
+        injected = injected.replace("TEST_CALL", "assert(forget_records(NULL,&target,true)==HP_STORAGE);")
+    else:
+        injected = injected.replace("FAIL_AFTER", "0").replace("EXPECTED_CLOSES", "0")
+        injected = injected.replace(
+            "TEST_CALL", "assert(forget_family(1,BLE_STORE_OBJ_TYPE_OUR_SEC,&target,false)==HP_STORAGE);")
+    combined = tmp_path / "null-prefix-port.c"
+    combined.write_text(_bridge_translation_unit(source, cases + injected, declarations))
+    executable = tmp_path / "null-prefix-port"
+    subprocess.run([compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-Wmissing-prototypes",
+                    "-Wold-style-definition", "-Wno-misleading-indentation",
+                    "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                    "-I", str(RECIPE / "native"), "-I", str(RECIPE / "tests"),
+                    str(RECIPE / "native/HostPolicyCore.c"), str(combined), "-o", str(executable)],
+                   check=True, capture_output=True, text=True, timeout=30)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=10)
+    assert "PASS null prefix refused before NVS access with cleanup intact" in result.stdout
 
 
 @pytest.mark.parametrize("name", ["HostPolicy.c", "HostPolicy.h", "HostPolicyCore.c", "HostPolicyCore.h"])

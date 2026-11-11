@@ -466,10 +466,10 @@ index 8d8e727..31f7cec 100644
  void bleio_connection_clear(bleio_connection_internal_t *self);
 diff --git a/ports/espressif/common-hal/_bleio/HostPolicy.c b/ports/espressif/common-hal/_bleio/HostPolicy.c
 new file mode 100644
-index 0000000..068569f
+index 0000000..047902a
 --- /dev/null
 +++ b/ports/espressif/common-hal/_bleio/HostPolicy.c
-@@ -0,0 +1,1090 @@
+@@ -0,0 +1,1094 @@
 +// SPDX-License-Identifier: MIT
 +// BM83 ESP32-only capability. No key material is exposed to Python or logging.
 +#include "common-hal/_bleio/HostPolicy.h"
@@ -823,12 +823,14 @@ index 0000000..068569f
 +}
 +static int forget_family(nvs_handle_t handle, int type, const hp_address_t *target,
 +    bool require_absent) {
++    const char *prefix=store_prefix(type);
++    if (!prefix) { return HP_STORAGE; }
 +    unsigned count; int rc=forget_ram_count(type,&count);
 +    if (rc) { return rc; }
 +    uint32_t matched=0; unsigned saved_count=0;
 +    unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
 +    for (unsigned slot=1;slot<=limit;slot++) {
-+        char key[16]; snprintf(key,sizeof(key),"%s_%u",store_prefix(type),slot);
++        char key[16]; snprintf(key,sizeof(key),"%s_%u",prefix,slot);
 +        union ble_store_value saved; memset(&saved,0,sizeof(saved));
 +        size_t size=store_size(type);
 +        rc=nvs_get_blob(handle,key,&saved,&size);
@@ -875,9 +877,11 @@ index 0000000..068569f
 +    }
 +    for (unsigned family=0;apply && !rc && family<sizeof(families)/sizeof(families[0]);family++) {
 +        int type=families[family];
++        const char *prefix=store_prefix(type);
++        if (!prefix) { rc=HP_STORAGE; break; }
 +        unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
 +        for (unsigned slot=1;!rc && slot<=limit;slot++) {
-+            char key[16]; snprintf(key,sizeof(key),"%s_%u",store_prefix(type),slot);
++            char key[16]; snprintf(key,sizeof(key),"%s_%u",prefix,slot);
 +            union ble_store_value saved; memset(&saved,0,sizeof(saved));
 +            size_t size=store_size(type);
 +            rc=nvs_get_blob(handle,key,&saved,&size);
