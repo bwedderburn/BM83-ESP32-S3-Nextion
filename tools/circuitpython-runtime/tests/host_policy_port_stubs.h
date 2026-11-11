@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <setjmp.h>
 #include "HostPolicyCore.h"
 #define MYNEWT_VAL(name) MYNEWT_VAL_##name
 #define MYNEWT_VAL_BLE_WHITELIST 1
@@ -54,7 +55,7 @@ enum { BLE_HS_EAGAIN=1,BLE_HS_ENOENT=5,BLE_HS_ENOMEM=6,BLE_HS_ENOTCONN=7,BLE_HS_
 #define BLE_HCI_OP(group,command) (((group)<<10)|(command))
 #define BLE_HCI_OGF_LE 8
 #define BLE_HCI_OCF_LE_CLR_RESOLV_LIST 0x29
-enum { BLE_STORE_OBJ_TYPE_OUR_SEC=1,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CCCD,BLE_STORE_OBJ_TYPE_CSFC,BLE_STORE_OBJ_TYPE_LOCAL_IRK,BLE_STORE_OBJ_TYPE_PEER_ADDR };
+enum { BLE_STORE_OBJ_TYPE_OUR_SEC=1,BLE_STORE_OBJ_TYPE_PEER_SEC=2,BLE_STORE_OBJ_TYPE_CCCD=3,BLE_STORE_OBJ_TYPE_PEER_ADDR=6,BLE_STORE_OBJ_TYPE_LOCAL_IRK=7,BLE_STORE_OBJ_TYPE_CSFC=8 };
 struct ble_store_key_sec { ble_addr_t peer_addr; uint8_t idx; };
 struct ble_store_key_cccd { ble_addr_t peer_addr; uint16_t chr_val_handle; uint8_t idx; };
 struct ble_store_key_csfc { ble_addr_t peer_addr; uint8_t idx; };
@@ -76,12 +77,18 @@ struct { ble_store_read_fn *store_read_cb; ble_store_write_fn *store_write_cb; b
 typedef struct {
     struct ble_store_value_cccd _ble_store_config_cccds[CONFIG_BT_NIMBLE_MAX_CCCDS];
     int _ble_store_config_num_cccds;
+    int _ble_store_config_num_our_secs, _ble_store_config_num_peer_secs, _ble_store_config_num_csfcs;
     int _ble_store_config_num_rpa_recs;
+    struct ble_store_value_rpa_rec _ble_store_config_rpa_recs[CONFIG_BT_NIMBLE_MAX_BONDS];
 } ble_store_config_vars_t;
 extern ble_store_config_vars_t *ble_store_config_vars;
 #define ble_store_config_cccds (ble_store_config_vars->_ble_store_config_cccds)
 #define ble_store_config_num_cccds (ble_store_config_vars->_ble_store_config_num_cccds)
+#define ble_store_config_num_our_secs (ble_store_config_vars->_ble_store_config_num_our_secs)
+#define ble_store_config_num_peer_secs (ble_store_config_vars->_ble_store_config_num_peer_secs)
+#define ble_store_config_num_csfcs (ble_store_config_vars->_ble_store_config_num_csfcs)
 #define ble_store_config_num_rpa_recs (ble_store_config_vars->_ble_store_config_num_rpa_recs)
+#define ble_store_config_rpa_recs (ble_store_config_vars->_ble_store_config_rpa_recs)
 int ble_store_config_read(int,const union ble_store_key *,union ble_store_value *);
 int ble_store_config_write(int,const union ble_store_value *);
 int ble_store_config_delete(int,const union ble_store_key *);
@@ -99,6 +106,7 @@ int nvs_open(const char *,int,nvs_handle_t *);
 int nvs_set_blob(nvs_handle_t,const char *,const void *,size_t);
 int nvs_get_blob(nvs_handle_t,const char *,void *,size_t *);
 int nvs_commit(nvs_handle_t);
+int nvs_erase_key(nvs_handle_t,const char *);
 void nvs_close(nvs_handle_t);
 int ble_gap_adv_stop(void);
 int ble_gap_ext_adv_stop(uint8_t);
@@ -143,5 +151,13 @@ mp_obj_t mp_obj_new_str(const char *,size_t);
 static inline mp_obj_t mp_obj_new_dict(int unused) { (void)unused; assert(!test_lock_depth); memset(test_dict_values,0,sizeof(mp_obj_t)*256); return 8; }
 static inline void mp_obj_dict_store(mp_obj_t dict,mp_obj_t key,mp_obj_t value) { (void)dict; assert(!test_lock_depth && key<256); test_dict_values[key]=value; }
 static inline mp_obj_t mp_obj_new_tuple(size_t n,const mp_obj_t *p) { (void)n;(void)p;assert(!test_lock_depth);return 12; }
-static inline __attribute__((noreturn)) void mp_raise_RuntimeError(const char *s) { fprintf(stderr,"unexpected VM RuntimeError: %s\n",s);abort(); }
-static inline __attribute__((noreturn)) void mp_raise_ValueError(const char *s) { fprintf(stderr,"unexpected VM ValueError: %s\n",s);abort(); }
+extern bool test_raise_armed;
+extern jmp_buf test_raise_jump;
+static inline __attribute__((noreturn)) void mp_raise_RuntimeError(const char *s) {
+    if (test_raise_armed) { longjmp(test_raise_jump,1); }
+    fprintf(stderr,"unexpected VM RuntimeError: %s\n",s);abort();
+}
+static inline __attribute__((noreturn)) void mp_raise_ValueError(const char *s) {
+    if (test_raise_armed) { longjmp(test_raise_jump,2); }
+    fprintf(stderr,"unexpected VM ValueError: %s\n",s);abort();
+}

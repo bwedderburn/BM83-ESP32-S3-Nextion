@@ -28,4 +28,5 @@ mp_obj_t bleio_host_policy_peers(void);
 mp_obj_t bleio_host_policy_status(void);
 mp_obj_t bleio_host_policy_request(mp_obj_t mode, mp_obj_t target, mp_int_t timeout_s);
 mp_obj_t bleio_host_policy_alias(mp_obj_t target, mp_obj_t alias);
+mp_obj_t bleio_host_policy_forget(mp_obj_t target, mp_obj_t generation);
 mp_obj_t bleio_host_policy_arm_input(mp_obj_t, mp_obj_t, mp_obj_t, mp_obj_t);

@@ -100,8 +100,15 @@ No connected-device acceptance follows from a successful build.
 
 The native policy owns persistent PAUSED/AUTO selection, a bounded ENROLL window,
 saved-identity inventory and owner aliases. It does not expose bonding keys to
-Python, rotate the local identity, replace the HID report map, erase old bonds or
-evict records on capacity failure. The default for missing/corrupt policy or a
+Python, rotate the local identity, replace the HID report map or evict records
+on capacity failure. Ordinary transitions preserve saved bonds. The optional
+`forget_host` version-1 API supports one explicitly confirmed saved-host
+removal from clean persisted PAUSED. Its preflight verifies RAM/NVS agreement
+and key uniqueness, then each exact NVS row is erased and read back before its
+RAM row is removed. Other hosts and the local IRK keep their bytes. See
+[Forget one saved host](HOST-POLICY-API.md#forget-one-saved-host) for completion,
+partial-failure recovery and the ESP-NOW transport risk. This addition is
+host-tested source with native build, installation and acceptance pending. The default for missing/corrupt policy or a
 native failure is closed admission. Explicit Disconnect remains paused across
 boot; AUTO admits only the selected saved identity.
 

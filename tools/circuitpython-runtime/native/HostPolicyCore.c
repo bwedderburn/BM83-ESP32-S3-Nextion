@@ -3,7 +3,7 @@
 #include <string.h>
 #define HP_MAGIC 0x31485042u
 int hp_submit(hp_queue_t *queue, hp_command_t *command) {
-    if (queue->pending && (command->alias || command->mode!=HP_PAUSED)) { return HP_QUEUE_FULL; }
+    if (queue->pending && (command->alias || command->forget || command->mode!=HP_PAUSED)) { return HP_QUEUE_FULL; }
     command->operation=++queue->next_operation;
     if (!command->operation) { command->operation=++queue->next_operation; }
     queue->command=*command; queue->pending=true; return 0;
@@ -161,6 +161,47 @@ int hp_refresh(hp_core_t *p) {
 static hp_peer_t *find(hp_core_t *p, uint64_t id) {
     for (size_t i=0;i<p->peer_count;i++) { if (p->peers[i].id==id) { return &p->peers[i]; } }
     return NULL;
+}
+bool hp_forget_allowed(const hp_status_t *s, uint16_t handle) {
+    return s->state==HP_STATE_PAUSED && s->requested_mode==HP_PAUSED &&
+        s->applied_mode==HP_PAUSED && s->persisted && handle==HP_INVALID_HANDLE &&
+        !s->connected && s->error_domain==HP_DOMAIN_NONE && !s->error_code;
+}
+void hp_forget(hp_core_t *p, uint64_t id, uint32_t generation) {
+    if (!hp_forget_allowed(&p->status,p->handle)) { hp_fail(p,HP_DOMAIN_POLICY,HP_INVALID); return; }
+    int rc=hp_refresh(p);
+    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    if (generation!=p->status.bond_generation) { hp_fail(p,HP_DOMAIN_POLICY,HP_STALE); return; }
+    hp_peer_t *peer=find(p,id);
+    if (!peer) { hp_fail(p,HP_DOMAIN_POLICY,HP_NO_TARGET); return; }
+    hp_address_t address=peer->address;
+    rc=p->backend.forget ? p->backend.forget(p->backend.context,&address,false) : HP_STORAGE;
+    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    rc=p->backend.stop_advertising(p->backend.context);
+    if (rc) { hp_fail(p,HP_DOMAIN_NIMBLE,rc); return; }
+    rc=p->backend.filter(p->backend.context,NULL);
+    if (rc) { hp_fail(p,HP_DOMAIN_NIMBLE,rc); return; }
+
+    // Pause and verify the policy before deleting keys. A failed readback must
+    // retain the prior selection and aliases for hp_fail's durable PAUSED retry.
+    hp_blob_t old=p->blob;
+    if (hp_address_equal(&p->blob.selected,&address)) {
+        memset(&p->blob.selected,0,sizeof(p->blob.selected));
+    }
+    for (unsigned i=0;i<HP_MAX_PEERS;i++) {
+        if (hp_address_equal(&p->blob.aliases[i].address,&address)) {
+            memset(&p->blob.aliases[i],0,sizeof(p->blob.aliases[i]));
+        }
+    }
+    rc=commit(p,HP_PAUSED,NULL);
+    if (rc) { p->blob=old; hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    p->status.target_id=hp_identity_id(&p->blob.selected);
+    rc=p->backend.forget(p->backend.context,&address,true);
+    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    rc=hp_refresh(p);
+    if (rc || find(p,id) || p->status.bond_generation==generation) {
+        hp_fail(p,HP_DOMAIN_NVS,rc ? rc : HP_STORAGE); return;
+    }
 }
 static bool enrollment_existing(const hp_core_t *p, uint64_t id) {
     for (size_t i=0;i<p->enrollment_existing_count;i++) { if (p->enrollment_existing[i]==id) { return true; } }

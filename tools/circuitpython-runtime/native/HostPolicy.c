@@ -292,6 +292,148 @@ static int persistent_match(int type, const union ble_store_value *value, int *d
     if (reason) { *detail=durable_error_code(type,reason); }
     nvs_close(handle); return result;
 }
+
+// Forget runs only on the serialized host task. The host lock keeps each RAM
+// family stable while its exact persistent keys are validated and removed.
+static int forget_ram_count(int type, unsigned *count) {
+    int value;
+    switch (type) {
+        case BLE_STORE_OBJ_TYPE_OUR_SEC: value=ble_store_config_num_our_secs; break;
+        case BLE_STORE_OBJ_TYPE_PEER_SEC: value=ble_store_config_num_peer_secs; break;
+        case BLE_STORE_OBJ_TYPE_CCCD: value=ble_store_config_num_cccds; break;
+        case BLE_STORE_OBJ_TYPE_CSFC: value=ble_store_config_num_csfcs; break;
+        case BLE_STORE_OBJ_TYPE_PEER_ADDR: value=ble_store_config_num_rpa_recs; break;
+        default: return HP_STORAGE;
+    }
+    unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
+    if (value<0 || (unsigned)value>limit) { return HP_STORAGE; }
+    *count=(unsigned)value; return 0;
+}
+static int forget_ram_row(int type, unsigned index, union ble_store_value *row) {
+    memset(row,0,sizeof(*row));
+    if (type==BLE_STORE_OBJ_TYPE_PEER_ADDR) {
+        *row=(union ble_store_value){.rpa_rec=ble_store_config_rpa_recs[index]};
+        return 0;
+    }
+    union ble_store_key key; memset(&key,0,sizeof(key));
+    if (type==BLE_STORE_OBJ_TYPE_CCCD) { key.cccd.peer_addr=*BLE_ADDR_ANY; key.cccd.idx=index; }
+    else if (type==BLE_STORE_OBJ_TYPE_CSFC) { key.csfc.peer_addr=*BLE_ADDR_ANY; key.csfc.idx=index; }
+    else { key.sec.peer_addr=*BLE_ADDR_ANY; key.sec.idx=index; }
+    return ble_store_config_read(type,&key,row);
+}
+static bool forget_target(int type, const union ble_store_value *row, const hp_address_t *target) {
+    const ble_addr_t *native=type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? &row->rpa_rec.peer_addr :
+        type==BLE_STORE_OBJ_TYPE_CCCD ? &row->cccd.peer_addr :
+        type==BLE_STORE_OBJ_TYPE_CSFC ? &row->csfc.peer_addr : &row->sec.peer_addr;
+    hp_address_t a=address(native);
+    return hp_address_equal(&a,target);
+}
+static bool forget_key_matches(int type, const union ble_store_value *key_row,
+    const union ble_store_value *other) {
+    if (type==BLE_STORE_OBJ_TYPE_PEER_ADDR) {
+        hp_address_t key=address(&key_row->rpa_rec.peer_rpa_addr);
+        hp_address_t rpa=address(&other->rpa_rec.peer_rpa_addr), peer=address(&other->rpa_rec.peer_addr);
+        // Real RPA keys need exact comparison; identity aliases additionally
+        // compare normalized forms, without treating an RPA as a host ID.
+        return same_store_address(&key_row->rpa_rec.peer_rpa_addr,&other->rpa_rec.peer_rpa_addr) ||
+            same_store_address(&key_row->rpa_rec.peer_rpa_addr,&other->rpa_rec.peer_addr) ||
+            hp_address_equal(&key,&rpa) || hp_address_equal(&key,&peer);
+    }
+    if (type==BLE_STORE_OBJ_TYPE_CSFC) {
+        hp_address_t a=address(&key_row->csfc.peer_addr), b=address(&other->csfc.peer_addr);
+        return hp_address_equal(&a,&b);
+    }
+    if (type==BLE_STORE_OBJ_TYPE_CCCD) {
+        return same_store_address(&key_row->cccd.peer_addr,&other->cccd.peer_addr) &&
+            (!key_row->cccd.chr_val_handle || key_row->cccd.chr_val_handle==other->cccd.chr_val_handle);
+    }
+    return same_store_key(type,key_row,other);
+}
+static int forget_family(nvs_handle_t handle, int type, const hp_address_t *target,
+    bool require_absent) {
+    unsigned count; int rc=forget_ram_count(type,&count);
+    if (rc) { return rc; }
+    uint32_t matched=0; unsigned saved_count=0;
+    unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
+    for (unsigned slot=1;slot<=limit;slot++) {
+        char key[16]; snprintf(key,sizeof(key),"%s_%u",store_prefix(type),slot);
+        union ble_store_value saved; memset(&saved,0,sizeof(saved));
+        size_t size=store_size(type);
+        rc=nvs_get_blob(handle,key,&saved,&size);
+        if (rc==ESP_ERR_NVS_NOT_FOUND) { continue; }
+        if (rc) { return rc==ESP_ERR_NVS_INVALID_LENGTH ? HP_STORAGE : rc; }
+        if (size!=store_size(type)) { return HP_STORAGE; }
+        unsigned matches=0, found=0;
+        for (unsigned i=0;i<count;i++) {
+            union ble_store_value row;
+            rc=forget_ram_row(type,i,&row);
+            if (rc) { return rc; }
+            if (same_store_record(type,&saved,&row)) { matches++; found=i; }
+        }
+        if (matches!=1 || (matched&(1u<<found))) { return HP_STORAGE; }
+        matched|=1u<<found; saved_count++;
+    }
+    if (saved_count!=count || matched!=((1u<<count)-1u)) { return HP_STORAGE; }
+    for (unsigned i=0;i<count;i++) {
+        union ble_store_value row;
+        rc=forget_ram_row(type,i,&row);
+        if (rc) { return rc; }
+        if (!forget_target(type,&row,target)) { continue; }
+        if (require_absent) { return HP_STORAGE; }
+        for (unsigned j=0;j<count;j++) {
+            if (i==j) { continue; }
+            union ble_store_value other;
+            rc=forget_ram_row(type,j,&other);
+            if (rc) { return rc; }
+            if (forget_key_matches(type,&row,&other)) { return HP_STORAGE; }
+        }
+    }
+    return 0;
+}
+static int forget_records(void *unused, const hp_address_t *target, bool apply) {
+    (void)unused;
+    static const int families[]={BLE_STORE_OBJ_TYPE_PEER_ADDR,BLE_STORE_OBJ_TYPE_CSFC,
+        BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_CCCD,BLE_STORE_OBJ_TYPE_PEER_SEC};
+    int rc=0; nvs_handle_t handle;
+    ble_hs_lock();
+    rc=nvs_open("nimble_bond",apply ? NVS_READWRITE : NVS_READONLY,&handle);
+    if (rc) { ble_hs_unlock(); return rc; }
+    for (unsigned family=0;!rc && family<sizeof(families)/sizeof(families[0]);family++) {
+        rc=forget_family(handle,families[family],target,false);
+    }
+    for (unsigned family=0;apply && !rc && family<sizeof(families)/sizeof(families[0]);family++) {
+        int type=families[family];
+        unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
+        for (unsigned slot=1;!rc && slot<=limit;slot++) {
+            char key[16]; snprintf(key,sizeof(key),"%s_%u",store_prefix(type),slot);
+            union ble_store_value saved; memset(&saved,0,sizeof(saved));
+            size_t size=store_size(type);
+            rc=nvs_get_blob(handle,key,&saved,&size);
+            if (rc==ESP_ERR_NVS_NOT_FOUND) { rc=0; continue; }
+            if (rc) { break; }
+            if (size!=store_size(type)) { rc=HP_STORAGE; break; }
+            if (!forget_target(type,&saved,target)) { continue; }
+            rc=nvs_erase_key(handle,key);
+            if (!rc) { rc=nvs_commit(handle); }
+            if (!rc) {
+                union ble_store_value checked; size=store_size(type);
+                int readback=nvs_get_blob(handle,key,&checked,&size);
+                if (readback!=ESP_ERR_NVS_NOT_FOUND) { rc=readback ? readback : HP_STORAGE; }
+            }
+            if (rc) { break; }
+            union ble_store_key native_key; ble_store_key_from_value(type,&native_key,&saved);
+            rc=ble_store_config_delete(type,&native_key);
+            if (rc) { break; }
+            store_generation++;
+            rc=forget_family(handle,type,target,false);
+        }
+    }
+    for (unsigned family=0;apply && !rc && family<sizeof(families)/sizeof(families[0]);family++) {
+        rc=forget_family(handle,families[family],target,true);
+    }
+    nvs_close(handle); ble_hs_unlock(); return rc;
+}
+
 typedef struct { hp_peer_t *peers; size_t count; unsigned cccds; int error; } peer_collect_t;
 static int collect(int type, union ble_store_value *value, void *cookie) {
     peer_collect_t *ctx=cookie;
@@ -516,10 +658,11 @@ static void service(struct ble_npl_event *event) {
         hp_fail(&core,domain,error);
         // A command already queued BEFORE this fault is not a new recovery
         // intent. Publish its terminal error; never erase the fault by applying it.
-        if (has_request) { core.status.operation_id=local.operation; if (!local.alias) { core.status.requested_mode=local.mode; } }
+        if (has_request) { core.status.operation_id=local.operation; if (!local.alias && !local.forget) { core.status.requested_mode=local.mode; } }
     } else if (has_request && guards_ok) {
         int release_error=release_old_input();
         if (release_error) { core.status.operation_id=local.operation; hp_fail(&core,HP_DOMAIN_NIMBLE,release_error); }
+        else if (local.forget) { core.status.operation_id=local.operation; hp_forget(&core,local.target,local.generation); }
         else if (local.alias) { core.status.operation_id=local.operation; int rc=hp_set_alias(&core,local.target,local.text,local.length); if (rc) { hp_fail(&core,HP_DOMAIN_NVS,rc); } }
         else { hp_request(&core,local.mode,local.target,local.operation,local.timeout_s,millis()); }
     }
@@ -599,7 +742,7 @@ static int reserve_enrollment(void *unused) {
 }
 void bleio_host_policy_init(int nvs_error) {
     if (initialized) { return; }
-    hp_backend_t backend={.persist=persist,.stop_advertising=stop_advertising,.terminate=terminate,.filter=filter,.peers=peers,.reserve_enrollment=reserve_enrollment};
+    hp_backend_t backend={.persist=persist,.stop_advertising=stop_advertising,.terminate=terminate,.filter=filter,.peers=peers,.reserve_enrollment=reserve_enrollment,.forget=forget_records};
     hp_blob_t blob; memset(&blob,0,sizeof(blob)); bool present=false;
     if (!nvs_error) {
         nvs_handle_t handle; int rc=nvs_open("bm83_hid_policy",NVS_READONLY,&handle);
@@ -873,6 +1016,31 @@ mp_obj_t bleio_host_policy_alias(mp_obj_t target, mp_obj_t alias) {
     const char *text=mp_obj_str_get_data(alias,&next.length);
     if (!hp_alias_valid(text,next.length)) { mp_raise_ValueError(MP_ERROR_TEXT("Host alias must be printable UTF-8, at most 24 bytes")); }
     memcpy(next.text,text,next.length); return enqueue(&next);
+}
+mp_obj_t bleio_host_policy_forget(mp_obj_t target, mp_obj_t generation) {
+    policy_request_t next; memset(&next,0,sizeof(next)); next.forget=true;
+    next.target=parse_id(target,false);
+    hp_status_t status; uint16_t handle; bool busy, available;
+    portENTER_CRITICAL(&policy_mux);
+    status=observed; handle=observed_handle;
+    busy=command_queue.pending || processing || policy_busy || fault_pending || store_guard_failed ||
+        (advertising_request.active && !advertising_request.finished);
+    available=initialized && synced && timer_ready;
+    portEXIT_CRITICAL(&policy_mux);
+    // VM object conversion, exceptions and stack inspection stay outside mux.
+    if (!available || busy || !hp_forget_allowed(&status,handle) ||
+        !mp_obj_is_int(generation) ||
+        !mp_obj_equal(generation,mp_obj_new_int_from_uint(status.bond_generation))) {
+        mp_raise_ValueError(MP_ERROR_TEXT("Forget requires clean PAUSED and the current bond generation"));
+    }
+    #if MYNEWT_VAL(BLE_EXT_ADV)
+    bool advertising=ble_gap_ext_adv_active(0);
+    #else
+    bool advertising=ble_gap_adv_active();
+    #endif
+    if (advertising) { mp_raise_ValueError(MP_ERROR_TEXT("Disconnect before forgetting a saved host")); }
+    next.generation=status.bond_generation;
+    return enqueue(&next);
 }
 static void put(mp_obj_t dict, qstr key, mp_obj_t value) { mp_obj_dict_store(dict,MP_OBJ_NEW_QSTR(key),value); }
 mp_obj_t bleio_host_policy_peers(void) {

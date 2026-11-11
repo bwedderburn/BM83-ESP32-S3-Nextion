@@ -49,6 +49,7 @@ typedef struct {
     int (*filter)(void *, const hp_address_t *); // NULL clears admission lists, never starts advertising.
     int (*peers)(void *, hp_peer_t *, size_t *, unsigned *);
     int (*reserve_enrollment)(void *); // Other persistent store classes; no eviction.
+    int (*forget)(void *, const hp_address_t *, bool apply);
 } hp_backend_t;
 typedef struct {
     hp_backend_t backend;
@@ -66,7 +67,8 @@ typedef struct {
     size_t enrollment_existing_count;
 } hp_core_t;
 typedef struct {
-    bool alias;
+    bool alias, forget;
+    uint32_t generation;
     hp_mode_t mode;
     uint64_t target;
     uint32_t operation, timeout_s;
@@ -96,6 +98,8 @@ bool hp_blob_valid(const hp_blob_t *);
 bool hp_alias_valid(const char *, size_t);
 void hp_init(hp_core_t *, const hp_backend_t *, const hp_blob_t *, int load_error);
 int hp_refresh(hp_core_t *);
+bool hp_forget_allowed(const hp_status_t *, uint16_t handle);
+void hp_forget(hp_core_t *, uint64_t id, uint32_t generation);
 void hp_request(hp_core_t *, hp_mode_t, uint64_t target, uint32_t operation, uint32_t timeout_s, uint64_t now_ms);
 void hp_tick(hp_core_t *, uint64_t now_ms);
 void hp_fail(hp_core_t *, hp_domain_t, int);

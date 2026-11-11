@@ -19,7 +19,8 @@ def test_production_core_fault_injection(tmp_path):
     if compiler is None:
         pytest.skip("Production C host harness requires the established Linux/WSL GCC builder")
     executable = tmp_path / "native-host-policy-tests"
-    command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-I", str(RECIPE / "native"),
+    command = [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wmissing-prototypes", "-Wold-style-definition",
+               "-I", str(RECIPE / "native"),
                str(RECIPE / "native/HostPolicyCore.c"), str(RECIPE / "tests/host_policy_core_test.c"),
                "-o", str(executable)]
     subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
@@ -46,7 +47,8 @@ def test_production_esp32_bridge_bodies_with_fault_injection(tmp_path):
                         strip_headers(header) + strip_headers(source) +
                         (RECIPE / "tests/host_policy_port_test.c").read_text())
     executable = tmp_path / "production-port-tests"
-    subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-misleading-indentation",
+    subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wmissing-prototypes", "-Wold-style-definition",
+                    "-Wno-misleading-indentation",
                     "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                     "-I", str(RECIPE / "native"), "-I", str(RECIPE / "tests"),
                     str(RECIPE / "native/HostPolicyCore.c"), str(combined), "-o", str(executable)],
@@ -84,8 +86,19 @@ def test_native_patch_preserves_admission_and_no_deletion_guards():
     assert "int disconnect_reason" in added
     assert "return BLE_GAP_REPEAT_PAIRING_IGNORE" in added
     assert "host_policy_patch_sha256" in (RECIPE / "record-build.py").read_text()
-    for destructive in ("ble_store_util_delete_peer(", "ble_store_util_status_rr", "BLE_GAP_REPEAT_PAIRING_RETRY", "nvs_flash_erase(", "nvs_erase_all("):
+    for destructive in ("ble_gap_unpair(", "ble_store_clear(", "ble_store_util_delete_all(",
+                        "ble_store_util_delete_peer(", "ble_store_util_status_rr", "BLE_GAP_REPEAT_PAIRING_RETRY",
+                        "nvs_flash_erase(", "nvs_erase_all("):
         assert destructive not in added
+    assert added.count("nvs_erase_key(") == 1
+    assert added.count("ble_store_config_delete(") == 2
+    binding = patch.split("diff --git a/shared-bindings/_bleio/Adapter.c ", 1)[1]
+    additions = "\n".join(line[1:] for line in binding.splitlines()
+                          if line.startswith("+") and not line.startswith("+++"))
+    blocks = re.findall(r"#if BM83_BLE_HOST_POLICY\n(.*?)#endif", additions, re.S)
+    assert any("bleio_host_policy_forget(" in block for block in blocks)
+    assert any("MP_QSTR_forget_host" in block and "bleio_adapter_forget_host_obj" in block
+               for block in blocks)
 
 
 def test_peripheral_admission_precedes_circuitpython_connection_publication():

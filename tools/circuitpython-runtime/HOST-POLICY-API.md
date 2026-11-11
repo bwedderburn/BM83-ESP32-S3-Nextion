@@ -6,8 +6,11 @@ The application HID service, Report ID 3, report map, advertising payload, local
 identity and GATT layout are unchanged. Native compilation, host fault tests,
 installation and physical host-switch acceptance remain separate evidence.
 
-`adapter.host_policy_version` is `1`. A capable client must also require
-`arm_host_input`; no earlier draft version-1 runtime was installed.
+`adapter.host_policy_version` stays `1`. A capable client must also require
+`arm_host_input`. Forget is an optional version-1 capability, detected separately
+by checking that `adapter.forget_host` is callable after claiming the existing
+policy API. Installed version-1 runtimes without it continue to support the
+existing policy actions and report Forget as unsupported.
 
 ## Intent and advertising handshake
 
@@ -98,6 +101,40 @@ only after that operation is observed, persistence succeeded and a coherent peer
 snapshot contains the exact alias. An actual alias change updates the snapshot
 generation; identical aliases may retain it.
 
+## Forget one saved host
+
+`adapter.forget_host(host_id, bond_generation)` returns a nonzero u32 operation
+ID for one queued request. Both arguments identify a currently listed saved
+identity at the exact observed bond generation. The generation must be a Python
+integer with that exact value. Admission requires clean PAUSED: requested and
+applied modes and state are PAUSED, PAUSED is persisted, there is no link or
+advertising, no error and nothing queued, busy or faulted. Invalid entry raises
+`ValueError` before queuing or terminating a link. A later explicit PAUSED
+request may replace a pending Forget.
+
+The host task refreshes the inventory, rechecks the generation and identity,
+and preflights all five peer-store families. It requires equal RAM/NVS counts,
+one-to-one matching records and unambiguous target keys. It stops advertising
+and clears the admission filter, then commits and reads back PAUSED with only
+the target alias and selection cleared before deleting records. For each row,
+it erases and commits that exact NVS key, verifies its absence, then removes
+the RAM row through the vendor API and rechecks the family. The order is
+PEER_ADDR, CSFC, OUR_SEC, CCCD, PEER_SEC. Other saved hosts and the local IRK
+keep their bytes. There is no automatic retry or restoration after an error.
+
+Completion requires the caller's observed operation, clean persisted PAUSED,
+a coherent peer list at a new bond generation without the target, and a
+different status target. An ACK, missing list or another operation cannot
+confirm Forget. After failure, explicitly Disconnect and Forget again.
+Power-cycle first if the store fault persists. Hardware actions require their
+own scoped approval.
+
+The CrowPanel asks for confirmation naming the saved host. FORGET, like every
+BHC1 command, travels over unencrypted, CRC-only, MAC-filtered ESP-NOW. A
+spoofed panel could forget a paused host. The owner must accept that transport
+risk before installation. This source work has host tests only; native build,
+installation and physical acceptance are pending.
+
 ## Generation-bound input
 
 Immediately before each ConsumerControl gesture, validate a fresh status and
@@ -138,12 +175,15 @@ Policy and aliases occupy an atomic checksummed blob in the separate
 arbitrary selected host. Corrupt/unavailable policy reports ERROR and admission
 stays closed. A failed request attempts to persist PAUSED; if NVS is unwritable,
 `persisted=False` means a new durable intent cannot be promised. Existing
-`nimble_bond`, local IRK, partition layout and application settings are retained.
+`nimble_bond` records are retained during ordinary switching. Only an explicit,
+confirmed single-host Forget removes the chosen peer records. The local IRK,
+other saved hosts, partition layout and application settings are retained.
 
 Security/CCCD/CSFC overflow never invokes round-robin deletion. Existing key
 replacement and repeat-pair attempts are refused. The legacy global
 `erase_bonding()` method raises under this capability; normal switching has no
-erase or repair side effect. Native faults take priority over already queued
+erase or repair side effect. Explicit Forget is available only under the
+clean-PAUSED preconditions above. Native faults take priority over already queued
 commands; recovery requires a later explicit intent.
 
 The host harness compiles production core and ESP32 bridge function bodies with
