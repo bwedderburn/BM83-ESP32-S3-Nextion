@@ -38,7 +38,8 @@ the 60-second window. Existing pairings remain saved. A full store, expired
 window, unavailable native runtime or storage error must be resolved separately;
 the unit does not evict another host to make the request succeed. **Disconnect**
 cancels a pending connection or pairing operation. Merely closing the dialog
-does not cancel it.
+does not cancel it. A host that forgot its keys while its identity remains
+saved on the unit needs the explicit single-host recovery below.
 
 For first-time Windows pairing, choose **Add device → Bluetooth → Show all
 devices** if the remote is absent from the initial list. Windows can filter this
@@ -56,6 +57,39 @@ Use the explicit CrowPanel action for a deterministic stay-disconnected request.
 The operating system may offer only Remove/Forget for this HID profile, and a
 link-disconnect reason cannot reliably distinguish a human click from sleep or
 another unexpected loss.
+
+## Forget one saved host
+
+The optional `forget_host` version-1 runtime extension adds **Forget** to
+CrowPanel **Volume hosts**. This is host-tested source; native build,
+installation and physical acceptance are pending. Existing version-1 runtimes
+without the extension keep their ordinary Disconnect, Connect and enrollment
+actions and report that they cannot forget a host yet.
+
+For a separately authorized recovery after the matching runtime is installed:
+
+1. Tap **Disconnect** and wait for clean persisted PAUSED, with no link,
+   advertising or error and no pending work.
+2. Select the saved identity to remove. Its bond can be unusable; it must be
+   listed, coherent with the current generation and unconnected.
+3. Tap **Forget**, check the alias and ID suffix in the confirmation, and tap
+   **Confirm**. A changed selection or state prevents sending the request.
+4. Wait for **Host forgotten on this unit. Other saved hosts are kept. Remove
+   this unit on that host, then use Pair new host.** Completion requires the
+   matching operation and a coherent new-generation list without that identity.
+5. Remove the unit's saved entry on that host, then use **Pair new host** and
+   pair during the countdown. Verify the intended host and the other saved
+   hosts under the separate physical test plan.
+
+Forget clears only that host's saved records, alias and selection. The local
+IRK and other hosts keep their bytes. On failure, explicitly **Disconnect**
+and **Forget** again. Power-cycle first if the store fault persists. These
+actions each require the applicable hardware authorization.
+
+FORGET, like all BHC1 commands, rides unencrypted, CRC-only, MAC-filtered
+ESP-NOW. A spoofed panel could forget a paused host. The owner must accept
+this transport risk before installation. The authenticated badge actions
+retain their existing commands; this change adds no badge Forget action.
 
 ## Open the Windows companion from CrowPanel
 
@@ -123,7 +157,9 @@ runtime retains the reviewed eight-bond, 24-CCCD capacity and requires a
 [bond-preserving app-only update](ble-runtime-update.md) with the separate
 [scoped native write approval and rollback checks](../reliability/RUNTIME-FLASH-GUARDS.md).
 Capacity increases cannot restore keys already evicted or erased. Diagnose such
-a host separately rather than using a bond wipe as a handoff step.
+a host separately. Under host-policy ownership, **Erase BLE bonds** directs
+the owner to **Volume hosts → Disconnect → select host → Forget**. The
+legacy runtime keeps its existing erase flow; ordinary handoff uses no wipe.
 
 ## Keep the startup name stable
 

@@ -764,7 +764,9 @@ def main(phase1_timing=False):
                 # Forget-Device-then-EBIND, not EBIND-then-disconnect.
                 if (now - last_ebind_at) >= ebind_min_interval_s:
                     last_ebind_at = now
-                    if ble.is_connected():
+                    if ble.host_policy_claimed():
+                        ble.request_erase_bonds()
+                    elif ble.is_connected():
                         print("[BLE] EBIND denied: disconnect the central first "
                               "(Forget Device on phone / PC / Pi), then press EBIND.")
                     else:

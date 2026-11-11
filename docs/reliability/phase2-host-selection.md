@@ -25,7 +25,12 @@ opaque identities and security/CCCD availability flags, without exporting keys
 or presenting a rotating private address as a saved identity. A valid peripheral
 bond can have only OUR_SEC encryption material; PEER_SEC and an identity key are
 separate observations. Existing but unusable records remain visible rather than
-being deleted as a switching step.
+being deleted as a switching step. The explicit, confirmed single-host
+**Forget** extension can remove an unusable saved identity only from clean
+persisted PAUSED, with current generation/list checks. It clears that host's
+alias and selection while preserving the local IRK and every other host's
+records. Existing version-1 runtimes can keep their current policy actions
+without implementing this optional extension.
 
 BM83 audio pairing and streaming remain separate from the ESP32's BLE volume
 connection. Selecting a volume host does not move the audio source. The existing
@@ -73,6 +78,7 @@ guarantee.
 | Persistent Disconnect | Saved bonds unchanged and no connection or advertising through reset, with host Bluetooth on | Windows companion Disconnect stayed paused through a physical power cycle. The Windows bond and enabled radio were verified. The badge independently confirmed a persisted pause and stopped advertising. |
 | Selected AUTO | Correct host after explicit Select, unexpected loss, controller restart and target absence | Windows and Raspberry Pi were selected and reconnected using saved bonds. Unexpected-loss, target-absence and broader competitor cases remain open. |
 | Enrollment | New-host success, expiry, cancel, stale requests, capacity and storage failure with bond preservation | Fresh Windows enrollment succeeded. Live timeout was observed during bring-up. The later badge test verified pairing-window entry and cancellation with the same four saved hosts. Enrollment of a second unpaired host remains open. |
+| Single-host Forget: host-tested source only | Native fault harnesses, controller/CrowPanel and wire tests, then two clean native builds, scoped installation and physical preservation/re-enrollment checks | Host-tested source only. Native build, installation, physical acceptance and the new timing window are pending. |
 | Live regression | Audio, Nextion, CrowPanel, badge, artwork, controls and measured UART/radio service during a new stability window | Functional bench checks passed for the tested controls, Windows launch and media playback. A new qualified Phase 2 timing window remains open. |
 
 ## November 5–6 physical results
@@ -136,6 +142,14 @@ reason.
 For the remaining enrollment gate, pair a second unpaired host and verify that
 Windows remains saved. Return to Windows via **Connect** and record whether a
 pairing prompt appears. Record each exercised direction and return leg.
+
+For the new single-host Forget gate, separately authorize the exact native
+candidate and recovery procedure. Start from Disconnect, confirm the named
+host, observe its removal at a new generation, remove the unit on that host
+and re-enroll it. Verify every other host's records and the local IRK remain
+byte-identical, then verify those hosts still reconnect. Exercise failure
+and explicit retry; power-cycle first if the store fault persists. This
+new gate has no physical result from the November 5–6 runs.
 
 Windows may offer only **Remove device** for the volume handle. Firmware cannot
 add an operating-system Disconnect button. A disconnect reason alone also does

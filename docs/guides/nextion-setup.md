@@ -194,7 +194,7 @@ For these buttons, configure only the **Touch Press Event** with `print "TOKEN"`
 | Previous | `BT_PREV` | Previous track |
 | Next | `BT_NEXT` | Next track |
 | EQ | `BT_EQ` | Cycle EQ preset |
-| Erase Bonds | `BT_EBIND` | Erase BLE pairings |
+| Erase Bonds | `BT_EBIND` | Legacy runtime: erase BLE pairings. Under host-policy ownership, show CrowPanel Volume hosts > Disconnect > select host > Forget guidance |
 
 ### EQ Selection Tokens
 `EQ_OFF`, `EQ_SOFT`, `EQ_BASS`, `EQ_TREBLE`, `EQ_CLASSICAL`, `EQ_ROCK`, `EQ_JAZZ`, `EQ_POP`, `EQ_DANCE`, `EQ_RNB`, `EQ_USER`

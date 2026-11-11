@@ -216,6 +216,18 @@ FIFO/ISR, DMA/internal-heap and socket counts, and the first synchronous native-
 risk. Raw details remain private; these summaries yield no new headroom figure,
 responsiveness budget, universal worst-case bound or earlier-failure attribution.
 
+### Single-host Forget completion (host-tested source, 2026-11-10)
+
+The [optional Forget extension](../../tools/circuitpython-runtime/HOST-POLICY-API.md#forget-one-saved-host)
+confirms only its own observed operation in clean persisted PAUSED, with a
+coherent peer list at a new bond generation without the requested host and
+a different status target. An ACK or list alone cannot confirm it. Completion
+makes STATUS and the next eligible LIST publication due, like alias completion;
+the dated source-input row above retains its c14b108 scope. Follow the
+[confirmed recovery procedure](../guides/ble-volume-handoff.md#forget-one-saved-host)
+and [separate physical gate](phase2-host-selection.md#required-gates). Native
+build, installation and acceptance for this source addition are pending.
+
 ## Later hardware run card - separate authorization required
 
 1. Record exact candidate, source/compiler and true-original rollback hashes

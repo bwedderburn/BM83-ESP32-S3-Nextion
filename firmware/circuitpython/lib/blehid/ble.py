@@ -912,7 +912,8 @@ class BleHid:
         is down.
         """
         if self._host_policy is not None:
-            print("[BLE] Bond erase disabled during host-policy ownership")
+            print("[BLE] Bond erase disabled during host-policy ownership. "
+                  "Use CrowPanel Volume hosts > Disconnect > select host > Forget.")
             return
         if not self._ready:
             print("[BLE] erase_bonds: BLE not ready")
