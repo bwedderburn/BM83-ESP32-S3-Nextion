@@ -365,14 +365,25 @@ static int forget_family(nvs_handle_t handle, int type, const hp_address_t *targ
         if (rc==ESP_ERR_NVS_NOT_FOUND) { continue; }
         if (rc) { return rc==ESP_ERR_NVS_INVALID_LENGTH ? HP_STORAGE : rc; }
         if (size!=store_size(type)) { return HP_STORAGE; }
-        unsigned matches=0, found=0;
+        unsigned matches=0, found=count;
         for (unsigned i=0;i<count;i++) {
             union ble_store_value row;
             rc=forget_ram_row(type,i,&row);
             if (rc) { return rc; }
-            if (same_store_record(type,&saved,&row)) { matches++; found=i; }
+            if (same_store_record(type,&saved,&row)) {
+                matches++;
+                if (found==count && !(matched&(1u<<i))) { found=i; }
+            }
         }
-        if (matches!=1 || (matched&(1u<<found))) { return HP_STORAGE; }
+        // Legacy restore can retain equal CCCDs for another host. Consume
+        // distinct RAM occurrences so their exact NVS/RAM multiplicity stays
+        // intact; target keys and all other families retain strict matching.
+        bool unrelated_cccd=false;
+        if (type==BLE_STORE_OBJ_TYPE_CCCD) {
+            hp_address_t owner=address(&saved.cccd.peer_addr), normalized;
+            unrelated_cccd=hp_normalize(&normalized,&owner) && !hp_address_equal(&normalized,target);
+        }
+        if (!matches || found==count || (!unrelated_cccd && matches!=1)) { return HP_STORAGE; }
         matched|=1u<<found; saved_count++;
     }
     if (saved_count!=count || matched!=((1u<<count)-1u)) { return HP_STORAGE; }
