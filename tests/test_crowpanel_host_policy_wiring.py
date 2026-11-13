@@ -26,6 +26,16 @@ def test_ui_exposes_explicit_actions_and_never_falls_back_to_legacy_tokens():
     assert "g_control.tick(now)" in source and not re.search(r"g_control\.result\s*=(?!=)", source)
 
 
+def test_settings_uses_volume_hosts_without_the_disabled_legacy_bond_erase():
+    source = (CPP / "main.cpp").read_text()
+    assert "BT_EBIND" not in source and '"Erase BLE bonds"' not in source
+    assert 'make_button(g_settings_page, "Volume hosts"' in source
+    assert "lv_obj_add_event_cb(g_ble_button, cb_ble_control, LV_EVENT_CLICKED, nullptr);" in source
+    opening = section(source, "static void cb_ble_control(", "static void cb_network_settings(")
+    assert "ble_host_ui_show(lv_scr_act())" in opening
+    assert "espnow_send_token" not in opening
+
+
 def test_incoming_frames_and_link_invalidations_reach_the_model_in_main_task():
     source = (CPP / "main.cpp").read_text()
     receive = section(source, "while ((rx_len = espnow_link_poll(", "const uint32_t now = millis();")
@@ -109,7 +119,9 @@ def test_forget_confirmation_rechecks_the_named_selection_and_sends_only_on_conf
 def test_forget_success_precedes_generic_paused_message_and_has_specific_refusals():
     source = (CPP / "ble_host_ui.cpp").read_text()
     status = section(source, "void status_text(", "bool send_request(")
-    success = status.index("g_control.result == hp::CONFIRMED && g_control.last_opcode() == hp::FORGET")
+    assert "const hp::Result result = g_control.result_for_status(now);" in status
+    assert "g_control.result ==" not in status
+    success = status.index("result == hp::CONFIRMED && g_control.last_opcode() == hp::FORGET")
     paused = status.index('"Disconnected. Saved pairings are kept."')
     message = status.index('"Host forgotten on this unit. Other saved hosts are kept. Remove this unit on that host, then use Pair new host."')
     assert success < message < paused

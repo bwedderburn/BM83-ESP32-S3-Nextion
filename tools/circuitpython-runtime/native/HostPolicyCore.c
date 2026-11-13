@@ -3,7 +3,7 @@
 #include <string.h>
 #define HP_MAGIC 0x31485042u
 int hp_submit(hp_queue_t *queue, hp_command_t *command) {
-    if (queue->pending && (command->alias || command->forget || command->mode!=HP_PAUSED)) { return HP_QUEUE_FULL; }
+    if (queue->pending && (command->alias || command->forget || command->clear_peers || command->mode!=HP_PAUSED)) { return HP_QUEUE_FULL; }
     command->operation=++queue->next_operation;
     if (!command->operation) { command->operation=++queue->next_operation; }
     queue->command=*command; queue->pending=true; return 0;
@@ -167,6 +167,35 @@ bool hp_forget_allowed(const hp_status_t *s, uint16_t handle) {
         s->applied_mode==HP_PAUSED && s->persisted && handle==HP_INVALID_HANDLE &&
         !s->connected && s->error_domain==HP_DOMAIN_NONE && !s->error_code;
 }
+void hp_clear_saved_hosts(hp_core_t *p, uint32_t generation) {
+    if (!hp_forget_allowed(&p->status,p->handle)) { hp_fail(p,HP_DOMAIN_POLICY,HP_INVALID); return; }
+    int rc=hp_refresh(p);
+    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    if (generation!=p->status.bond_generation) { hp_fail(p,HP_DOMAIN_POLICY,HP_STALE); return; }
+    rc=p->backend.clear_peers ? p->backend.clear_peers(p->backend.context,false) : HP_STORAGE;
+    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    rc=p->backend.stop_advertising(p->backend.context);
+    if (rc) { hp_fail(p,HP_DOMAIN_NIMBLE,rc); return; }
+    rc=p->backend.filter(p->backend.context,NULL);
+    if (rc) { hp_fail(p,HP_DOMAIN_NIMBLE,rc); return; }
+    hp_blob_t old=p->blob;
+    memset(&p->blob.selected,0,sizeof(p->blob.selected));
+    memset(p->blob.aliases,0,sizeof(p->blob.aliases));
+    rc=commit(p,HP_PAUSED,NULL);
+    if (rc) { p->blob=old; hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    p->status.target_id=0;
+    rc=p->backend.clear_peers(p->backend.context,true);
+    if (rc) { hp_fail(p,HP_DOMAIN_NVS,rc); return; }
+    rc=hp_refresh(p);
+    if (rc || p->peer_count || p->cccd_count) { hp_fail(p,HP_DOMAIN_NVS,rc ? rc : HP_STORAGE); return; }
+    // An already-empty visible roster can still have orphan peer-store rows.
+    if (p->status.bond_generation==generation) { p->status.bond_generation++; }
+    memset(p->enrollment_existing,0,sizeof(p->enrollment_existing));
+    p->enrollment_existing_count=0;p->candidate_valid=false;p->candidate_store_started=false;
+    memset(&p->candidate,0,sizeof(p->candidate));memset(&p->connected_address,0,sizeof(p->connected_address));
+    p->enrollment_rejected=false;p->input_subscribed=false;p->deadline_ms=0;
+    p->status.connected_id=0;p->status.enroll_remaining_s=0;
+}
 void hp_forget(hp_core_t *p, uint64_t id, uint32_t generation) {
     if (!hp_forget_allowed(&p->status,p->handle)) { hp_fail(p,HP_DOMAIN_POLICY,HP_INVALID); return; }
     int rc=hp_refresh(p);
@@ -284,12 +313,22 @@ void hp_tick(hp_core_t *p, uint64_t now_ms) {
         p->status.hid_ready=true; p->status.state=HP_CONNECTED;
     }
 }
-uint32_t hp_connect(hp_core_t *p, uint16_t handle, const hp_address_t *address) {
-    if (!hp_advertising_allowed(p) || p->handle!=HP_INVALID_HANDLE) { p->backend.terminate(p->backend.context,handle); return 0; }
+hp_connect_reason_t hp_connect_reason(const hp_core_t *p, const hp_address_t *address) {
+    if (p->handle!=HP_INVALID_HANDLE) { return HP_CONNECT_SLOT_BUSY; }
+    if (!hp_advertising_allowed(p)) { return HP_CONNECT_POLICY_CLOSED; }
     hp_address_t normalized;
     bool valid=hp_normalize(&normalized,address);
-    if (p->status.applied_mode==HP_AUTO && (!valid || hp_identity_id(&normalized)!=p->status.target_id || !hp_address_equal(&normalized,&p->blob.selected))) { p->backend.terminate(p->backend.context,handle); return 0; }
-    if (p->status.applied_mode==HP_ENROLL && valid && (enrollment_existing(p,hp_identity_id(&normalized)) || (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate)))) { p->backend.terminate(p->backend.context,handle); return 0; }
+    if (p->status.applied_mode==HP_AUTO && (!valid || hp_identity_id(&normalized)!=p->status.target_id || !hp_address_equal(&normalized,&p->blob.selected))) { return HP_CONNECT_AUTO_IDENTITY; }
+    if (p->status.applied_mode==HP_ENROLL && valid) {
+        if (enrollment_existing(p,hp_identity_id(&normalized))) { return HP_CONNECT_SAVED_IDENTITY; }
+        if (p->candidate_valid && !hp_address_equal(&normalized,&p->candidate)) { return HP_CONNECT_CANDIDATE_IDENTITY; }
+    }
+    return HP_CONNECT_ACCEPT;
+}
+uint32_t hp_connect(hp_core_t *p, uint16_t handle, const hp_address_t *address) {
+    if (hp_connect_reason(p,address)!=HP_CONNECT_ACCEPT) { p->backend.terminate(p->backend.context,handle); return 0; }
+    hp_address_t normalized;
+    bool valid=hp_normalize(&normalized,address);
     p->handle=handle; p->terminate_sent=false; p->terminate_failed=false; p->input_subscribed=false;
     p->enrollment_rejected=false;
     p->status.connection_generation++; if (!p->status.connection_generation) { p->status.connection_generation++; }
@@ -299,7 +338,7 @@ uint32_t hp_connect(hp_core_t *p, uint16_t handle, const hp_address_t *address) 
     if (p->status.applied_mode==HP_ENROLL && valid) { p->candidate=normalized; p->candidate_valid=true; }
     return p->status.connection_generation;
 }
-bool hp_reject_enrollment_link(hp_core_t *p, uint16_t handle, uint32_t generation) {
+bool hp_latch_enrollment_rejection(hp_core_t *p, uint16_t handle, uint32_t generation) {
     if (p->status.applied_mode!=HP_ENROLL || p->status.requested_mode!=HP_ENROLL ||
         p->status.state==HP_ERROR || handle==HP_INVALID_HANDLE || handle!=p->handle ||
         generation!=p->status.connection_generation) { return false; }
@@ -311,6 +350,10 @@ bool hp_reject_enrollment_link(hp_core_t *p, uint16_t handle, uint32_t generatio
     p->status.connected_id=0; p->status.encrypted=false; p->status.bonded=false;
     p->status.filter_ready=false; p->status.hid_ready=false; p->input_subscribed=false;
     p->status.state=HP_SWITCHING;
+    return true;
+}
+bool hp_reject_enrollment_link(hp_core_t *p, uint16_t handle, uint32_t generation) {
+    if (!hp_latch_enrollment_rejection(p,handle,generation)) { return false; }
     terminate_once(p);
     return true;
 }
@@ -357,6 +400,10 @@ bool hp_input_allowed(const hp_core_t *p, uint16_t handle) {
 bool hp_store_allowed(hp_core_t *p, const hp_address_t *address, bool security, bool exists, bool same_keys) {
     hp_address_t normalized;
     if (!hp_normalize(&normalized,address) || p->status.state==HP_ERROR || p->enrollment_rejected) { return false; }
+    // A saved peer is never this explicit window's enrollment candidate, even
+    // for equal keys: the vendor writer would still change its bond_count.
+    if (p->status.applied_mode==HP_ENROLL && p->status.requested_mode==HP_ENROLL &&
+        enrollment_existing(p,hp_identity_id(&normalized))) { return false; }
     if (exists && security) { return same_keys; } // Never replace a saved peer's keys.
     if (p->status.applied_mode==HP_AUTO) { return hp_address_equal(&normalized,&p->blob.selected) && (!security || exists); }
     if (p->status.applied_mode!=HP_ENROLL || p->handle==HP_INVALID_HANDLE || enrollment_existing(p,hp_identity_id(&normalized))) { return false; }

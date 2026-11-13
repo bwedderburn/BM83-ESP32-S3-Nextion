@@ -75,6 +75,10 @@ typedef int ble_store_delete_fn(int,const union ble_store_key *);
 typedef int ble_store_status_fn(struct ble_store_status_event *,void *);
 struct { ble_store_read_fn *store_read_cb; ble_store_write_fn *store_write_cb; ble_store_delete_fn *store_delete_cb; ble_store_status_fn *store_status_cb; void *store_status_arg; } ble_hs_cfg;
 typedef struct {
+    struct ble_store_value_sec _ble_store_config_our_secs[CONFIG_BT_NIMBLE_MAX_BONDS];
+    struct ble_store_value_sec _ble_store_config_peer_secs[CONFIG_BT_NIMBLE_MAX_BONDS];
+    struct ble_store_value_csfc _ble_store_config_csfcs[CONFIG_BT_NIMBLE_MAX_BONDS];
+    uint16_t _ble_store_config_our_bond_count, _ble_store_config_peer_bond_count;
     struct ble_store_value_cccd _ble_store_config_cccds[CONFIG_BT_NIMBLE_MAX_CCCDS];
     int _ble_store_config_num_cccds;
     int _ble_store_config_num_our_secs, _ble_store_config_num_peer_secs, _ble_store_config_num_csfcs;
@@ -83,6 +87,11 @@ typedef struct {
 } ble_store_config_vars_t;
 extern ble_store_config_vars_t *ble_store_config_vars;
 #define ble_store_config_cccds (ble_store_config_vars->_ble_store_config_cccds)
+#define ble_store_config_our_secs (ble_store_config_vars->_ble_store_config_our_secs)
+#define ble_store_config_peer_secs (ble_store_config_vars->_ble_store_config_peer_secs)
+#define ble_store_config_csfcs (ble_store_config_vars->_ble_store_config_csfcs)
+#define ble_store_config_our_bond_count (ble_store_config_vars->_ble_store_config_our_bond_count)
+#define ble_store_config_peer_bond_count (ble_store_config_vars->_ble_store_config_peer_bond_count)
 #define ble_store_config_num_cccds (ble_store_config_vars->_ble_store_config_num_cccds)
 #define ble_store_config_num_our_secs (ble_store_config_vars->_ble_store_config_num_our_secs)
 #define ble_store_config_num_peer_secs (ble_store_config_vars->_ble_store_config_num_peer_secs)
@@ -96,8 +105,8 @@ int ble_hs_locked_by_cur_task(void);
 void ble_hs_lock(void);
 void ble_hs_unlock(void);
 struct ble_gap_conn_desc { uint16_t conn_handle; ble_addr_t peer_id_addr,peer_ota_addr; struct { unsigned encrypted:1; unsigned bonded:1; } sec_state; };
-enum { BLE_GAP_EVENT_DISCONNECT=1,BLE_GAP_EVENT_IDENTITY_RESOLVED,BLE_GAP_EVENT_ENC_CHANGE,BLE_GAP_EVENT_REPEAT_PAIRING,BLE_GAP_EVENT_CONNECT };
-struct ble_gap_event { int type; union { struct {struct ble_gap_conn_desc conn; int reason;} disconnect; struct {uint16_t conn_handle;} identity_resolved; struct {uint16_t conn_handle; int status;} enc_change; struct {uint16_t conn_handle;} repeat_pairing; struct {int status; uint16_t conn_handle;} connect;}; };
+enum { BLE_GAP_EVENT_DISCONNECT=1,BLE_GAP_EVENT_IDENTITY_RESOLVED,BLE_GAP_EVENT_ENC_CHANGE,BLE_GAP_EVENT_REPEAT_PAIRING,BLE_GAP_EVENT_CONNECT,BLE_GAP_EVENT_ADV_COMPLETE };
+struct ble_gap_event { int type; union { struct {struct ble_gap_conn_desc conn; int reason;} disconnect; struct {uint16_t conn_handle;} identity_resolved; struct {uint16_t conn_handle; int status;} enc_change; struct {uint16_t conn_handle;} repeat_pairing; struct {int status; uint16_t conn_handle;} connect; struct {int reason; uint16_t conn_handle;} adv_complete;}; };
 struct os_mbuf { uint8_t data[HP_INPUT_BYTES]; uint16_t length; };
 struct ble_npl_event { int unused; };
 struct ble_npl_eventq { int unused; };

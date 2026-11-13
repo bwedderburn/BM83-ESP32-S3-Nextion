@@ -51,19 +51,19 @@
       }
     },
     "host_policy": {
-      "sha256": "b74439657a4f965390d4a13c5f7ce64fd50c7c6d56867bed1dfd3706263e23a8",
+      "sha256": "772cca96a1cecfeec724c2453e2b09f2fca344a37cc58d4895a49afc27a7a540",
       "files": {
         "ports/espressif/Makefile": "7ee98b8279c99228c74083c93869c4eddfccbb97aeae0a23e895b691de60b6e6",
-        "ports/espressif/common-hal/_bleio/Adapter.c": "a5b67ed520f2ac2fd0e97615e0456f31e4f5abdcc0c3f747087cc30e07686af6",
+        "ports/espressif/common-hal/_bleio/Adapter.c": "f24e6a3025dde1eed645b4d500584a09b295789961e7740dd7c82aea0370d163",
         "ports/espressif/common-hal/_bleio/Characteristic.c": "fd076883a83cd5b425b46081aaf57b5b9a926cdf6f7611acc7e7a0021b732f93",
-        "ports/espressif/common-hal/_bleio/Connection.c": "4de15b868d8fa281dab80ae3e245b30247acb254dc76d888e3c5bc23941a029b",
+        "ports/espressif/common-hal/_bleio/Connection.c": "60973e9077054f2d5ee31354022573fa59f82f07f0f4af34b747d93c47ac05fd",
         "ports/espressif/common-hal/_bleio/Connection.h": "82d462c59522996be26e7e06d2f87ee8dd37a59b05b232f63394081a203a5811",
-        "ports/espressif/common-hal/_bleio/HostPolicy.c": "9a22272aa6bf308314adf53ef711e4052ffe9985b78fe9c367daf99267eef288",
-        "ports/espressif/common-hal/_bleio/HostPolicy.h": "5f818528ac53e94764d24df5837832a9ff7e147a71ab7afce32eff5aee870010",
-        "ports/espressif/common-hal/_bleio/HostPolicyCore.c": "65f4babafbc931143e1bff66e4a55b65593f77255d63616d0311b6b211b8150a",
-        "ports/espressif/common-hal/_bleio/HostPolicyCore.h": "27bb77ffc9483e6e9cdb0bd23d7541005af0b69e32696302b851e433a60b9a33",
+        "ports/espressif/common-hal/_bleio/HostPolicy.c": "93d2b9d7ff34b5781d5ce55ec7327ce06059dd43c2efbb02d0e183dde4d6187c",
+        "ports/espressif/common-hal/_bleio/HostPolicy.h": "3dd7c7719e4c70b2f4ac29b03f9adab305c88dfe43bef3f16eda47cf051a1e11",
+        "ports/espressif/common-hal/_bleio/HostPolicyCore.c": "06c0b7563dbc2c10dd8a40623260e8e301e53fe5baae39035bccd6277b316b2d",
+        "ports/espressif/common-hal/_bleio/HostPolicyCore.h": "f5d95375e294874930a5f16c4f33026f7ed07dd5bcbb63314ef8452842f6d637",
         "ports/espressif/common-hal/_bleio/__init__.c": "9948f853dfec7fefa5e855fca23167e9a8278d1799799ab33c8fa2f2479e7bf8",
-        "shared-bindings/_bleio/Adapter.c": "4580c65f3ab0657486c238cd8da213e59734d9c101345de9ce47007ba9fd5c17",
+        "shared-bindings/_bleio/Adapter.c": "eea27f940979f645d24f77c872dd594a4544f2f19dc9cf178ed6417f120637e9",
         "ports/espressif/boards/espressif_esp32s3_devkitc_1_n8r8/sdkconfig": "dd2ea96975adb9f2d4ba0ab14dce8a4955a8d6392b3638a2158c8868a8c67cd3"
       }
     }

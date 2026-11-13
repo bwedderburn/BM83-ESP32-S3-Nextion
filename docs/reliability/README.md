@@ -226,7 +226,9 @@ makes STATUS and the next eligible LIST publication due, like alias completion;
 the dated source-input row above retains its c14b108 scope. Follow the
 [confirmed recovery procedure](../guides/ble-volume-handoff.md#forget-one-saved-host)
 and [separate physical gate](phase2-host-selection.md#required-gates). Native
-build, installation and acceptance for this source addition are pending.
+build, installation and acceptance for this source addition were pending at
+that November 10 checkpoint. The [current Phase 2 gate record](phase2-host-selection.md#required-gates)
+separates later host/native-build results from pending physical acceptance.
 
 ## Later hardware run card - separate authorization required
 

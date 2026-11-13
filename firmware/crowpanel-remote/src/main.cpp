@@ -215,7 +215,6 @@ static const char *action_name(const char *token) {
     if (strcmp(token, "BT_EQ") == 0) return "EQ";
     if (strcmp(token, "BT_POWER") == 0) return "Power";
     if (strcmp(token, "BT_PAIR") == 0) return "Pair";
-    if (strcmp(token, "BT_EBIND") == 0) return "Erase BLE bonds";
     if (strcmp(token, "NET_RETRY") == 0) return "Retry network";
     if (strcmp(token, "BLE_PAUSE") == 0) return "Pause volume remote";
     if (strcmp(token, "BLE_ENABLE") == 0) return "Enable volume remote";
@@ -692,9 +691,6 @@ static void build_ui() {
     lv_obj_add_event_cb(make_button(g_settings_page, LV_SYMBOL_SETTINGS "  EQ",
                                     0, 140, 240, 64),
                         cb_click, LV_EVENT_CLICKED, (void *)"BT_EQ");
-    lv_obj_add_event_cb(make_button(g_settings_page, "Erase BLE bonds",
-                                    256, 140, 240, 64),
-                        cb_click, LV_EVENT_CLICKED, (void *)"BT_EBIND");
     lv_obj_add_event_cb(make_button(g_settings_page, "Wi-Fi / Artwork",
                                     512, 56, 240, 64),
                         cb_network_settings, LV_EVENT_CLICKED, nullptr);

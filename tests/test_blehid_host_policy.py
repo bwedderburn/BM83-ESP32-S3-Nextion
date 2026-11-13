@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from blehid.ble import BleHid
-from blehid.host_policy import NativeHostPolicy, checked_peers
+from blehid.host_policy import (NativeHostPolicy, checked_peers, checked_diagnostics, checked_refusal_identity,
+                               DIAG_UINT_FIELDS, DIAG_INT_FIELDS)
 
 HOST = "0102030405060708"
 OTHER = "1112131415161718"
@@ -62,6 +63,204 @@ class Adapter:
         if self.arm_race is not None: self.arm_race(self.status)
         return (operation, policy, connection, subscription) == tuple(self.status[k] for k in (
             "operation_id", "policy_generation", "connection_generation", "subscription_generation"))
+
+
+def test_explicit_clear_saved_hosts_is_single_dispatch_and_requires_verified_empty_new_generation():
+    class ClearAdapter(Adapter):
+        def clear_saved_hosts(self, generation):
+            self.calls.append(("CLEAR_PEERS", generation))
+            if self.fail:
+                raise RuntimeError("inert failure")
+            return self.next_operation
+    adapter = ClearAdapter()
+    owner = NativeHostPolicy(adapter)
+    owner.tick()
+    assert owner.clear_supported and owner.clear_saved_hosts(1)
+    owner.tick()
+    assert adapter.calls == [("CLEAR_PEERS", 1)] and not owner.snapshot()["clear_complete"]
+    owner.tick()
+    assert adapter.calls == [("CLEAR_PEERS", 1)]
+    adapter.status.update(operation_id=2, bond_generation=2, target_id=None)
+    adapter.peers = []
+    owner.tick()
+    assert owner.snapshot()["clear_complete"] and owner.ready()
+    assert not NativeHostPolicy(Adapter()).clear_supported
+    assert not owner.clear_saved_hosts(True) and not owner.clear_saved_hosts(1)
+    adapter.fail = True
+    assert owner.clear_saved_hosts(2)
+    owner.tick()
+    assert owner.owner_error == 7 and not owner.snapshot()["clear_complete"]
+    owner.tick()
+    assert adapter.calls == [("CLEAR_PEERS", 1), ("CLEAR_PEERS", 2)]
+
+
+@pytest.mark.parametrize("action", ("forget", "clear"))
+def test_disconnect_derives_peer_connected_from_live_status_without_catalog_read_or_snapshot_mutation(action):
+    class CountedAdapter(Adapter):
+        peer_reads = 0
+        def forget_host(self, identity, generation):
+            self.calls.append(("FORGET", identity, generation))
+            return self.next_operation
+        def clear_saved_hosts(self, generation):
+            self.calls.append(("CLEAR_PEERS", generation))
+            return self.next_operation
+        @property
+        def bonded_peers(self):
+            self.peer_reads += 1
+            return tuple(dict(p, connected=self.status["connected"] and p["id"] == self.status["connected_id"])
+                         for p in self.peers)
+    adapter = CountedAdapter()
+    adapter.status.update(requested_mode="AUTO", applied_mode="AUTO", state="CONNECTED",
+                          connected=True, connected_id=HOST, encrypted=True, bonded=True, hid_ready=True)
+    owner = NativeHostPolicy(adapter)
+    owner.tick()
+    before = owner.snapshot()
+    assert before["peers"][0]["connected"] and adapter.peer_reads == 1
+    adapter.status.update(requested_mode="PAUSED", applied_mode="PAUSED", state="PAUSED",
+                          operation_id=2, policy_generation=2, connected=False, connected_id=None,
+                          encrypted=False, bonded=False, hid_ready=False)
+    owner.tick()
+    assert owner.ready() and not any(p["connected"] for p in owner.peers)
+    assert adapter.peer_reads == 1 and before["peers"][0]["connected"]
+    queued = owner.forget(HOST, 1) if action == "forget" else owner.clear_saved_hosts(1)
+    assert queued and not adapter.calls
+
+
+def test_peer_connected_identity_publication_uses_fresh_status_and_read_failure_stays_unready():
+    class PublishedAdapter(Adapter):
+        peer_reads = 0
+        fail_status = False
+        @property
+        def host_status(self):
+            if self.fail_status:
+                raise RuntimeError("inert status failure")
+            return deepcopy(self.status)
+        @property
+        def bonded_peers(self):
+            self.peer_reads += 1
+            return tuple(deepcopy(self.peers))
+    adapter = PublishedAdapter()
+    adapter.status.update(connected=True, connected_id=HOST)
+    owner = NativeHostPolicy(adapter)
+    owner.tick()
+    original = owner.snapshot()
+    assert [p["connected"] for p in owner.peers] == [True, False]
+    adapter.status["connected_id"] = OTHER
+    owner.tick()
+    assert [p["connected"] for p in owner.peers] == [False, True]
+    assert [p["connected"] for p in original["peers"]] == [True, False]
+    assert adapter.peer_reads == 1
+    adapter.fail_status = True
+    adapter.status.update(connected=False, connected_id=None)
+    owner.tick()
+    assert not owner.ready() and owner.owner_error == 10
+    assert owner.status["connected"] and not owner.forget(OTHER, 1) and not adapter.calls
+
+
+def test_optional_admission_diagnostics_are_cached_without_extra_native_reads_or_policy_changes():
+    class CountedAdapter(Adapter):
+        def __init__(self):
+            super().__init__()
+            self.status_reads = 0
+        @property
+        def host_status(self):
+            self.status_reads += 1
+            return super().host_status
+    adapter = CountedAdapter()
+    owner = NativeHostPolicy(adapter)
+    owner.tick()
+    assert owner.ready() and owner.diagnostics is None and adapter.status_reads == 2
+    before = owner.snapshot()
+    raw = dict(diag_version=1, **{"diag_" + key: 0 for key in DIAG_UINT_FIELDS + DIAG_INT_FIELDS})
+    raw.update(diag_connect_events=0xFFFFFFFF, diag_connect_failures=3, diag_last_connect_status=0x213)
+    raw["diag_peer_address"] = "synthetic-excluded-private-field"
+    adapter.status.update(raw)
+    owner.tick()
+    assert adapter.status_reads == 3 and owner.ready() and owner.snapshot() == before
+    assert owner.diagnostics == dict(version=1, **{key: raw["diag_" + key] for key in DIAG_UINT_FIELDS + DIAG_INT_FIELDS})
+    assert "peer_address" not in owner.diagnostics and not adapter.calls
+    # Malformed/future diagnostics never change the existing policy decision.
+    adapter.status["diag_version"] = True
+    owner.tick()
+    assert adapter.status_reads == 4 and owner.ready() and owner.diagnostics is None and owner.snapshot() == before
+    adapter.status["diag_version"] = 2
+    owner.tick()
+    assert adapter.status_reads == 5 and owner.ready() and owner.diagnostics is None and not adapter.calls
+
+
+@pytest.mark.parametrize("key", DIAG_UINT_FIELDS + DIAG_INT_FIELDS)
+@pytest.mark.parametrize("invalid", [None, True, 1.0, "1", -0x80000001, 0x100000000])
+def test_admission_diagnostic_scalar_validation_is_exact_and_never_exports_extra_fields(key, invalid):
+    raw = dict(diag_version=1, **{"diag_" + name: 0 for name in DIAG_UINT_FIELDS + DIAG_INT_FIELDS})
+    assert checked_diagnostics(raw)["version"] == 1
+    raw["diag_" + key] = invalid
+    assert checked_diagnostics(raw) is None
+
+
+def refusal_identity_raw(identity=HOST, source="software", operation=18, count=3):
+    return dict(saved_refusal_version=1, last_saved_refusal_id=identity,
+                last_saved_refusal_source=source, last_saved_refusal_operation_id=operation,
+                saved_refusal_window_count=count)
+
+
+def test_saved_refusal_identity_cache_reuses_the_same_coherent_status_read():
+    class CountedAdapter(Adapter):
+        status_reads = 0
+        @property
+        def host_status(self):
+            self.status_reads += 1
+            return deepcopy(self.status)
+        @property
+        def bonded_peers(self):
+            self.status.update(refusal_identity_raw(OTHER, "descriptor", 19, 2))
+            return tuple(deepcopy(self.peers))
+    adapter = CountedAdapter()
+    adapter.status.update(refusal_identity_raw())
+    owner = NativeHostPolicy(adapter)
+    assert owner.refusal_identity is None
+    owner.tick()
+    assert adapter.status_reads == 2 and owner.ready() and not adapter.calls
+    assert owner.refusal_identity == dict(version=1, id=OTHER, source="descriptor", operation_id=19, window_count=2)
+    # Current native operation differs: do not relabel the last actual refusal.
+    adapter.status["operation_id"] = 20
+    adapter.status["private_address"] = "never exported"
+    owner.tick()
+    assert adapter.status_reads == 3 and owner.refusal_identity["operation_id"] == 19
+    assert set(owner.refusal_identity) == {"version", "id", "source", "operation_id", "window_count"}
+    assert "refusal_identity" not in owner.snapshot()
+    before = owner.snapshot()
+    adapter.status["saved_refusal_version"] = 2
+    owner.tick()
+    assert adapter.status_reads == 4 and owner.refusal_identity is None and owner.snapshot() == before
+
+
+def test_saved_refusal_identity_empty_and_absent_capabilities_do_not_change_policy():
+    adapter = Adapter()
+    owner = NativeHostPolicy(adapter)
+    owner.tick()
+    assert owner.ready() and owner.refusal_identity is None
+    adapter.status.update(refusal_identity_raw(None, None, 0, 0))
+    owner.tick()
+    assert owner.refusal_identity == dict(version=1, id=None, source=None, operation_id=0, window_count=0)
+    adapter.status["version"] = 0
+    owner.tick()
+    assert owner.refusal_identity is None
+
+
+@pytest.mark.parametrize("field,invalid", [
+    ("saved_refusal_version", True), ("saved_refusal_version", 2),
+    ("last_saved_refusal_id", "0000000000000000"), ("last_saved_refusal_id", "ABCD"),
+    ("last_saved_refusal_id", 1), ("last_saved_refusal_id", None),
+    ("last_saved_refusal_source", "address"), ("last_saved_refusal_source", None),
+    ("last_saved_refusal_operation_id", 0), ("last_saved_refusal_operation_id", True),
+    ("last_saved_refusal_operation_id", 0x100000000), ("saved_refusal_window_count", 0),
+    ("saved_refusal_window_count", -1), ("saved_refusal_window_count", 1.0),
+])
+def test_saved_refusal_identity_rejects_malformed_public_fields(field, invalid):
+    raw = refusal_identity_raw()
+    assert checked_refusal_identity(raw)["id"] == HOST
+    raw[field] = invalid
+    assert checked_refusal_identity(raw) is None
 
 
 def connected(adapter, operation=1, identity=HOST):

@@ -157,9 +157,36 @@ runtime retains the reviewed eight-bond, 24-CCCD capacity and requires a
 [bond-preserving app-only update](ble-runtime-update.md) with the separate
 [scoped native write approval and rollback checks](../reliability/RUNTIME-FLASH-GUARDS.md).
 Capacity increases cannot restore keys already evicted or erased. Diagnose such
-a host separately. Under host-policy ownership, **Erase BLE bonds** directs
-the owner to **Volume hosts → Disconnect → select host → Forget**. The
-legacy runtime keeps its existing erase flow; ordinary handoff uses no wipe.
+a host separately. The native runtime rejects the legacy global erase command,
+so CrowPanel Settings no longer shows **Erase BLE bonds**. Remove a single saved
+host through **Volume hosts → Disconnect → select host → Forget**. The legacy
+runtime keeps its existing erase flow; ordinary handoff uses no wipe.
+
+## Clean-baseline maintenance
+
+For troubleshooting suspect saved state, establish a known clean baseline early
+within the owner's cleanup scope. Keep recovery backups separately, clear the
+suspect active state and verify each intended host individually before adding
+the next. Do not keep repeating an inconclusive test through retained state.
+
+The optional native `adapter.clear_saved_hosts(bond_generation)` maintenance
+operation clears all five saved-peer record families and their RAM inventory.
+It is separate from the rejected legacy erase command and is not exposed as a
+CrowPanel button. It requires a coherent current generation, clean persisted
+PAUSED, no link or advertising and no competing operation. It keeps the unit's
+local IRK, unrelated NVS and application/private files. It does not start pairing
+or retry a failed clear. See the
+[native maintenance contract](../../tools/circuitpython-runtime/HOST-POLICY-API.md#explicit-all-peer-maintenance-clear)
+for completion and failure conditions.
+
+Take a full recovery backup before this intentional all-peer clear. After it
+reports an empty paused roster, remove this volume peripheral's stale entry on
+each host before that host's fresh enrollment. Keep competing host radios off for that
+initial check, then verify actual volume controls and the onscreen keyboard on
+the iPhone. Add and verify other hosts one at a time, followed by switching and
+controller power-cycle persistence. Build/readback evidence and physical
+acceptance are tracked separately in the
+[Phase 2 results](../reliability/phase2-host-selection.md).
 
 ## Keep the startup name stable
 

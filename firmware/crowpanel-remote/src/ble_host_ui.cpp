@@ -94,11 +94,16 @@ void status_text(uint32_t now, char *out, size_t capacity) {
     const hp::Decoder &decoder = g_control.decoder;
     if (!decoder.fresh_status(now)) { snprintf(out, capacity, "Controller host status unavailable"); return; }
     const hp::Status &state = decoder.status;
+    const hp::Result result = g_control.result_for_status(now);
     if (!decoder.supported(now) || state.state == hp::UNSUPPORTED) {
         snprintf(out, capacity, "Host switching needs updated controller firmware"); return;
     }
     if (!g_control.admitted(now)) { snprintf(out, capacity, "Loading saved volume hosts..."); return; }
-    if (g_control.result == hp::REJECTED) {
+    if (state.state == hp::ERROR_STATE) {
+        snprintf(out, capacity, "Host operation failed (domain %u, code %ld, reason %lu). Disconnect to pause.",
+                 state.error_domain, static_cast<long>(state.error_code), static_cast<unsigned long>(state.reason)); return;
+    }
+    if (result == hp::REJECTED) {
         if (g_control.last_opcode() == hp::FORGET && state.request_error == 8) {
             snprintf(out, capacity, "Disconnect first, then Forget."); return;
         }
@@ -107,34 +112,21 @@ void status_text(uint32_t now, char *out, size_t capacity) {
         }
         snprintf(out, capacity, "Request rejected (code %u). Refresh the host selection.", state.request_error); return;
     }
-    if (g_control.result == hp::ENROLLMENT_ENDED && state.state == hp::PAUSED_STATE &&
+    if (result == hp::ENROLLMENT_ENDED && state.state == hp::PAUSED_STATE &&
         state.requested_mode == hp::PAUSED && state.applied_mode == hp::PAUSED &&
         !(state.flags & (hp::CONNECTED_FLAG | hp::ADVERTISING)) &&
         ((!state.error_domain && !state.error_code) || (state.error_domain == 1 && state.error_code == 6))) {
         snprintf(out, capacity, "Pairing window ended without a connected host."); return;
     }
-    if (state.state == hp::ERROR_STATE || state.error_domain || state.error_code || g_control.result == hp::FAILED) {
-        snprintf(out, capacity, "Host operation failed (domain %u, code %ld, reason %lu)",
-                 state.error_domain, static_cast<long>(state.error_code), static_cast<unsigned long>(state.reason)); return;
-    }
-    if (g_control.result == hp::TIMED_OUT) { snprintf(out, capacity, "Request unconfirmed. Check the selected host."); return; }
-    if (g_control.result == hp::RESTARTED) { snprintf(out, capacity, "Controller restarted. Select the host again."); return; }
-    if (g_control.result == hp::SUPERSEDED) { snprintf(out, capacity, "Another request replaced this operation."); return; }
-    if (g_control.result == hp::NOT_SENT) { snprintf(out, capacity, "Request was not sent. Controller radio unavailable."); return; }
     char name[64]; peer_name(state.target, now, name, sizeof(name));
     if (state.state == hp::ENROLLING) {
         snprintf(out, capacity, "Pair a new volume host — %u seconds remaining", state.enrollment_remaining); return;
     }
-    if (g_control.result == hp::PENDING || state.state == hp::SWITCHING || !(state.flags & hp::READY)) {
+    if (result == hp::PENDING || state.state == hp::SWITCHING || !(state.flags & hp::READY)) {
         snprintf(out, capacity, "Waiting for the controller to confirm the request..."); return;
     }
-    if (g_control.result == hp::CONFIRMED && g_control.last_opcode() == hp::FORGET) {
+    if (result == hp::CONFIRMED && g_control.last_opcode() == hp::FORGET) {
         snprintf(out, capacity, "Host forgotten on this unit. Other saved hosts are kept. Remove this unit on that host, then use Pair new host."); return;
-    }
-    if (state.requested_mode == hp::PAUSED && state.applied_mode == hp::PAUSED &&
-        state.state == hp::PAUSED_STATE && (state.flags & hp::PERSISTED) &&
-        !(state.flags & (hp::CONNECTED_FLAG | hp::ADVERTISING))) {
-        snprintf(out, capacity, "Disconnected. Saved pairings are kept."); return;
     }
     const uint16_t ready = hp::CONNECTED_FLAG | hp::ENCRYPTED | hp::BONDED | hp::HID_READY | hp::PERSISTED | hp::FILTER_READY;
     if (state.requested_mode == hp::AUTO && state.applied_mode == hp::AUTO &&
@@ -143,6 +135,25 @@ void status_text(uint32_t now, char *out, size_t capacity) {
         snprintf(out, capacity, "Volume control connected to %s", name); return;
     }
     if (state.state == hp::WAITING) { snprintf(out, capacity, "Waiting for %s to connect", name); return; }
+    if (result == hp::TIMED_OUT) {
+        if (g_control.last_opcode() == hp::SELECT) {
+            peer_name(g_control.result_target(now), now, name, sizeof(name));
+            snprintf(out, capacity, "Request unconfirmed for %s.", name);
+        } else snprintf(out, capacity, "Request unconfirmed. Check the controller.");
+        return;
+    }
+    if (result == hp::RESTARTED) { snprintf(out, capacity, "Controller restarted. Select the host again."); return; }
+    if (result == hp::SUPERSEDED) { snprintf(out, capacity, "Another request replaced this operation."); return; }
+    if (result == hp::NOT_SENT) { snprintf(out, capacity, "Request was not sent. Controller radio unavailable."); return; }
+    if (state.error_domain || state.error_code || result == hp::FAILED) {
+        snprintf(out, capacity, "Last operation ended (domain %u, code %ld, reason %lu)",
+                 state.error_domain, static_cast<long>(state.error_code), static_cast<unsigned long>(state.reason)); return;
+    }
+    if (state.requested_mode == hp::PAUSED && state.applied_mode == hp::PAUSED &&
+        state.state == hp::PAUSED_STATE && (state.flags & hp::PERSISTED) &&
+        !(state.flags & (hp::CONNECTED_FLAG | hp::ADVERTISING))) {
+        snprintf(out, capacity, "Disconnected. Saved pairings are kept."); return;
+    }
     snprintf(out, capacity, "Volume control is not ready");
 }
 

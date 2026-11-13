@@ -78,10 +78,105 @@ static uint32_t next_advertising_token;
 static hp_domain_t pending_fault_domain;
 static int pending_fault;
 static uint32_t store_generation;
+// One bounded private staging slot. SMP calls OUR then PEER synchronously;
+// neither key record is persisted before the peer IRK is validated. No VM
+// pointer, key, raw identity or OTA address from this slot is exported.
+static struct {
+    bool valid, our_pending, flushing;
+    uint16_t handle;
+    uint32_t generation, operation;
+    ble_addr_t original_ota;
+    struct ble_store_value_sec our;
+} enrollment_keys;
+static void clear_enrollment_keys(void) { memset(&enrollment_keys,0,sizeof(enrollment_keys)); }
+static bool enrollment_keys_current(void) {
+    return enrollment_keys.valid && enrollment_keys.handle==core.handle &&
+        enrollment_keys.generation==core.status.connection_generation && enrollment_keys.operation==core.status.operation_id &&
+        core.status.applied_mode==HP_ENROLL && core.status.requested_mode==HP_ENROLL &&
+        core.status.state!=HP_ERROR && !core.enrollment_rejected;
+}
 static struct ble_npl_callout policy_timer;
 static bool timer_initialized;
 static volatile bool store_guard_failed;
 typedef hp_command_t policy_request_t;
+
+// Boot-lifetime saturating counters. No GAP/store calls, allocation, printing,
+// identities or keys in callback observations; copy atomically for VM encoding.
+typedef struct {
+    uint32_t event_sequence, connect_events, connect_successes, connect_failures;
+    uint32_t admission_attempts, admissions, refused_unsynced, refused_store_guard;
+    uint32_t refused_conn_missing, refused_resolver, refused_policy, refused_slot;
+    uint32_t refused_auto_identity, refused_saved_identity, refused_candidate;
+    uint32_t saved_irk_matches, attach_failures, refused_adapter_slot, adapter_publications;
+    uint32_t adv_complete_events, adv_complete_zero_reason, adv_complete_nonzero_reason;
+    uint32_t policy_stop_calls, policy_stop_errors, vm_stop_requests, vm_stop_active, vm_stop_errors;
+    uint32_t last_connect_source, last_refusal_reason, last_adv_cause;
+    int last_connect_status, last_adv_complete_reason, last_stop_result;
+} hp_diagnostics_t;
+static hp_diagnostics_t diagnostics;
+// One public opaque-identity observation, separate from the version1 counters.
+// Update only for an actual saved-identity refusal; no peer key/address export.
+typedef struct {
+    uint64_t id;
+    uint32_t operation_id, window_count;
+    unsigned source;
+} hp_saved_refusal_t;
+static hp_saved_refusal_t saved_refusal;
+enum { HP_SAVED_FROM_DESCRIPTOR=1, HP_SAVED_FROM_SOFTWARE };
+enum {
+    HP_REFUSE_UNSYNCED=1, HP_REFUSE_STORE_GUARD, HP_REFUSE_CONN_MISSING, HP_REFUSE_RESOLVER,
+    HP_REFUSE_POLICY, HP_REFUSE_SLOT, HP_REFUSE_AUTO_IDENTITY, HP_REFUSE_SAVED_IDENTITY, HP_REFUSE_CANDIDATE, HP_REFUSE_ADAPTER_SLOT
+};
+enum { HP_ADV_CAUSE_POLICY_STOP=1, HP_ADV_CAUSE_VM_STOP, HP_ADV_CAUSE_CONNECT_EVENT, HP_ADV_CAUSE_ADV_COMPLETE };
+static void count(uint32_t *value) { if (*value!=UINT32_MAX) { ++*value; } }
+static void refused(uint32_t *counter, unsigned reason) {
+    portENTER_CRITICAL(&policy_mux);
+    count(counter); count(&diagnostics.event_sequence); diagnostics.last_refusal_reason=reason;
+    portEXIT_CRITICAL(&policy_mux);
+}
+static void record_saved_refusal(const hp_address_t *identity, unsigned source, uint32_t operation, bool pre_admission) {
+    uint64_t id=hp_identity_id(identity);
+    portENTER_CRITICAL(&policy_mux);
+    if (pre_admission) {
+        count(&diagnostics.refused_saved_identity); count(&diagnostics.event_sequence);
+        diagnostics.last_refusal_reason=HP_REFUSE_SAVED_IDENTITY;
+    }
+    if (saved_refusal.operation_id!=operation) { saved_refusal.window_count=0; }
+    saved_refusal.id=id; saved_refusal.source=source; saved_refusal.operation_id=operation;
+    count(&saved_refusal.window_count);
+    portEXIT_CRITICAL(&policy_mux);
+}
+void bleio_host_policy_observe_gap_event(const struct ble_gap_event *event, unsigned source) {
+    if (event->type!=BLE_GAP_EVENT_CONNECT && event->type!=BLE_GAP_EVENT_ADV_COMPLETE) { return; }
+    portENTER_CRITICAL(&policy_mux);
+    count(&diagnostics.event_sequence);
+    if (event->type==BLE_GAP_EVENT_CONNECT) {
+        count(&diagnostics.connect_events);
+        count(event->connect.status ? &diagnostics.connect_failures : &diagnostics.connect_successes);
+        diagnostics.last_connect_status=event->connect.status; diagnostics.last_connect_source=source;
+        diagnostics.last_adv_cause=HP_ADV_CAUSE_CONNECT_EVENT;
+    } else {
+        count(&diagnostics.adv_complete_events);
+        count(event->adv_complete.reason ? &diagnostics.adv_complete_nonzero_reason : &diagnostics.adv_complete_zero_reason);
+        diagnostics.last_adv_complete_reason=event->adv_complete.reason;
+        diagnostics.last_adv_cause=HP_ADV_CAUSE_ADV_COMPLETE;
+    }
+    portEXIT_CRITICAL(&policy_mux);
+}
+void bleio_host_policy_observe_vm_adv_stop(bool active, int result) {
+    portENTER_CRITICAL(&policy_mux);
+    count(&diagnostics.event_sequence); count(&diagnostics.vm_stop_requests);
+    if (active) { count(&diagnostics.vm_stop_active); }
+    if (result && result!=BLE_HS_EALREADY && result!=BLE_HS_EINVAL) { count(&diagnostics.vm_stop_errors); }
+    diagnostics.last_stop_result=result; diagnostics.last_adv_cause=HP_ADV_CAUSE_VM_STOP;
+    portEXIT_CRITICAL(&policy_mux);
+}
+void bleio_host_policy_observe_adapter_no_slot(void) {
+    refused(&diagnostics.refused_adapter_slot,HP_REFUSE_ADAPTER_SLOT);
+}
+void bleio_host_policy_observe_adapter_publication(void) {
+    portENTER_CRITICAL(&policy_mux); count(&diagnostics.adapter_publications); portEXIT_CRITICAL(&policy_mux);
+}
 
 static int guarded_write(int type, const union ble_store_value *value);
 static int guarded_delete(int type, const union ble_store_key *key);
@@ -112,7 +207,7 @@ static void clear_inputs(void) {
 static void fault(hp_domain_t domain, int code) {
     // May run under NimBLE's store lock: latch only; no nested GAP/store call.
     portENTER_CRITICAL(&policy_mux);
-    if (!store_guard_failed) {
+    if (!store_guard_failed && !fault_pending && core.status.state!=HP_ERROR) {
         fault_pending=true; pending_fault_domain=domain; pending_fault=code;
     }
     observed.filter_ready=false; observed.hid_ready=false;
@@ -130,9 +225,11 @@ static bool check_store_guards(void) {
         ble_hs_cfg.store_write_cb!=guarded_write || ble_hs_cfg.store_delete_cb!=guarded_delete ||
         ble_hs_cfg.store_status_cb!=bleio_host_policy_store_status)) {
         store_guard_failed=true;
-        fault_pending=true;
-        pending_fault_domain=HP_DOMAIN_NIMBLE;
-        pending_fault=BLE_HS_ESTORE_FAIL;
+        if (!fault_pending && core.status.state!=HP_ERROR) {
+            fault_pending=true;
+            pending_fault_domain=HP_DOMAIN_NIMBLE;
+            pending_fault=BLE_HS_ESTORE_FAIL;
+        }
         observed.filter_ready=false;
         observed.hid_ready=false;
         hp_clear_input(&input_queue);
@@ -163,6 +260,11 @@ static int stop_advertising(void *unused) {
     rc=ble_gap_adv_stop();
     #endif
     common_hal_bleio_adapter_obj.user_advertising=false;
+    portENTER_CRITICAL(&policy_mux);
+    count(&diagnostics.event_sequence); count(&diagnostics.policy_stop_calls);
+    if (rc && rc!=BLE_HS_EALREADY && rc!=BLE_HS_EINVAL) { count(&diagnostics.policy_stop_errors); }
+    diagnostics.last_stop_result=rc; diagnostics.last_adv_cause=HP_ADV_CAUSE_POLICY_STOP;
+    portEXIT_CRITICAL(&policy_mux);
     return rc==BLE_HS_EALREADY || rc==BLE_HS_EINVAL ? 0 : rc;
 }
 static int terminate(void *unused, uint16_t handle) {
@@ -403,6 +505,55 @@ static int forget_family(nvs_handle_t handle, int type, const hp_address_t *targ
     }
     return 0;
 }
+static int clear_peer_records(void *unused, bool apply) {
+    (void)unused;
+    static const int families[]={BLE_STORE_OBJ_TYPE_PEER_ADDR,BLE_STORE_OBJ_TYPE_CSFC,
+        BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_CCCD,BLE_STORE_OBJ_TYPE_PEER_SEC};
+    nvs_handle_t handle;int rc;
+    ble_hs_lock();
+    rc=nvs_open("nimble_bond",apply ? NVS_READWRITE : NVS_READONLY,&handle);
+    if (rc) { ble_hs_unlock();return rc; }
+    for (unsigned f=0;!rc && f<sizeof(families)/sizeof(families[0]);f++) {
+        unsigned count;rc=forget_ram_count(families[f],&count);
+    }
+    // This explicitly authorized ALL-peer operation deliberately does not
+    // require one-to-one legacy RAM/NVS keys. It removes duplicates/orphans,
+    // never local_irk, and never erases a namespace or the NVS partition.
+    for (unsigned f=0;apply && !rc && f<sizeof(families)/sizeof(families[0]);f++) {
+        int type=families[f];unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
+        const char *prefix=store_prefix(type);
+        if (!prefix) { rc=HP_STORAGE;break; }
+        for (unsigned slot=1;!rc && slot<=limit;slot++) {
+            char key[16];snprintf(key,sizeof(key),"%s_%u",prefix,slot);
+            rc=nvs_erase_key(handle,key);
+            if (rc==ESP_ERR_NVS_NOT_FOUND) { rc=0; }
+        }
+    }
+    if (apply && !rc) { rc=nvs_commit(handle); }
+    for (unsigned f=0;apply && !rc && f<sizeof(families)/sizeof(families[0]);f++) {
+        int type=families[f];unsigned limit=type==BLE_STORE_OBJ_TYPE_CCCD ? 24 : 8;
+        const char *prefix=store_prefix(type);
+        if (!prefix) { rc=HP_STORAGE;break; }
+        for (unsigned slot=1;!rc && slot<=limit;slot++) {
+            char key[16];snprintf(key,sizeof(key),"%s_%u",prefix,slot);
+            union ble_store_value value;size_t size=store_size(type);
+            int readback=nvs_get_blob(handle,key,&value,&size);
+            if (readback!=ESP_ERR_NVS_NOT_FOUND) { rc=readback ? readback : HP_STORAGE; }
+        }
+    }
+    if (apply && !rc) {
+        memset(ble_store_config_our_secs,0,sizeof(ble_store_config_our_secs));
+        memset(ble_store_config_peer_secs,0,sizeof(ble_store_config_peer_secs));
+        memset(ble_store_config_cccds,0,sizeof(ble_store_config_cccds));
+        memset(ble_store_config_csfcs,0,sizeof(ble_store_config_csfcs));
+        memset(ble_store_config_rpa_recs,0,sizeof(ble_store_config_rpa_recs));
+        ble_store_config_num_our_secs=ble_store_config_num_peer_secs=0;
+        ble_store_config_num_cccds=ble_store_config_num_csfcs=ble_store_config_num_rpa_recs=0;
+        ble_store_config_our_bond_count=ble_store_config_peer_bond_count=0;
+        store_generation++;
+    }
+    nvs_close(handle);ble_hs_unlock();return rc;
+}
 static int forget_records(void *unused, const hp_address_t *target, bool apply) {
     (void)unused;
     static const int families[]={BLE_STORE_OBJ_TYPE_PEER_ADDR,BLE_STORE_OBJ_TYPE_CSFC,
@@ -528,34 +679,126 @@ static int filter(void *unused, const hp_address_t *target) {
     if (rc) { return rc; }
     return ble_hs_pvcy_set_resolve_enabled(1);
 }
+static bool cccd_flags_allowed(const struct ble_store_value_cccd *requested) {
+    hp_address_t raw=address(&requested->peer_addr), normalized;
+    if (!requested->chr_val_handle || (requested->flags&~3u) ||
+        !hp_normalize(&normalized,&raw) || core.handle==HP_INVALID_HANDLE ||
+        !core.status.connected || !core.status.encrypted || !core.status.bonded ||
+        core.status.connected_id!=hp_identity_id(&normalized) || core.status.state==HP_ERROR ||
+        core.enrollment_rejected) { return false; }
+    portENTER_CRITICAL(&policy_mux);
+    bool blocked=fault_pending || store_guard_failed;
+    bool changing=command_queue.pending || processing || policy_busy;
+    portEXIT_CRITICAL(&policy_mux);
+    if (blocked) { return false; }
+    // Disabling the still-current link is safe during Disconnect/Select: it
+    // cannot cross an input or policy-generation barrier to enable reports.
+    if (!requested->flags) { return true; }
+    return !changing && core.status.applied_mode==core.status.requested_mode &&
+        hp_store_allowed(&core,&normalized,false,true,true);
+}
+static int persist_cccd_flags(struct ble_store_value_cccd *ram,
+    const struct ble_store_value_cccd *requested) {
+    // The caller already holds NimBLE's host lock. Rewrite exactly one
+    // canonical CCCD slot; the vendor equal-count writer skips persistence
+    // and its delete/persist-all path can disturb another host's old rows.
+    nvs_handle_t handle;
+    int rc=nvs_open("nimble_bond",NVS_READWRITE,&handle);
+    if (rc) { fault(HP_DOMAIN_NVS,rc); return rc; }
+    unsigned matched=0; char selected[16]={0};
+    struct ble_store_value_cccd canonical={0};
+    for (unsigned slot=1;!rc && slot<=24;slot++) {
+        char key[16]; snprintf(key,sizeof(key),"cccd_sec_%u",slot);
+        struct ble_store_value_cccd saved={0}; size_t size=sizeof(saved);
+        rc=nvs_get_blob(handle,key,&saved,&size);
+        if (rc==ESP_ERR_NVS_NOT_FOUND) { rc=0; continue; }
+        if (rc || size!=sizeof(saved)) { rc=rc ? rc : HP_STORAGE; break; }
+        if (!same_store_address(&saved.peer_addr,&ram->peer_addr) ||
+            saved.chr_val_handle!=ram->chr_val_handle) { continue; }
+        if (++matched!=1 || saved.flags!=ram->flags) { rc=HP_STORAGE; break; }
+        memcpy(selected,key,sizeof(selected)); canonical=saved;
+    }
+    if (!rc && matched!=1) { rc=HP_STORAGE; }
+    if (!rc) {
+        canonical.flags=requested->flags; canonical.value_changed=requested->value_changed;
+        rc=nvs_set_blob(handle,selected,&canonical,sizeof(canonical));
+        if (!rc) { rc=nvs_commit(handle); }
+        if (!rc) {
+            struct ble_store_value_cccd checked={0}; size_t size=sizeof(checked);
+            rc=nvs_get_blob(handle,selected,&checked,&size);
+            if (!rc && (size!=sizeof(checked) || memcmp(&checked,&canonical,sizeof(checked)))) { rc=HP_STORAGE; }
+        }
+        store_generation++;
+    }
+    nvs_close(handle);
+    if (rc) { fault(HP_DOMAIN_NVS,rc); return rc; }
+    *ram=canonical; schedule(); return 0;
+}
 static int update_existing_cccd(const struct ble_store_value_cccd *existing,
     const struct ble_store_value_cccd *requested) {
-    // NimBLE invokes the store callback under its host lock. Its pinned ESP
-    // backend skips persistence for an equal CCCD count. Update just the
-    // delivery marker under the same lock, without entering the NVS writer.
+    // NimBLE invokes the store callback under its host lock. Equal flags only
+    // change the transient delivery marker. A real subscription change needs
+    // the separate canonical-slot writer: the vendor skips equal-count saves.
     if (!same_store_address(&existing->peer_addr,&requested->peer_addr) ||
-        existing->chr_val_handle!=requested->chr_val_handle || existing->flags!=requested->flags) {
+        existing->chr_val_handle!=requested->chr_val_handle) {
         int detail=durable_error_code(BLE_STORE_OBJ_TYPE_CCCD,DURABLE_VALUE_DIFF);
         fault(HP_DOMAIN_NVS,detail);
         return BLE_HS_ESTORE_FAIL;
     }
-    if (existing->value_changed==requested->value_changed) { return 0; }
     struct ble_store_value_cccd *match=NULL;
     for (int i=0;i<ble_store_config_num_cccds;i++) {
         struct ble_store_value_cccd *row=&ble_store_config_cccds[i];
         if (!same_store_address(&row->peer_addr,&requested->peer_addr) ||
             row->chr_val_handle!=requested->chr_val_handle) { continue; }
-        if (match || row->flags!=requested->flags) { return BLE_HS_EREJECT; }
+        if (match || row->flags!=existing->flags) { return BLE_HS_EREJECT; }
         match=row;
     }
     if (!match) { return BLE_HS_ESTORE_FAIL; }
+    if (existing->flags!=requested->flags) {
+        if (!cccd_flags_allowed(requested)) { return BLE_HS_EREJECT; }
+        return persist_cccd_flags(match,requested);
+    }
+    if (existing->value_changed==requested->value_changed) { return 0; }
     match->value_changed=requested->value_changed;
     return 0;
 }
+static int reject_enrollment_keys(hp_domain_t domain, int reason) {
+    // Store callback already owns the host lock. Latch only; the ordinary
+    // service fault path performs stop/terminate on the host task later.
+    hp_latch_enrollment_rejection(&core,core.handle,core.status.connection_generation);
+    clear_enrollment_keys();
+    fault(domain,reason);
+    return BLE_HS_ESTORE_FAIL;
+}
+static int validate_enrollment_peer(const struct ble_store_value_sec *peer, hp_domain_t *domain) {
+    *domain=HP_DOMAIN_SECURITY;
+    union ble_store_key key; union ble_store_value existing;
+    memset(&key,0,sizeof(key));key.sec.peer_addr=*BLE_ADDR_ANY;
+    for (unsigned i=0;i<=HP_MAX_PEERS;i++) {
+        key.sec.idx=(uint8_t)i;
+        // Unlike ble_store_iterate/read, this direct config read does not take
+        // the host lock again. The current store callback already owns it.
+        int rc=ble_store_config_read(BLE_STORE_OBJ_TYPE_PEER_SEC,&key,&existing);
+        if (rc==BLE_HS_ENOENT) { break; }
+        if (rc) { *domain=HP_DOMAIN_NVS; return rc; }
+        if (i==HP_MAX_PEERS) { return HP_CAPACITY; }
+        if (peer->irk_present && existing.sec.irk_present &&
+            !same_store_address(&peer->peer_addr,&existing.sec.peer_addr) &&
+            !memcmp(peer->irk,existing.sec.irk,sizeof(peer->irk))) { return HP_DUPLICATE_IRK; }
+    }
+    const ble_addr_t *ota=&enrollment_keys.original_ota;
+    if (ota->type==BLE_ADDR_RANDOM && (ota->val[5]&0xc0)==0x40) {
+        uint8_t hash[3];
+        if (!peer->irk_present || ble_hs_pvcy_rpa_ah(peer->irk,ota->val+3,hash) || memcmp(hash,ota->val,3)) {
+            return HP_IRK_RPA_MISMATCH;
+        }
+    }
+    return 0;
+}
 static int guarded_write(int type, const union ble_store_value *value) {
-    if (!check_store_guards()) { return BLE_HS_ESTORE_FAIL; }
+    if (!check_store_guards()) { clear_enrollment_keys();return BLE_HS_ESTORE_FAIL; }
     const char *prefix=store_prefix(type);
-    if (core.enrollment_rejected && prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) { return BLE_HS_ESTORE_FAIL; }
+    if (core.enrollment_rejected && prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) { clear_enrollment_keys();return BLE_HS_ESTORE_FAIL; }
     if (type==BLE_STORE_OBJ_TYPE_CCCD && (ble_store_config_num_cccds<0 ||
         ble_store_config_num_cccds>MYNEWT_VAL(BLE_STORE_MAX_CCCDS))) {
         fault(HP_DOMAIN_NVS,BLE_HS_ESTORE_FAIL);
@@ -573,12 +816,17 @@ static int guarded_write(int type, const union ble_store_value *value) {
             return BLE_HS_ESTORE_FAIL;
         }
     }
+    bool mark_persisted=false;
     if (prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
+        if (enrollment_keys.our_pending && !enrollment_keys.flushing &&
+            type!=BLE_STORE_OBJ_TYPE_OUR_SEC && type!=BLE_STORE_OBJ_TYPE_PEER_SEC) {
+            return reject_enrollment_keys(HP_DOMAIN_SECURITY,HP_KEY_SEQUENCE);
+        }
         union ble_store_key key; union ble_store_value existing;
         memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
         ble_store_key_from_value(type,&key,value);
         int found=ble_store_config_read(type,&key,&existing);
-        if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
+        if (found!=0 && found!=BLE_HS_ENOENT) { clear_enrollment_keys();fault(HP_DOMAIN_NVS,found); return found; }
         if (type==BLE_STORE_OBJ_TYPE_CCCD && found==0) {
             return update_existing_cccd(&existing.cccd,&value->cccd);
         }
@@ -601,7 +849,34 @@ static int guarded_write(int type, const union ble_store_value *value) {
                  memcmp(existing.sec.ltk,value->sec.ltk,16)==0 && memcmp(existing.sec.irk,value->sec.irk,16)==0 && memcmp(existing.sec.csrk,value->sec.csrk,16)==0;
         }
         portENTER_CRITICAL(&policy_mux); bool blocked=command_queue.pending || processing || fault_pending; portEXIT_CRITICAL(&policy_mux);
-        if (blocked || !hp_store_allowed(&core,&a,security,found==0,same)) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
+        bool was_started=core.candidate_store_started;
+        if (blocked || !hp_store_allowed(&core,&a,security,found==0,same)) { clear_enrollment_keys();fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
+        mark_persisted=core.status.applied_mode==HP_ENROLL && core.status.requested_mode==HP_ENROLL;
+        if (mark_persisted) { core.candidate_store_started=was_started; }
+        if (mark_persisted && security && !enrollment_keys.flushing) {
+            if (!enrollment_keys_current()) { return reject_enrollment_keys(HP_DOMAIN_SECURITY,HP_KEY_SEQUENCE); }
+            if (type==BLE_STORE_OBJ_TYPE_OUR_SEC) {
+                if (enrollment_keys.our_pending &&
+                    memcmp(&enrollment_keys.our,&value->sec,sizeof(enrollment_keys.our))) {
+                    return reject_enrollment_keys(HP_DOMAIN_SECURITY,HP_KEY_SEQUENCE);
+                }
+                memcpy(&enrollment_keys.our,&value->sec,sizeof(enrollment_keys.our));
+                enrollment_keys.our_pending=true;
+                return 0;
+            }
+            if (!enrollment_keys.our_pending || !same_store_address(&enrollment_keys.our.peer_addr,&value->sec.peer_addr)) {
+                return reject_enrollment_keys(HP_DOMAIN_SECURITY,HP_KEY_SEQUENCE);
+            }
+            hp_domain_t domain;int invalid=validate_enrollment_peer(&value->sec,&domain);
+            if (invalid) { return reject_enrollment_keys(domain,invalid); }
+            union ble_store_value held;memset(&held,0,sizeof(held));
+            memcpy(&held.sec,&enrollment_keys.our,sizeof(enrollment_keys.our));
+            memset(&enrollment_keys.our,0,sizeof(enrollment_keys.our));enrollment_keys.our_pending=false;
+            enrollment_keys.flushing=true;
+            int flushed=guarded_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&held);
+            memset(&held,0,sizeof(held));enrollment_keys.flushing=false;
+            if (flushed) { clear_enrollment_keys();return flushed; }
+        }
     } else if (type==BLE_STORE_OBJ_TYPE_LOCAL_IRK) {
         union ble_store_key key; union ble_store_value existing;
         memset(&key,0,sizeof(key)); memset(&existing,0,sizeof(existing));
@@ -611,6 +886,7 @@ static int guarded_write(int type, const union ble_store_value *value) {
         if (found!=0 && found!=BLE_HS_ENOENT) { fault(HP_DOMAIN_NVS,found); return found; }
     }
     int rc=ble_store_config_write(type,value), detail=0;
+    if (!rc && mark_persisted) { core.candidate_store_started=true; }
     if (!rc && prefix) {
         // The pinned store assigns bond_count during OUR_SEC/PEER_SEC writes.
         // Verify the canonical POST-write record, never the caller's old count.
@@ -630,13 +906,26 @@ static int guarded_write(int type, const union ble_store_value *value) {
         memset(&canonical,0,sizeof(canonical)); memset(&expected,0,sizeof(expected));
     }
     store_generation++;
-    if (rc) { fault(HP_DOMAIN_NVS,detail ? detail : rc); }
+    if (rc) { clear_enrollment_keys();fault(HP_DOMAIN_NVS,detail ? detail : rc); }
     schedule(); return rc;
 }
 static int guarded_delete(int type, const union ble_store_key *key) {
     if (!check_store_guards()) { return BLE_HS_ESTORE_FAIL; }
     const char *prefix=store_prefix(type);
     if (core.enrollment_rejected && prefix && type!=BLE_STORE_OBJ_TYPE_LOCAL_IRK) { return BLE_HS_ESTORE_FAIL; }
+    if (type==BLE_STORE_OBJ_TYPE_CCCD) {
+        // A bonded peer writing CCCD=0 uses NimBLE's delete callback. Retain
+        // the exact record with flags=0 instead of deleting any host/bond.
+        // Wildcard keys and another peer can never use this metadata path.
+        struct ble_store_value_cccd requested={.peer_addr=key->cccd.peer_addr,
+            .chr_val_handle=key->cccd.chr_val_handle};
+        if (key->cccd.idx || !cccd_flags_allowed(&requested)) { return BLE_HS_EREJECT; }
+        union ble_store_value existing={0};
+        int rc=ble_store_config_read(type,key,&existing);
+        if (rc==BLE_HS_ENOENT) { return rc; } // No canonical row to rewrite; create nothing.
+        if (rc) { fault(HP_DOMAIN_NVS,rc); return rc; }
+        return update_existing_cccd(&existing.cccd,&requested);
+    }
     if (prefix && type!=BLE_STORE_OBJ_TYPE_PEER_ADDR) { fault(HP_DOMAIN_SECURITY,HP_REPEAT_PAIR); return BLE_HS_ESTORE_FAIL; }
     return ble_store_config_delete(type,key);
 }
@@ -667,21 +956,23 @@ static void service(struct ble_npl_event *event) {
     policy_busy=has_request || has_fault;
     portEXIT_CRITICAL(&policy_mux);
     bool transitioning=has_request || has_fault || core.status.state==HP_SWITCHING;
-    if (has_request || has_fault) { clear_inputs(); }
+    if (has_request || has_fault) { clear_inputs();clear_enrollment_keys(); }
     if (has_fault) {
         if (guards_ok) { (void)release_old_input(); }
         hp_fail(&core,domain,error);
         // A command already queued BEFORE this fault is not a new recovery
         // intent. Publish its terminal error; never erase the fault by applying it.
-        if (has_request) { core.status.operation_id=local.operation; if (!local.alias && !local.forget) { core.status.requested_mode=local.mode; } }
+        if (has_request) { core.status.operation_id=local.operation; if (!local.alias && !local.forget && !local.clear_peers) { core.status.requested_mode=local.mode; } }
     } else if (has_request && guards_ok) {
         int release_error=release_old_input();
         if (release_error) { core.status.operation_id=local.operation; hp_fail(&core,HP_DOMAIN_NIMBLE,release_error); }
+        else if (local.clear_peers) { core.status.operation_id=local.operation; hp_clear_saved_hosts(&core,local.generation); }
         else if (local.forget) { core.status.operation_id=local.operation; hp_forget(&core,local.target,local.generation); }
         else if (local.alias) { core.status.operation_id=local.operation; int rc=hp_set_alias(&core,local.target,local.text,local.length); if (rc) { hp_fail(&core,HP_DOMAIN_NVS,rc); } }
         else { hp_request(&core,local.mode,local.target,local.operation,local.timeout_s,millis()); }
     }
     if (guards_ok) { hp_tick(&core,millis()); }
+    if (!enrollment_keys_current()) { clear_enrollment_keys(); }
     // A stop/filter transition and start must run in DIFFERENT NimBLE event
     // contexts. On the next tick, admission is re-evaluated, never cached on VM.
     if (!transitioning || !guards_ok) {
@@ -757,7 +1048,7 @@ static int reserve_enrollment(void *unused) {
 }
 void bleio_host_policy_init(int nvs_error) {
     if (initialized) { return; }
-    hp_backend_t backend={.persist=persist,.stop_advertising=stop_advertising,.terminate=terminate,.filter=filter,.peers=peers,.reserve_enrollment=reserve_enrollment,.forget=forget_records};
+    hp_backend_t backend={.persist=persist,.stop_advertising=stop_advertising,.terminate=terminate,.filter=filter,.peers=peers,.reserve_enrollment=reserve_enrollment,.forget=forget_records,.clear_peers=clear_peer_records};
     hp_blob_t blob; memset(&blob,0,sizeof(blob)); bool present=false;
     if (!nvs_error) {
         nvs_handle_t handle; int rc=nvs_open("bm83_hid_policy",NVS_READONLY,&handle);
@@ -765,6 +1056,7 @@ void bleio_host_policy_init(int nvs_error) {
         if (rc!=ESP_OK && rc!=ESP_ERR_NVS_NOT_FOUND) { nvs_error=rc; }
     }
     hp_init(&core,&backend,present ? &blob : NULL,nvs_error);
+    clear_enrollment_keys();
     initialized=true; publish();
 }
 void bleio_host_policy_sync(void) {
@@ -922,27 +1214,56 @@ static int resolve_saved(int type, union ble_store_value *value, void *cookie) {
     ctx->identity=normalized; ctx->found=true; return 0;
 }
 uint32_t bleio_host_policy_connect(uint16_t handle) {
-    if (!synced || !check_store_guards()) { terminate(NULL,handle); return 0; }
+    portENTER_CRITICAL(&policy_mux); count(&diagnostics.admission_attempts); portEXIT_CRITICAL(&policy_mux);
+    if (!synced) { refused(&diagnostics.refused_unsynced,HP_REFUSE_UNSYNCED); terminate(NULL,handle); return 0; }
+    if (!check_store_guards()) { refused(&diagnostics.refused_store_guard,HP_REFUSE_STORE_GUARD); terminate(NULL,handle); return 0; }
     portENTER_CRITICAL(&policy_mux); processing=true; portEXIT_CRITICAL(&policy_mux);
     struct ble_gap_conn_desc desc;
-    if (ble_gap_conn_find(handle,&desc)) { terminate(NULL,handle); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return 0; }
+    if (ble_gap_conn_find(handle,&desc)) { refused(&diagnostics.refused_conn_missing,HP_REFUSE_CONN_MISSING); terminate(NULL,handle); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return 0; }
     hp_address_t a=address(&desc.peer_id_addr);
+    unsigned identity_source=HP_SAVED_FROM_DESCRIPTOR;
     hp_address_t normalized;
     if (!hp_normalize(&normalized,&a) && desc.peer_ota_addr.type==BLE_ADDR_RANDOM && (desc.peer_ota_addr.val[5]&0xc0)==0x40) {
-        // ENROLL clears the volatile resolving subset. Recognize and refuse an
-        // existing bonded host's RPA before it can latch the new-host slot.
+        // Refuse a known saved RPA before SMP can rekey the remote host.
+        // Fresh enrollment starts from an explicitly cleared peer store.
         // Bounded eight-record native software resolution; no keys leave C.
         resolution_t ctx; memset(&ctx,0,sizeof(ctx)); memcpy(ctx.rpa,desc.peer_ota_addr.val,6);
         int rc=ble_store_iterate(BLE_STORE_OBJ_TYPE_PEER_SEC,resolve_saved,&ctx);
         if (rc || ctx.error) {
+            refused(&diagnostics.refused_resolver,HP_REFUSE_RESOLVER);
             terminate(NULL,handle); fault(HP_DOMAIN_SECURITY,rc ? rc : ctx.error);
             portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return 0;
         }
-        if (ctx.found) { a=ctx.identity; }
+        if (ctx.found) {
+            a=ctx.identity;identity_source=HP_SAVED_FROM_SOFTWARE;
+            portENTER_CRITICAL(&policy_mux); count(&diagnostics.saved_irk_matches); portEXIT_CRITICAL(&policy_mux);
+        }
     }
-    uint32_t generation=hp_connect(&core,handle,&a); if (generation) { clear_inputs(); } publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return generation;
+    hp_connect_reason_t reason=hp_connect_reason(&core,&a);
+    uint32_t generation=hp_connect(&core,handle,&a);
+    if (generation) {
+        clear_enrollment_keys();
+        if (core.status.applied_mode==HP_ENROLL && core.status.requested_mode==HP_ENROLL) {
+            enrollment_keys.valid=true;enrollment_keys.handle=handle;
+            enrollment_keys.generation=generation;enrollment_keys.operation=core.status.operation_id;
+            enrollment_keys.original_ota=desc.peer_ota_addr;
+        }
+        portENTER_CRITICAL(&policy_mux); count(&diagnostics.admissions); portEXIT_CRITICAL(&policy_mux); clear_inputs();
+    }
+    else {
+        switch (reason) {
+            case HP_CONNECT_POLICY_CLOSED: refused(&diagnostics.refused_policy,HP_REFUSE_POLICY); break;
+            case HP_CONNECT_SLOT_BUSY: refused(&diagnostics.refused_slot,HP_REFUSE_SLOT); break;
+            case HP_CONNECT_AUTO_IDENTITY: refused(&diagnostics.refused_auto_identity,HP_REFUSE_AUTO_IDENTITY); break;
+            case HP_CONNECT_SAVED_IDENTITY: record_saved_refusal(&a,identity_source,core.status.operation_id,true); break;
+            case HP_CONNECT_CANDIDATE_IDENTITY: refused(&diagnostics.refused_candidate,HP_REFUSE_CANDIDATE); break;
+            default: break;
+        }
+    }
+    publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); return generation;
 }
 void bleio_host_policy_connection_attach_failed(uint16_t handle, uint32_t generation, int error) {
+    portENTER_CRITICAL(&policy_mux); count(&diagnostics.attach_failures); portEXIT_CRITICAL(&policy_mux);
     if (handle!=core.handle || !generation || generation!=core.status.connection_generation) { return; }
     clear_inputs();
     if (error==BLE_HS_ENOTCONN) {
@@ -952,6 +1273,22 @@ void bleio_host_policy_connection_attach_failed(uint16_t handle, uint32_t genera
         hp_fail(&core,HP_DOMAIN_NIMBLE,error);
     }
     publish();
+}
+static void authoritative_identity(uint16_t handle, uint32_t generation, const hp_address_t *identity) {
+    bool rejected=core.enrollment_rejected;
+    hp_identity(&core,handle,generation,identity);
+    if (rejected || !core.enrollment_rejected) { return; }
+    // The core has actually rejected this link. Label it only if the supplied
+    // authoritative identity is in this window's original saved snapshot;
+    // a candidate mismatch is a different cause. The sticky reject suppresses
+    // duplicate IDENTITY/ENC_CHANGE callbacks for this admitted generation.
+    uint64_t id=hp_identity_id(identity);
+    for (size_t i=0;i<core.enrollment_existing_count;i++) {
+        if (core.enrollment_existing[i]==id) {
+            record_saved_refusal(identity,HP_SAVED_FROM_DESCRIPTOR,core.status.operation_id,false);
+            break;
+        }
+    }
 }
 void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
     bool connect_failed=event->type==BLE_GAP_EVENT_CONNECT && event->connect.status!=0;
@@ -970,12 +1307,16 @@ void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
         case BLE_GAP_EVENT_IDENTITY_RESOLVED:
             handle=event->identity_resolved.conn_handle;
             if (handle!=core.handle || generation!=core.status.connection_generation || core.enrollment_rejected) { break; }
-            if (!ble_gap_conn_find(handle,&desc)) { hp_address_t a=address(&desc.peer_id_addr); hp_identity(&core,handle,generation,&a); } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
+            if (!ble_gap_conn_find(handle,&desc)) { hp_address_t a=address(&desc.peer_id_addr); authoritative_identity(handle,generation,&a); } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
             break;
         case BLE_GAP_EVENT_ENC_CHANGE:
             handle=event->enc_change.conn_handle;
             if (handle!=core.handle || generation!=core.status.connection_generation || core.enrollment_rejected) { break; }
-            if (!ble_gap_conn_find(handle,&desc)) { hp_address_t a=address(&desc.peer_id_addr); hp_identity(&core,handle,generation,&a); hp_security(&core,handle,generation,desc.sec_state.encrypted,desc.sec_state.bonded,event->enc_change.status); } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
+            if (!ble_gap_conn_find(handle,&desc)) {
+                hp_address_t a=address(&desc.peer_id_addr);
+                authoritative_identity(handle,generation,&a);
+                hp_security(&core,handle,generation,desc.sec_state.encrypted,desc.sec_state.bonded,event->enc_change.status);
+            } else { fault(HP_DOMAIN_SECURITY,HP_UNAUTHORIZED); }
             break;
         case BLE_GAP_EVENT_REPEAT_PAIRING:
             handle=event->repeat_pairing.conn_handle;
@@ -985,6 +1326,7 @@ void bleio_host_policy_event(struct ble_gap_event *event, uint32_t generation) {
         default: return;
     }
     if (before.connection_generation!=core.status.connection_generation || before.connected_id!=core.status.connected_id || before.connected!=core.status.connected || before.encrypted!=core.status.encrypted || before.bonded!=core.status.bonded || before.state!=core.status.state) { clear_inputs(); }
+    if (!enrollment_keys_current()) { clear_enrollment_keys(); }
     publish(); portENTER_CRITICAL(&policy_mux); processing=false; portEXIT_CRITICAL(&policy_mux); schedule();
 }
 void bleio_host_policy_subscription(uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled) {
@@ -1032,9 +1374,7 @@ mp_obj_t bleio_host_policy_alias(mp_obj_t target, mp_obj_t alias) {
     if (!hp_alias_valid(text,next.length)) { mp_raise_ValueError(MP_ERROR_TEXT("Host alias must be printable UTF-8, at most 24 bytes")); }
     memcpy(next.text,text,next.length); return enqueue(&next);
 }
-mp_obj_t bleio_host_policy_forget(mp_obj_t target, mp_obj_t generation) {
-    policy_request_t next; memset(&next,0,sizeof(next)); next.forget=true;
-    next.target=parse_id(target,false);
+static mp_obj_t enqueue_peer_maintenance(policy_request_t *next, mp_obj_t generation) {
     hp_status_t status; uint16_t handle; bool busy, available;
     portENTER_CRITICAL(&policy_mux);
     status=observed; handle=observed_handle;
@@ -1046,7 +1386,7 @@ mp_obj_t bleio_host_policy_forget(mp_obj_t target, mp_obj_t generation) {
     if (!available || busy || !hp_forget_allowed(&status,handle) ||
         !mp_obj_is_int(generation) ||
         !mp_obj_equal(generation,mp_obj_new_int_from_uint(status.bond_generation))) {
-        mp_raise_ValueError(MP_ERROR_TEXT("Forget requires clean PAUSED and the current bond generation"));
+        mp_raise_ValueError(MP_ERROR_TEXT("Peer maintenance requires clean PAUSED and the current bond generation"));
     }
     #if MYNEWT_VAL(BLE_EXT_ADV)
     bool advertising=ble_gap_ext_adv_active(0);
@@ -1054,8 +1394,17 @@ mp_obj_t bleio_host_policy_forget(mp_obj_t target, mp_obj_t generation) {
     bool advertising=ble_gap_adv_active();
     #endif
     if (advertising) { mp_raise_ValueError(MP_ERROR_TEXT("Disconnect before forgetting a saved host")); }
-    next.generation=status.bond_generation;
-    return enqueue(&next);
+    next->generation=status.bond_generation;
+    return enqueue(next);
+}
+mp_obj_t bleio_host_policy_clear_saved_hosts(mp_obj_t generation) {
+    policy_request_t next;memset(&next,0,sizeof(next));next.clear_peers=true;
+    return enqueue_peer_maintenance(&next,generation);
+}
+mp_obj_t bleio_host_policy_forget(mp_obj_t target, mp_obj_t generation) {
+    policy_request_t next;memset(&next,0,sizeof(next));next.forget=true;
+    next.target=parse_id(target,false);
+    return enqueue_peer_maintenance(&next,generation);
 }
 static void put(mp_obj_t dict, qstr key, mp_obj_t value) { mp_obj_dict_store(dict,MP_OBJ_NEW_QSTR(key),value); }
 mp_obj_t bleio_host_policy_peers(void) {
@@ -1073,8 +1422,8 @@ mp_obj_t bleio_host_policy_peers(void) {
     return mp_obj_new_tuple(count,items);
 }
 mp_obj_t bleio_host_policy_status(void) {
-    hp_status_t status; bool request_pending;
-    portENTER_CRITICAL(&policy_mux); status=observed; request_pending=command_queue.pending || policy_busy || fault_pending; portEXIT_CRITICAL(&policy_mux);
+    hp_status_t status; hp_diagnostics_t diag; hp_saved_refusal_t saved; bool request_pending;
+    portENTER_CRITICAL(&policy_mux); status=observed; diag=diagnostics; saved=saved_refusal; request_pending=command_queue.pending || policy_busy || fault_pending; portEXIT_CRITICAL(&policy_mux);
     static const char *modes[]={"PAUSED","AUTO","ENROLL"};
     static const char *states[]={"PAUSED","SWITCHING","WAITING","ENROLLING","CONNECTED","ERROR"};
     static const char *domains[]={"NONE","POLICY","NVS","NIMBLE","SECURITY"};
@@ -1101,5 +1450,27 @@ mp_obj_t bleio_host_policy_status(void) {
     bool advertising=synced && ble_gap_adv_active();
     #endif
     put(result,MP_QSTR_advertising,mp_obj_new_bool(advertising));
+    put(result,MP_QSTR_diag_version,MP_OBJ_NEW_SMALL_INT(1));
+    #define HP_DIAG(field) put(result,MP_QSTR_diag_##field,mp_obj_new_int_from_uint(diag.field))
+    HP_DIAG(event_sequence); HP_DIAG(connect_events); HP_DIAG(connect_successes); HP_DIAG(connect_failures);
+    HP_DIAG(admission_attempts); HP_DIAG(admissions); HP_DIAG(refused_unsynced); HP_DIAG(refused_store_guard);
+    HP_DIAG(refused_conn_missing); HP_DIAG(refused_resolver); HP_DIAG(refused_policy); HP_DIAG(refused_slot);
+    HP_DIAG(refused_auto_identity); HP_DIAG(refused_saved_identity); HP_DIAG(refused_candidate);
+    HP_DIAG(saved_irk_matches); HP_DIAG(attach_failures); HP_DIAG(refused_adapter_slot); HP_DIAG(adapter_publications); HP_DIAG(adv_complete_events);
+    HP_DIAG(adv_complete_zero_reason); HP_DIAG(adv_complete_nonzero_reason); HP_DIAG(policy_stop_calls); HP_DIAG(policy_stop_errors);
+    HP_DIAG(vm_stop_requests); HP_DIAG(vm_stop_active); HP_DIAG(vm_stop_errors);
+    HP_DIAG(last_connect_source); HP_DIAG(last_refusal_reason); HP_DIAG(last_adv_cause);
+    #undef HP_DIAG
+    put(result,MP_QSTR_diag_last_connect_status,mp_obj_new_int(diag.last_connect_status));
+    put(result,MP_QSTR_diag_last_adv_complete_reason,mp_obj_new_int(diag.last_adv_complete_reason));
+    put(result,MP_QSTR_diag_last_stop_result,mp_obj_new_int(diag.last_stop_result));
+    put(result,MP_QSTR_saved_refusal_version,MP_OBJ_NEW_SMALL_INT(1));
+    put(result,MP_QSTR_last_saved_refusal_id,id_object(saved.id));
+    mp_obj_t saved_source=mp_const_none;
+    if (saved.source==HP_SAVED_FROM_DESCRIPTOR) { saved_source=mp_obj_new_str("descriptor",10); }
+    else if (saved.source==HP_SAVED_FROM_SOFTWARE) { saved_source=mp_obj_new_str("software",8); }
+    put(result,MP_QSTR_last_saved_refusal_source,saved_source);
+    put(result,MP_QSTR_last_saved_refusal_operation_id,mp_obj_new_int_from_uint(saved.operation_id));
+    put(result,MP_QSTR_saved_refusal_window_count,mp_obj_new_int_from_uint(saved.window_count));
     return result;
 }

@@ -1,5 +1,11 @@
 # Working notes for Claude in this repo
 
+Read `AGENTS.md` for the current clean-baseline troubleshooting rule, automatic
+programming workflow, AI collaboration roles and evidence requirements. It
+applies to Claude Code as well as Codex. The local handoff records the active
+Claude session and private source/reproduction artifacts; attribute findings
+and inspect those actual files rather than treating screenshots as proof.
+
 ## Bash sandbox is a snapshot — pull origin before editing
 
 The bash sandbox mount of this repo (`/sessions/.../mnt/BM83-ESP32-S3-Nextion/`)
@@ -14,6 +20,10 @@ true end that bash thought was truncated).
 
 **Rule:** before doing any code edits, refresh the bash mount so it
 matches the Windows tree.
+
+For an explicitly frozen read-only review or builder snapshot, verify the
+supplied base, post-images and hashes instead. Do not pull newer work into a
+qualified frozen candidate or mix a supplied diff with a different base.
 
 ```bash
 cd /sessions/<id>/mnt/BM83-ESP32-S3-Nextion
@@ -53,6 +63,10 @@ content followed by a duplicate fragment.
 When `firmware/` changes, run `build_mpy.sh` to refresh `dist/`. Do not
 hand-edit `dist/` — it will be overwritten on the next build.
 
+For qualified device work, intentional compiled MPY payloads are authoritative
+for that installation. Do not run a generic deployment or delete their MPY
+files under the assumption that all compiled imports are stale.
+
 
 ## Current change workflow — direct commit and push
 
@@ -65,16 +79,25 @@ Never force-push or change branch protection, credentials or approval settings.
 If a normal push is rejected, retain the commits and report the actual rejection.
 
 Repository integration is separate from deployment and physical acceptance.
-BM83 and CrowPanel must remain offline during this maintenance. Do not enumerate,
-probe, reset, deploy to or change playback on connected devices. Preserve private
-captures/configuration and frozen source/compiler/artifact manifests. No CI or
-simulator result proves the screens, metadata, radio lifecycle or stable audio.
+Code-only maintenance defaults to offline work; it does not itself authorize
+device access. Apply the latest task's scope rather than treating that default
+as a permanent device hold. The November 12 iPhone-enrollment goal has standing
+owner approval for necessary controller/CrowPanel access, programming, cleanup
+and testing, with physical intervention only where automation cannot perform
+the required action. Its later clean-baseline directive supersedes preserving
+the three old active saved bonds. Follow `AGENTS.md`: retain recovery backups,
+clear the authorized suspect state, then enroll and verify hosts individually.
+Preserve private captures/configuration and frozen source/compiler/artifact
+manifests outside Git. No CI or simulator result proves the screens, metadata,
+radio lifecycle or stable audio.
 The November 4 B-Intel Phase 1 acceptance supplies its agreed prerequisite for
 Phase 2 Disconnect + Select host source work. Phase 2 retains its own build,
 host-selection matrix, qualified timing-window and physical acceptance gates;
 see `docs/reliability/phase1-bintel-2026-11-04.md`,
 `docs/reliability/phase2-host-selection.md` and `docs/reliability/README.md`.
-Repository maintenance remains offline and does not authorize a hardware run.
+For future tasks, determine device authorization from the current owner
+instructions; do not reimpose a superseded restriction from this historical
+maintenance note.
 
 The two weekly AI workflows have been retired so this work cannot automatically
 create new paid agent sessions or PRs. The Codacy security scan and host checks

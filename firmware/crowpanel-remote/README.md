@@ -26,11 +26,14 @@ The main 800×480 page shows title, artist, album, playback state, elapsed
 time, total time and a display-only progress bar. The 200×200 artwork area
 automatically shows a matching cached or downloaded cover when available,
 and a status placeholder otherwise. The **Settings** button opens a
-second page containing Power, Pair, EQ, Erase BLE bonds, **Wi-Fi / Artwork** and
-**Pause volume remote / Enable volume remote**. Pause releases the BLE HID link
-and stops advertising while retaining saved bonds. Enable permits saved hosts
-to reconnect; it cannot select one. See the [handoff guide](../../docs/guides/ble-volume-handoff.md)
-for switching hosts and interpreting confirmed status. Compact Previous,
+second page containing Power, Pair, EQ, **Wi-Fi / Artwork** and **Volume hosts**.
+The Pair button controls BM83 audio pairing; **Pair new host** inside Volume hosts
+opens the controller's BLE volume-host pairing window. To remove one saved volume
+host, use **Disconnect**, select that host, then **Forget** and confirm its name
+and identifier. The native controller disables the legacy global bond-erase
+command, so Settings does not expose an Erase BLE bonds button. See the
+[handoff guide](../../docs/guides/ble-volume-handoff.md) for switching hosts and
+interpreting confirmed status. Compact Previous,
 Play/Pause, Next and Volume −/+ controls remain available on both pages.
 Battery/supply indication and screen-wake gesture suppression are preserved.
 The current EQ mode is displayed beneath the battery, using the audio unit's

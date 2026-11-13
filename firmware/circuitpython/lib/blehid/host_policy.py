@@ -11,6 +11,15 @@ BOOL_FIELDS = ("advertising", "connected", "encrypted", "bonded", "hid_ready",
                "persisted", "filter_ready", "last_disconnect_local")
 GEN_FIELDS = ("operation_id", "policy_generation", "connection_generation",
               "bond_generation", "last_disconnect_generation", "subscription_generation")
+DIAG_UINT_FIELDS = ("event_sequence", "connect_events", "connect_successes", "connect_failures",
+                    "admission_attempts", "admissions", "refused_unsynced", "refused_store_guard",
+                    "refused_conn_missing", "refused_resolver", "refused_policy", "refused_slot",
+                    "refused_auto_identity", "refused_saved_identity", "refused_candidate",
+                    "saved_irk_matches", "attach_failures", "refused_adapter_slot", "adapter_publications", "adv_complete_events",
+                    "adv_complete_zero_reason", "adv_complete_nonzero_reason", "policy_stop_calls", "policy_stop_errors",
+                    "vm_stop_requests", "vm_stop_active", "vm_stop_errors",
+                    "last_connect_source", "last_refusal_reason", "last_adv_cause")
+DIAG_INT_FIELDS = ("last_connect_status", "last_adv_complete_reason", "last_stop_result")
 
 
 def valid_id(value):
@@ -25,6 +34,45 @@ def valid_alias(value):
 
 def u32(value):
     return type(value) is int and 0 <= value <= 0xFFFFFFFF
+
+
+def checked_diagnostics(value):
+    """Optional scalar-only native observations; no peer identity or key export.
+
+    Missing, malformed or future diagnostics do not change policy readiness.
+    The cache is populated from an existing host_status read, never an extra call.
+    """
+    if (not isinstance(value, dict) or type(value.get("diag_version")) is not int or value["diag_version"] != 1
+            or any(not u32(value.get("diag_" + key)) for key in DIAG_UINT_FIELDS)
+            or any(type(value.get("diag_" + key)) is not int
+                   or not -0x80000000 <= value["diag_" + key] <= 0x7FFFFFFF for key in DIAG_INT_FIELDS)):
+        return None
+    result = {key: value["diag_" + key] for key in DIAG_UINT_FIELDS + DIAG_INT_FIELDS}
+    result["version"] = 1
+    return result
+
+
+def checked_refusal_identity(value):
+    """Optional public opaque identity, read from the same native status object.
+
+    This is the last actual saved-host refusal, scoped to its recorded operation;
+    a later window without a refusal does not relabel the older observation.
+    """
+    if type(value) is not dict or type(value.get("saved_refusal_version")) is not int or value["saved_refusal_version"] != 1:
+        return None
+    identity = value.get("last_saved_refusal_id")
+    source = value.get("last_saved_refusal_source")
+    operation = value.get("last_saved_refusal_operation_id")
+    count = value.get("saved_refusal_window_count")
+    if not u32(operation) or not u32(count):
+        return None
+    if identity is None:
+        if source is not None or operation != 0 or count != 0:
+            return None
+    elif (type(identity) is not str or not valid_id(identity) or type(source) is not str
+          or source not in ("descriptor", "software") or operation == 0 or count == 0):
+        return None
+    return dict(version=1, id=identity, source=source, operation_id=operation, window_count=count)
 
 
 def clean_paused(status):
@@ -73,6 +121,8 @@ class NativeHostPolicy:
         self.version = 0
         self.claimed = False
         self.status = None
+        self.diagnostics = None
+        self.refusal_identity = None
         self.peers = ()
         self.peer_generation = None
         self.pending = None
@@ -83,6 +133,7 @@ class NativeHostPolicy:
         self._peer_connection_generation = None
         self._expected_alias = None
         self._expected_forget = None
+        self._expected_clear = None
         self._input_blocked = False
         self._operation_failed = False
         try:
@@ -102,6 +153,10 @@ class NativeHostPolicy:
             self.forget_supported = self.version == 1 and callable(getattr(adapter, "forget_host", None))
         except Exception:
             self.forget_supported = False
+        try:
+            self.clear_supported = self.version == 1 and callable(getattr(adapter, "clear_saved_hosts", None))
+        except Exception:
+            self.clear_supported = False
 
     def request(self, mode, target=None, timeout_s=60):
         if self.version != 1 or mode not in MODES:
@@ -117,6 +172,7 @@ class NativeHostPolicy:
         self.expected_operation = None
         self._expected_alias = None
         self._expected_forget = None
+        self._expected_clear = None
         self.owner_error = 0
         self._operation_failed = False
         self.input_generation = (self.input_generation + 1) & 0xFFFFFFFF
@@ -129,6 +185,7 @@ class NativeHostPolicy:
         self.expected_operation = None
         self._expected_alias = (identity, alias)
         self._expected_forget = None
+        self._expected_clear = None
         self.owner_error = 0
         self._operation_failed = False
         return True
@@ -148,6 +205,22 @@ class NativeHostPolicy:
         self.pending = ("FORGET", identity, generation)
         self.expected_operation = None
         self._expected_forget = (identity, generation)
+        self._expected_clear = None
+        self._expected_alias = None
+        self.owner_error = 0
+        self._operation_failed = False
+        return True
+
+    def clear_saved_hosts(self, generation):
+        """Explicit owner maintenance; no startup or UI path calls this automatically."""
+        if (not self.clear_supported or not self.ready() or not clean_paused(self.status)
+                or not u32(generation) or generation != self.status["bond_generation"]
+                or self.peer_generation != generation or any(p["connected"] for p in self.peers)):
+            return False
+        self.pending = ("CLEAR_PEERS", None, generation)
+        self.expected_operation = None
+        self._expected_clear = generation
+        self._expected_forget = None
         self._expected_alias = None
         self.owner_error = 0
         self._operation_failed = False
@@ -168,22 +241,33 @@ class NativeHostPolicy:
                 elif action == "FORGET":
                     operation = self.adapter.forget_host(target, extra)
                     self.peer_generation = None
+                elif action == "CLEAR_PEERS":
+                    operation = self.adapter.clear_saved_hosts(extra)
+                    self.peer_generation = None
                 else:
                     operation = self.adapter.set_host_policy(action, target_id=target, timeout_s=extra)
                 if not u32(operation) or operation == 0:
                     raise ValueError("Native operation identity")
                 self.expected_operation = operation
                 native_call = False
-            status = checked_status(self.adapter.host_status)
+            status_raw = self.adapter.host_status
+            status = checked_status(status_raw)
             if (self.peer_generation != status["bond_generation"]
                     or self._peer_connection_generation != status["connection_generation"]):
                 peers = checked_peers(self.adapter.bonded_peers, status["bond_generation"])
-                after = checked_status(self.adapter.host_status)
+                status_raw = self.adapter.host_status
+                after = checked_status(status_raw)
                 if (after["bond_generation"] != status["bond_generation"]
                         or after["connection_generation"] != status["connection_generation"]):
                     raise ValueError("Bond snapshot changed")
                 self.peers, self.peer_generation, status = peers, status["bond_generation"], after
                 self._peer_connection_generation = after["connection_generation"]
+            # Disconnect/identity publication can change live membership without
+            # changing either catalog generation. Never retain a connected bit
+            # from that cached catalog or mutate an already returned snapshot.
+            connected_id = status["connected_id"] if status["connected"] else None
+            if any(p["connected"] != (p["id"] == connected_id) for p in self.peers):
+                self.peers = tuple(dict(p, connected=p["id"] == connected_id) for p in self.peers)
             identity = (status["connection_generation"], status["subscription_generation"],
                         status["operation_id"], status["policy_generation"],
                         status["connected_id"], status["hid_ready"],
@@ -192,10 +276,14 @@ class NativeHostPolicy:
                 self._input_identity = identity
                 self.input_generation = (self.input_generation + 1) & 0xFFFFFFFF
             self.status = status
+            self.diagnostics = checked_diagnostics(status_raw)
+            self.refusal_identity = checked_refusal_identity(status_raw)
             self._input_blocked = False  # Main observes input_generation and cancels holds after this tick.
             if not self._operation_failed:
                 self.owner_error = 0
         except Exception:
+            self.diagnostics = None
+            self.refusal_identity = None
             # Do not log native objects or retry admission/persistence operations.
             self._operation_failed = self._operation_failed or native_call
             self.owner_error = 7 if self._operation_failed else 10
@@ -273,6 +361,11 @@ class NativeHostPolicy:
             and self.peer_generation == self.status["bond_generation"] != self._expected_forget[1]
             and self.status["target_id"] != self._expected_forget[0]
             and all(p["id"] != self._expected_forget[0] for p in self.peers))
+        value["clear_complete"] = bool(self._expected_clear is not None
+            and self.expected_operation is not None and self.ready() and clean_paused(self.status)
+            and self.status["operation_id"] == self.expected_operation
+            and self.peer_generation == self.status["bond_generation"] != self._expected_clear
+            and self.status["target_id"] is None and not self.peers)
         value["alias_complete"] = bool(self._expected_alias is not None and self.ready()
             and self.status["persisted"] and self.status["state"] != "ERROR"
             and self.status["error_domain"] == "NONE" and not self.status["error_code"]

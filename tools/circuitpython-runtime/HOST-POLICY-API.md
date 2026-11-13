@@ -33,6 +33,34 @@ paired, persisted or HID ready. The modes are:
   visible for a separately scoped repair; there is no automatic destructive
   cleanup.
 
+During an explicit ENROLL window, descriptor-resolved and software IRK-resolved
+saved identities are refused before SMP. This preserves the host's existing
+bond instead of inviting rekeying that the unit would later refuse to store.
+The bounded software resolver is a policy classification, not proof of physical
+host ownership. Fresh enrollment uses an explicitly established empty baseline.
+A saved identity supplied later by SMP also rejects the admitted link before
+its key writes. Even equal-key security writes for a saved identity in that
+window are refused, so the vendor cannot change its existing `bond_count`.
+AUTO selection is unchanged. The earlier experimental software-hint deferral
+and failed-restore drain have been removed.
+
+For every ENROLL link, the pinned SMP OUR→PEER callback order is guarded with
+one bounded private RAM slot. OUR is held without NVS writes or a persisted
+candidate mark until PEER arrives. A distributed peer IRK must differ from
+every other saved identity's IRK and, for an RPA link, resolve the original
+connection RPA. Only then are OUR and PEER written and read back in order.
+The slot is bound to handle, connection generation and operation, and is
+zeroed on rejection, disconnect, timeout, cancellation, fault or replacement.
+The store-lock callback latches rejection without calling GAP; the host service
+then reports SECURITY code10 (duplicate IRK),11 (missing/nonmatching IRK for
+the original RPA), or12 (key sequence/scope mismatch) and terminates once.
+These checks write no new security records when validation fails. A later
+backend failure after OUR is durable can still leave that partial new record;
+it fails closed without replacing an old host or automatically deleting data.
+Stable-address peers without a distributed IRK are supported: the pinned SMP
+code unconditionally dispatches PEER after OUR, even when its key flags are
+empty. AUTO and saved-key restoration do not use this staging path.
+
 Create the existing Adafruit HID services and payload while native policy is
 paused. After `state` is `WAITING` or `ENROLLING`, `filter_ready` is true and
 `applied_mode` matches the requested policy, call the normal application
@@ -96,6 +124,73 @@ the expected operation ID and observed state; an ESP-NOW/BMW1 ACK is insufficien
 An advertiser-stop failure remains ERROR and actual advertising is reported
 honestly. Bluetooth need not be turned off to release an ordinary working link.
 
+### Optional pre-admission diagnostics, version 1
+
+The optional saved-refusal identity observation is separate from the unchanged
+33-counter diagnostic block. `saved_refusal_version=1` adds
+`last_saved_refusal_id` (public opaque16-hex label or `None`),
+`last_saved_refusal_source` (`descriptor`, `software`, or `None`),
+`last_saved_refusal_operation_id` and `saved_refusal_window_count` (u32).
+All five fields are copied atomically with status. An actual
+`HP_CONNECT_SAVED_IDENTITY` refusal or an authoritative saved identity newly
+rejected by SMP identity handling updates the record. The latter uses
+`descriptor` and counts once per admitted link; repeated late callbacks do not
+count again. The unchanged33-counter block counts pre-admission refusals only,
+so a late saved-ID record on an admitted generation can be distinguished from
+a pre-admission refusal or an identity-free timeout. A different operation
+resets the record's saturating count on its first actual refusal. A new window without
+such a refusal retains the explicitly older-operation record. The empty record
+has `None` identity/source and zero operation/count. No address, key or IRK is
+exported. `NativeHostPolicy.refusal_identity` validates/caches these fields from
+the same existing status read; missing/future/malformed capability gives `None`
+without changing readiness. A separate optional tag may observe this cache;
+frozen state and admission counter records are unchanged. This labels native
+classification, not a proven physical-device attribution. Continuity must be
+established by uninterrupted capture; post-interrupt snapshots cannot repair a
+lost native observation epoch.
+
+Instrumented runtimes add `diag_version=1` and flat `diag_*` scalar fields to
+the existing `host_status` dictionary. `host_policy_version` remains1, and the
+ordinary policy/status fields and admission decisions are unchanged. Older
+clients ignore these additions; older runtimes omit them. The Python owner
+extracts a bounded `NativeHostPolicy.diagnostics` cache from its existing status
+read without an extra native call. Missing, malformed or future diagnostics
+produce `None` without changing policy readiness or input decisions. Diagnostic
+output belongs under a separate `[HOST_ADMISSION]` record, not inside the strict
+observer schema2 record.
+
+Counters are unsigned32-bit, saturate at `0xffffffff`, and persist for the
+native image's boot lifetime, including VM reloads and BLE disable/re-enable.
+They are not persisted to NVS. `event_sequence` saturates too; once saturated,
+exact event differences cannot be recovered. Updates and the complete exported
+diagnostic snapshot use the existing short policy mux; callbacks allocate,
+print and call no extra GAP/store function. No address, opaque peer ID or key
+material is present in this diagnostic block.
+
+The names below are shown without the native `diag_` prefix:
+
+| Fields | Meaning |
+| --- | --- |
+| `connect_events`, `connect_successes`, `connect_failures` | CONNECT callbacks observed before admission/publication or wrapper/generation filters. Success means raw status0 only, not admitted, bonded or HID ready. |
+| `last_connect_status`, `last_connect_source` | Full signed native status; source1=central Adapter callback,2=advertising callback,3=connection callback. Meaningful after `connect_events>0`. |
+| `admission_attempts`, `admissions` | Bridge admission calls and nonzero policy generations allocated. Attachment can still fail before a CircuitPython wrapper is published. |
+| `adapter_publications`, `attach_failures`, `refused_adapter_slot` | Actual wrapper publication, callback-attachment failure, and no free CircuitPython connection slot. Distinct from a raw CONNECT or core admission. |
+| `refused_unsynced`, `refused_store_guard`, `refused_conn_missing`, `refused_resolver` | Bridge refusal before the core: unavailable sync, changed store guards, missing live descriptor, and software resolver failure/ambiguity. |
+| `refused_policy`, `refused_slot`, `refused_auto_identity`, `refused_saved_identity`, `refused_candidate` | Exactly the core predicates: closed admission, existing active handle, wrong AUTO identity, existing ENROLL identity, and another ENROLL candidate. Each refused core call still terminates once and allocates no generation. |
+| `saved_irk_matches` | A completed software resolver match, separate from whether the core subsequently refuses it. It does not identify which saved host matched, nor establish the iPhone's address type. |
+| `adv_complete_events`, `adv_complete_zero_reason`, `adv_complete_nonzero_reason`, `last_adv_complete_reason` | Raw advertising completion callbacks and full last reason. A zero reason is not universally a successful connection: the pinned legacy directed-timeout path also emits0. Meaningful last reason requires an observed completion. |
+| `policy_stop_calls`, `policy_stop_errors` | Existing policy backend GAP-stop calls and errors other than the previously tolerated EALREADY/EINVAL. No additional stop is issued. |
+| `vm_stop_requests`, `vm_stop_active`, `vm_stop_errors` | Existing Adapter stop requests, those whose existing active check was true, and untolerated native stop errors. Includes automatic Adapter cleanup after advertising callbacks; not necessarily an owner action. |
+| `last_stop_result`, `last_adv_cause` | Last local stop result and latest observed category:1=policy stop call,2=Adapter stop request,3=CONNECT callback,4=ADV_COMPLETE callback. These categories are observations, not proof of RF causality or why an unobserved controller transition occurred. |
+| `last_refusal_reason` | Last counted category:1=unsynced,2=store guard,3=missing descriptor,4=resolver,5=policy,6=active slot,7=AUTO identity,8=saved ENROLL identity,9=candidate mismatch,10=Adapter slot. Meaningful only after a refusal count. |
+
+The callbacks and admission attempts are intentionally different metrics. A
+single physical attempt can yield more than one callback or no observed
+successful CONNECT before an early failure. Counters do not identify a central,
+replace iPhone-side/SMP evidence or count unreported RF activity. Native faults,
+security, subscription and ordinary policy generations remain independently
+reported through the original status fields.
+
 `adapter.set_host_alias(id, alias)` returns a queued operation ID. Claim saved
 only after that operation is observed, persistence succeeded and a coherent peer
 snapshot contains the exact alias. An actual alias change updates the snapshot
@@ -132,8 +227,38 @@ own scoped approval.
 The CrowPanel asks for confirmation naming the saved host. FORGET, like every
 BHC1 command, travels over unencrypted, CRC-only, MAC-filtered ESP-NOW. A
 spoofed panel could forget a paused host. The owner must accept that transport
-risk before installation. This source work has host tests only; native build,
-installation and physical acceptance are pending.
+risk before installation. The current host tests, native builds, installation
+and scoped physical results are recorded separately in the
+[Phase 2 evidence](../../docs/reliability/phase2-host-selection.md). A successful
+build or install does not establish the remaining physical acceptance checks.
+
+## Explicit all-peer maintenance clear
+
+`adapter.clear_saved_hosts(bond_generation)` is an optional version-1 capability;
+clients detect that method separately. It returns one queued operation ID and
+does not run at startup, on pairing failure or from the legacy Erase action.
+The owner must explicitly authorize deleting every saved peer. The native and
+Python owner both require current coherent generation, clean persisted PAUSED,
+no link, no advertising and no queued, busy or faulted operation. The host task
+refreshes and rechecks generation before modifying storage. A fault consumes the
+queued operation without silently treating it as a policy-mode request.
+
+The host task stops advertising, clears controller resolving/accept lists,
+commits and reads back PAUSED with all selection/alias entries cleared, then
+erases only the pinned peer-family slot keys in `nimble_bond`: `rpa_rec_1..8`,
+`csfc_sec_1..8`, `our_sec_1..8`, `cccd_sec_1..24`, `peer_sec_1..8`. It commits
+and verifies every slot absent before clearing those exact RAM arrays, counts
+and OUR/PEER bond counters under the host lock. This intentional ALL-peer path
+accepts legacy duplicates and orphan owners without weakening per-host Forget.
+It never calls `ble_store_clear`, `erase_bonding`, namespace erase or partition
+erase; local IRK records/RAM, unrelated NVS namespaces and application/private
+files are untouched. No advertising or pairing starts automatically.
+
+Completion requires the caller's own operation, an advanced bond generation,
+clean PAUSED, no target and a coherent empty peer list. A partial NVS erase,
+commit/readback failure or stale generation reports ERROR and stops; there is
+no automatic retry or restoration. Full backups remain the separate recovery
+artifact. Public empty-list evidence does not itself prove raw key-byte erasure.
 
 ## Generation-bound input
 
@@ -176,8 +301,9 @@ arbitrary selected host. Corrupt/unavailable policy reports ERROR and admission
 stays closed. A failed request attempts to persist PAUSED; if NVS is unwritable,
 `persisted=False` means a new durable intent cannot be promised. Existing
 `nimble_bond` records are retained during ordinary switching. Only an explicit,
-confirmed single-host Forget removes the chosen peer records. The local IRK,
-other saved hosts, partition layout and application settings are retained.
+confirmed single-host Forget removes the chosen peer records. The separate
+owner-authorized all-peer maintenance operation above removes all five peer
+families. Both retain local IRK, partition layout and application settings.
 
 Security/CCCD/CSFC overflow never invokes round-robin deletion. Existing key
 replacement and repeat-pair attempts are refused. The legacy global
@@ -185,6 +311,27 @@ replacement and repeat-pair attempts are refused. The legacy global
 erase or repair side effect. Explicit Forget is available only under the
 clean-PAUSED preconditions above. Native faults take priority over already queued
 commands; recovery requires a later explicit intent.
+
+A bonded peer disabling notifications is a subscription change. Pinned NimBLE
+routes a write of CCCD flags zero through its delete callback. For the exact
+still-connected, encrypted, bonded peer and a concrete characteristic, the
+bridge retains that canonical CCCD slot with flags zero. A subsequent authorized
+subscription updates the same slot. Neither operation deletes security keys or
+another host's records. Wildcard keys, another peer, stale/disconnected links,
+ambiguous slots and pending faults cannot use this path. Disabling the old live
+link remains permitted during a queued Disconnect or Select; enabling reports
+cannot cross that policy or input-generation barrier.
+
+The subscription writer changes one uniquely matched NVS slot, commits and reads
+back the complete canonical record before updating RAM. A failed write, commit
+or readback stops with an NVS fault and leaves RAM unchanged; it does not promise
+transactional restoration of a slot that may already have reached flash. A saved
+host with disabled notifications remains resumable, while HID readiness still
+requires a current input subscription. Secondary store-guard callbacks retain
+the domain and code of the first pending or published native fault, so a
+subsequent security refusal cannot mask that storage failure. This is scoped
+fault retention, not a complete event history: other core failure paths can
+still report a later error.
 
 The host harness compiles production core and ESP32 bridge function bodies with
 external API/header stubs, including ASan/UBSan fault cases. It does not validate

@@ -14,7 +14,15 @@ typedef struct { uint8_t type; uint8_t val[6]; } hp_address_t;
 typedef enum { HP_PAUSED, HP_AUTO, HP_ENROLL } hp_mode_t;
 typedef enum { HP_STATE_PAUSED, HP_SWITCHING, HP_WAITING, HP_ENROLLING, HP_CONNECTED, HP_ERROR } hp_state_t;
 typedef enum { HP_DOMAIN_NONE, HP_DOMAIN_POLICY, HP_DOMAIN_NVS, HP_DOMAIN_NIMBLE, HP_DOMAIN_SECURITY } hp_domain_t;
-enum { HP_INVALID=1, HP_NO_TARGET, HP_CAPACITY, HP_STALE, HP_REPEAT_PAIR, HP_TIMEOUT, HP_STORAGE, HP_UNAUTHORIZED, HP_QUEUE_FULL };
+
+// Observational reason for the same admission predicates used by hp_connect.
+// No identity/address is exported and no rejection changes policy state.
+typedef enum {
+    HP_CONNECT_ACCEPT, HP_CONNECT_POLICY_CLOSED, HP_CONNECT_SLOT_BUSY,
+    HP_CONNECT_AUTO_IDENTITY, HP_CONNECT_SAVED_IDENTITY, HP_CONNECT_CANDIDATE_IDENTITY
+} hp_connect_reason_t;
+enum { HP_INVALID=1, HP_NO_TARGET, HP_CAPACITY, HP_STALE, HP_REPEAT_PAIR, HP_TIMEOUT, HP_STORAGE, HP_UNAUTHORIZED, HP_QUEUE_FULL,
+    HP_DUPLICATE_IRK, HP_IRK_RPA_MISMATCH, HP_KEY_SEQUENCE };
 typedef struct {
     hp_address_t address;
     uint64_t id;
@@ -50,6 +58,7 @@ typedef struct {
     int (*peers)(void *, hp_peer_t *, size_t *, unsigned *);
     int (*reserve_enrollment)(void *); // Other persistent store classes; no eviction.
     int (*forget)(void *, const hp_address_t *, bool apply);
+    int (*clear_peers)(void *, bool apply); // Explicit owner maintenance; excludes local IRK.
 } hp_backend_t;
 typedef struct {
     hp_backend_t backend;
@@ -67,7 +76,7 @@ typedef struct {
     size_t enrollment_existing_count;
 } hp_core_t;
 typedef struct {
-    bool alias, forget;
+    bool alias, forget, clear_peers;
     uint32_t generation;
     hp_mode_t mode;
     uint64_t target;
@@ -100,12 +109,15 @@ void hp_init(hp_core_t *, const hp_backend_t *, const hp_blob_t *, int load_erro
 int hp_refresh(hp_core_t *);
 bool hp_forget_allowed(const hp_status_t *, uint16_t handle);
 void hp_forget(hp_core_t *, uint64_t id, uint32_t generation);
+void hp_clear_saved_hosts(hp_core_t *, uint32_t generation);
 void hp_request(hp_core_t *, hp_mode_t, uint64_t target, uint32_t operation, uint32_t timeout_s, uint64_t now_ms);
 void hp_tick(hp_core_t *, uint64_t now_ms);
 void hp_fail(hp_core_t *, hp_domain_t, int);
 uint32_t hp_connect(hp_core_t *, uint16_t handle, const hp_address_t *);
+hp_connect_reason_t hp_connect_reason(const hp_core_t *, const hp_address_t *);
 void hp_identity(hp_core_t *, uint16_t, uint32_t, const hp_address_t *);
 bool hp_reject_enrollment_link(hp_core_t *, uint16_t, uint32_t);
+bool hp_latch_enrollment_rejection(hp_core_t *, uint16_t, uint32_t); // No backend/GAP/store calls.
 void hp_security(hp_core_t *, uint16_t, uint32_t, bool encrypted, bool bonded, int error);
 void hp_subscribe(hp_core_t *, uint16_t, uint32_t, uint16_t input_handle, bool enabled);
 void hp_disconnect(hp_core_t *, uint16_t, uint32_t, int full_reason);

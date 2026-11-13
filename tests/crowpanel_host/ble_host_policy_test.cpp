@@ -410,6 +410,97 @@ static void native_enrollment_timeout_is_closed_not_successful() {
     assert(c.result == hp::FAILED); // An advertising/incompletely closed window is not the normal terminal case.
 }
 
+static void displayed_result_tracks_native_operation_and_readonly_refresh() {
+    hp::Control c(77); seed(c); uint8_t body[278], frame[64];
+    assert(c.begin(hp::ENROLL, 6, frame, sizeof(frame), nullptr, 60));
+    const uint32_t request = ble_status::read32(frame + 12);
+    status_body(body, request, 20, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, nullptr);
+    body[32] = 1; hp::put32(body + 33, 6);
+    report(c, body, 3, 10);
+    assert(c.result == hp::ENROLLMENT_ENDED && c.result_for_status(11) == hp::ENROLLMENT_ENDED);
+    // Ordinary new STATUS and read-only LIST echo changes retain the same native result.
+    report(c, body, 4, 15); assert(c.result_for_status(16) == hp::ENROLLMENT_ENDED);
+    body[1] = 4; hp::put32(body + 3, 88); hp::put32(body + 7, 99);
+    report(c, body, 5, 20); assert(c.result_for_status(21) == hp::ENROLLMENT_ENDED);
+    // A newer mutating request, or a later native operation even after LIST,
+    // must not reuse the old ended text with the latest PAUSED sample.
+    body[1] = 1; report(c, body, 6, 25); assert(c.result_for_status(26) == hp::IDLE);
+    body[1] = 4; hp::put32(body + 11, 21); hp::put32(body + 15, 21);
+    report(c, body, 7, 30);
+    assert(c.result == hp::ENROLLMENT_ENDED && c.result_for_status(31) == hp::IDLE);
+    body[29] = hp::ERROR_STATE; body[32] = 4; hp::put32(body + 33, 5);
+    report(c, body, 8, 35);
+    assert(c.result_for_status(36) == hp::IDLE && c.decoder.status.state == hp::ERROR_STATE);
+    // Selecting another row is local; ENROLL still carries no selected target.
+    assert(c.choose(1, 36));
+    assert(c.begin(hp::ENROLL, 37, frame, sizeof(frame), nullptr, 60));
+    assert(frame[16] == hp::ENROLL && hp::id_none(frame + 21) && ble_status::read16(frame + 30) == 60);
+    assert(c.result_for_status(38) == hp::PENDING);
+    status_body(body, ble_status::read32(frame + 12), 22, hp::READY | hp::ADVERTISING,
+                hp::ENROLLING, hp::ENROLL_MODE, nullptr);
+    report(c, body, 9, 40); assert(c.result_for_status(41) == hp::PAIRING);
+
+    hp::Control unseen(77); seed(unseen);
+    // An unacknowledged local timeout is still meaningful at an unchanged op0.
+    status_body(body, 0, 0, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, nullptr);
+    report(unseen, body, 3, 6);
+    assert(unseen.begin(hp::DISCONNECT, 8, frame, sizeof(frame)));
+    report(unseen, body, 4, 15009);
+    assert(unseen.result == hp::TIMED_OUT && unseen.result_for_status(15010) == hp::TIMED_OUT);
+    hp::put32(body + 11, 1); hp::put32(body + 15, 1);
+    report(unseen, body, 5, 15012); assert(unseen.result_for_status(15013) == hp::IDLE);
+    assert(publish(unseen.decoder, body, 63, 1, 1, 15014, 202)); unseen.tick(15016);
+    assert(unseen.result == hp::RESTARTED && unseen.result_for_status(15016) == hp::RESTARTED);
+}
+
+static void late_own_results_upgrade_only_the_timed_out_request() {
+    hp::Control c(77); seed(c); uint8_t body[278], frame[64];
+    assert(c.begin(hp::ENROLL, 6, frame, sizeof(frame), nullptr, 60));
+    const uint32_t first = ble_status::read32(frame + 12);
+    status_body(body, first, 20, hp::READY | hp::ADVERTISING, hp::ENROLLING, hp::ENROLL_MODE, nullptr);
+    report(c, body, 3, 10);
+    report(c, body, 4, 75007); assert(c.result == hp::TIMED_OUT && !c.holding());
+    report(c, body, 5, 75010); assert(c.result == hp::TIMED_OUT && !c.holding()); // Never reopen PAIRING.
+    status_body(body, first, 20, hp::READY | hp::PERSISTED, hp::PAUSED_STATE, hp::PAUSED, nullptr);
+    body[32] = 1; hp::put32(body + 33, 6);
+    report(c, body, 6, 75015); assert(c.result == hp::ENROLLMENT_ENDED && !c.holding());
+    assert(!publish(c.decoder, body, 63, 1, 6, 75018)); c.tick(75020);
+    assert(c.result == hp::ENROLLMENT_ENDED); // Duplicate terminal frame is idempotent.
+    uint8_t list[278]; const size_t list_size = list_body(list);
+    assert(publish(c.decoder, list, list_size, 2, 7, 75019)); c.tick(75020);
+    assert(c.choose(1, 75020));
+    assert(c.begin(hp::SELECT, 75021, frame, sizeof(frame)));
+    const uint32_t second = ble_status::read32(frame + 12);
+    report(c, body, 8, 75022); assert(c.result == hp::PENDING); // Late N cannot complete N+1.
+    status_body(body, second, 21, hp::READY | hp::PERSISTED | hp::FILTER_READY, hp::WAITING, hp::AUTO, B);
+    report(c, body, 9, 75025); assert(c.result == hp::WAITING_HOST);
+    assert(c.choose(0, 75026) && hp::same_id(c.result_target(75026), B)); // Selection cannot relabel the request.
+    status_body(body, second, 21, CONNECT_FLAGS, hp::CONNECTED, hp::AUTO, B);
+    report(c, body, 10, 75028); assert(c.result == hp::CONFIRMED);
+
+    for (unsigned outcome = 0; outcome != 3; ++outcome) {
+        hp::Control late(77); seed(late);
+        assert(late.begin(hp::SELECT, 6, frame, sizeof(frame)));
+        const uint32_t request = ble_status::read32(frame + 12);
+        status_body(body, request, 20, 0, hp::SWITCHING, hp::AUTO, A);
+        report(late, body, 3, 15007); assert(late.result == hp::TIMED_OUT);
+        status_body(body, request, 20, CONNECT_FLAGS, hp::CONNECTED, hp::AUTO, A);
+        if (outcome == 1) { body[29] = hp::ERROR_STATE; body[32] = 4; hp::put32(body + 33, 5); }
+        if (outcome == 2) { hp::put32(body + 3, 88); hp::put32(body + 7, request + 1); hp::put32(body + 11, 21); }
+        report(late, body, 4, 15012);
+        assert(late.result == (outcome == 0 ? hp::CONFIRMED : outcome == 1 ? hp::FAILED : hp::TIMED_OUT));
+        assert(!late.holding());
+    }
+    hp::Control wrap(77); seed(wrap, 0xfffffe00U);
+    assert(wrap.begin(hp::ENROLL, 0xffffff00U, frame, sizeof(frame), nullptr, 60));
+    status_body(body, ble_status::read32(frame + 12), 20, hp::READY | hp::ADVERTISING, hp::ENROLLING, hp::ENROLL_MODE, nullptr);
+    const uint32_t expired = 0xffffff00U + 75001U;
+    report(wrap, body, 3, expired); assert(wrap.result == hp::TIMED_OUT);
+    body[27] = body[28] = hp::PAUSED; body[29] = hp::PAUSED_STATE;
+    hp::put16(body + 30, hp::READY | hp::PERSISTED); body[32] = 1; hp::put32(body + 33, 6);
+    report(wrap, body, 4, expired + 5); assert(wrap.result == hp::ENROLLMENT_ENDED);
+}
+
 
 static size_t remaining_host(uint8_t *body, uint32_t generation) {
     memset(body, 0, 278); body[0] = 1; hp::put32(body + 1, generation); body[5] = 1;
@@ -470,6 +561,11 @@ static void forget_requires_paused_confirmation_and_new_inventory() {
     body[1] = 1; report(c, body, 11, 34); assert(c.result == hp::PENDING);
     body[1] = 3; report(c, body, 12, 36); assert(c.result == hp::CONFIRMED);
     assert(c.last_opcode() == hp::FORGET && !c.selection(38));
+    assert(c.result_for_status(38) == hp::CONFIRMED);
+    body[1] = 4; hp::put32(body + 3, 88); hp::put32(body + 7, 99);
+    report(c, body, 13, 40); assert(c.result_for_status(41) == hp::CONFIRMED); // Same native Forget, read-only LIST.
+    hp::put32(body + 11, 21); hp::put32(body + 15, 21);
+    report(c, body, 14, 44); assert(c.result_for_status(45) == hp::IDLE); // A later PAUSED operation is not Forget success.
     assert(!hp::command(frame, sizeof(frame), 101, 77, 1, hp::FORGET, 3));
     const uint8_t payload[] = {'x'};
     assert(!hp::command(frame, sizeof(frame), 101, 77, 1, hp::FORGET, 3, A, payload, 1));
@@ -500,6 +596,8 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "admission-lost")) admission_lost_never_retries_mutation();
     else if (!strcmp(argv[1], "link-history")) local_link_loss_keeps_boot_and_sequence_history();
     else if (!strcmp(argv[1], "enroll-timeout")) native_enrollment_timeout_is_closed_not_successful();
+    else if (!strcmp(argv[1], "result-scope")) displayed_result_tracks_native_operation_and_readonly_refresh();
+    else if (!strcmp(argv[1], "late-results")) late_own_results_upgrade_only_the_timed_out_request();
     else if (!strcmp(argv[1], "forget")) forget_requires_paused_confirmation_and_new_inventory();
     else return 2;
     return 0;

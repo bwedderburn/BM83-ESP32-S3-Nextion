@@ -35,6 +35,7 @@ def _bridge_translation_unit(source, cases, extra_declarations=""):
                                             if not line.startswith(("#include", "#pragma once"))) + "\n"
     qstrs = set(re.findall(r"MP_QSTR_(\w+)", source))
     qstrs.update(re.findall(r"HP_(?:UINT|BOOL)\((\w+)\)", source))
+    qstrs.update("diag_" + name for name in re.findall(r"HP_DIAG\((\w+)\)", source))
     declarations = "enum {" + ",".join("MP_QSTR_" + value for value in sorted(qstrs)) + "};\n"
     return ('#include "host_policy_port_stubs.h"\n' + declarations + extra_declarations +
             strip_headers(header) + strip_headers(source) + cases)
@@ -57,6 +58,48 @@ def test_production_esp32_bridge_bodies_with_fault_injection(tmp_path):
                    check=True, capture_output=True, text=True, timeout=30)
     result = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=10)
     assert "PASS production ESP32 bridge bodies" in result.stdout
+
+
+def test_pre_admission_diagnostics_observe_without_changing_policy(tmp_path):
+    compiler = shutil.which("gcc")
+    if compiler is None:
+        pytest.skip("Production diagnostics harness requires established Linux/WSL GCC")
+    source = (RECIPE / "native/HostPolicy.c").read_text()
+    baseline = (RECIPE / "tests/host_policy_port_test.c").read_text().replace(
+        "int main(void){", "static int baseline_main(void){", 1)
+    cases = baseline + (RECIPE / "tests/host_policy_diagnostics_test.c").read_text()
+    combined = tmp_path / "production-diagnostics.c"
+    combined.write_text(_bridge_translation_unit(source, cases))
+    executable = tmp_path / "production-diagnostics"
+    subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wmissing-prototypes", "-Wold-style-definition",
+                    "-Wno-misleading-indentation", "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
+                    "-I", str(RECIPE / "native"), "-I", str(RECIPE / "tests"),
+                    str(RECIPE / "native/HostPolicyCore.c"), str(combined), "-o", str(executable)],
+                   check=True, capture_output=True, text=True, timeout=30)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, text=True, timeout=10)
+    assert "PASS pre-admission diagnostics: 384 unchanged admission outcomes" in result.stdout
+
+
+def test_raw_callback_counters_precede_admission_and_wrapper_filters():
+    patch = (RECIPE / "host-policy.patch").read_text()
+    def postimage(name):
+        target = "ports/espressif/common-hal/_bleio/" + name
+        section = patch.split(f"diff --git a/{target} b/{target}\n", 1)[1].split("diff --git ", 1)[0]
+        return "\n".join(line[1:] for line in section.splitlines()
+                         if line.startswith((" ", "+")) and not line.startswith("+++"))
+    adapter = postimage("Adapter.c")
+    for callback, source in (("_connect_event", "HP_GAP_SOURCE_CENTRAL"),
+                             ("_advertising_event", "HP_GAP_SOURCE_ADVERTISING")):
+        section = adapter.split("static int " + callback + "(", 1)[1]
+        assert section.index("bleio_host_policy_observe_gap_event(event, " + source + ")") < section.index("switch (event->type)")
+    connection = postimage("Connection.c")
+    assert (connection.index("bleio_host_policy_observe_gap_event(event, HP_GAP_SOURCE_CONNECTION)")
+            < connection.index("if (connection == NULL)") < connection.index("bleio_host_policy_event(event"))
+    assert (adapter.index("bleio_host_policy_observe_adapter_no_slot()")
+            < adapter.index("bleio_host_policy_connect(conn_handle)"))
+    assert (adapter.index("connection->conn_handle = conn_handle")
+            < adapter.index("bleio_host_policy_observe_adapter_publication()")
+            < adapter.index("ble_gattc_exchange_mtu(conn_handle"))
 
 
 @pytest.mark.parametrize("stage", ["family_validation", "apply"])
@@ -167,13 +210,14 @@ def test_native_patch_preserves_admission_and_no_deletion_guards():
                         "ble_store_util_delete_peer(", "ble_store_util_status_rr", "BLE_GAP_REPEAT_PAIRING_RETRY",
                         "nvs_flash_erase(", "nvs_erase_all("):
         assert destructive not in added
-    assert added.count("nvs_erase_key(") == 1
+    assert added.count("nvs_erase_key(") == 2  # Per-host Forget and explicit all-peer maintenance only.
     assert added.count("ble_store_config_delete(") == 2
     binding = patch.split("diff --git a/shared-bindings/_bleio/Adapter.c ", 1)[1]
     additions = "\n".join(line[1:] for line in binding.splitlines()
                           if line.startswith("+") and not line.startswith("+++"))
     blocks = re.findall(r"#if BM83_BLE_HOST_POLICY\n(.*?)#endif", additions, re.S)
     assert any("bleio_host_policy_forget(" in block for block in blocks)
+    assert any("bleio_host_policy_clear_saved_hosts(" in block for block in blocks)
     assert any("MP_QSTR_forget_host" in block and "bleio_adapter_forget_host_obj" in block
                for block in blocks)
 

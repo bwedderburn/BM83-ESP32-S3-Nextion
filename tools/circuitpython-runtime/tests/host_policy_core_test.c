@@ -51,7 +51,7 @@ static int forget(void *c, const hp_address_t *address, bool apply) {
     f->peers_error=f->peers_after_forget_error;
     return 0;
 }
-static void setup(fixture_t *f,hp_core_t *p) { memset(f,0,sizeof(*f));f->count=2;f->peers[0]=peer(6);f->peers[1]=peer(7);f->cccds=6;hp_backend_t b={f,persist,stop,terminate,filter,peers,reserve,forget};hp_init(p,&b,NULL,0); }
+static void setup(fixture_t *f,hp_core_t *p) { memset(f,0,sizeof(*f));f->count=2;f->peers[0]=peer(6);f->peers[1]=peer(7);f->cccds=6;hp_backend_t b={f,persist,stop,terminate,filter,peers,reserve,forget,NULL};hp_init(p,&b,NULL,0); }
 static uint32_t connect_ready(fixture_t *f,hp_core_t *p,unsigned index,uint16_t handle) { uint32_t g=hp_connect(p,handle,&f->peers[index].address);assert(g);hp_security(p,handle,g,true,true,0);hp_subscribe(p,handle,g,123,true);hp_tick(p,200);assert(hp_input_allowed(p,handle));return g; }
 static void test_late_saved_identity_keeps_the_pairing_window(void) {
     fixture_t fixture;
@@ -382,7 +382,9 @@ int main(void) {
     hp_tick(&p,5000);unsigned actual_starts=0;if(hp_advertising_allowed(&p))actual_starts++;assert(actual_starts==0&&p.status.state==HP_STATE_PAUSED);
     setup(&f,&p);hp_request(&p,HP_ENROLL,0,11,60,0);assert(!hp_connect(&p,66,&f.peers[0].address));
     hp_address_t fresh=addr(8);generation=hp_connect(&p,67,&fresh);assert(generation);
+    assert(!hp_store_allowed(&p,&f.peers[0].address,true,true,true));
     assert(hp_store_allowed(&p,&fresh,true,false,false));assert(!hp_store_allowed(&p,&f.peers[0].address,true,true,false));
+    assert(hp_store_allowed(&p,&fresh,true,true,true));
     hp_security(&p,67,generation,true,true,0);hp_subscribe(&p,67,generation,123,true);
     f.peers[2]=peer(8);f.peers[2].durable=false;f.count=3;hp_tick(&p,200);assert(!p.status.hid_ready&&p.status.applied_mode==HP_ENROLL);
     f.peers[2].durable=true;hp_tick(&p,300);assert(p.status.operation_id==11&&p.status.applied_mode==HP_AUTO&&p.status.target_id==f.peers[2].id&&hp_input_allowed(&p,67));

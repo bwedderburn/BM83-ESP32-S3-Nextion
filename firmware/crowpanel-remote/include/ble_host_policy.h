@@ -273,6 +273,26 @@ public:
                clean_paused(decoder.status);
     }
     Opcode last_opcode() const { return opcode_; }
+    Result result_for_status(uint32_t now) const {
+        // Terminal history is retained in result for diagnostics, but must not
+        // be combined with a later request's current native status in the UI.
+        if (result == IDLE || result == RESTARTED) return result;
+        if (!decoder.fresh_status(now) || decoder.session != session_) return IDLE;
+        const Status &s = decoder.status;
+        if (observed_own_) {
+            if (operation_ && s.native_operation != operation_) return IDLE;
+            const bool own_echo = s.client_session == client_session && s.request_sequence == request_;
+            // A read-only LIST may change the request echo without changing
+            // the completed native operation. Ordinary refresh keeps its result.
+            const bool list_refresh = operation_ && s.native_operation == operation_ && s.request_result == 4;
+            if (!own_echo && !list_refresh) return IDLE;
+        } else if (s.native_operation != baseline_operation_) return IDLE;
+        return result;
+    }
+    const uint8_t *result_target(uint32_t now) const {
+        return opcode_ == SELECT && result_for_status(now) != IDLE && result != RESTARTED && !id_none(target_)
+                   ? target_ : decoder.status.target;
+    }
 
     // Discovery is read-only. Unknown/rebooted clients establish admission with
     // a recent complete STATUS sequence, not by sending a mutating command.
@@ -329,7 +349,9 @@ public:
     void not_sent() { pending_ = false; result = NOT_SENT; }
     void tick(uint32_t now) {
         if (decoder.session && observed_session_ && decoder.session != observed_session_) {
-            observed_session_ = decoder.session; selected_ = false; reset_admission(); finish(RESTARTED); return;
+            observed_session_ = decoder.session; selected_ = false; reset_admission();
+            operation_ = 0; observed_own_ = false; memset(target_, 0, sizeof(target_));
+            finish(RESTARTED); return;
         }
         if (decoder.session) observed_session_ = decoder.session;
         if (!decoder.fresh_status(now)) admitted_ = false;
@@ -346,7 +368,8 @@ public:
             }
         }
         if (selected_ && decoder.coherent_list(now) && !decoder.find(selected_id_, now)) selected_ = false;
-        if (!pending_) return;
+        const bool late_timeout = !pending_ && result == TIMED_OUT;
+        if (!pending_ && !late_timeout) return;
         if (decoder.session && decoder.session != session_) { finish(RESTARTED); return; }
         if (decoder.fresh_status(now) && newer(decoder.status_sequence, baseline_)) {
             const Status &s = decoder.status;
@@ -358,7 +381,10 @@ public:
                 }
                 if (opcode_ == LIST && (s.flags & READY) && s.request_result == 4 && decoder.coherent_list(now)) { finish(CONFIRMED); return; }
                 if (s.native_operation && s.native_operation != baseline_operation_) {
-                    if (operation_ && operation_ != s.native_operation) { finish(SUPERSEDED); return; }
+                    if (operation_ && operation_ != s.native_operation) {
+                        if (!late_timeout) finish(SUPERSEDED);
+                        return;
+                    }
                     operation_ = s.native_operation;
                 }
                 if (operation_ && s.native_operation == operation_ && (s.flags & READY)) {
@@ -378,10 +404,10 @@ public:
                                            (s.flags & ready) == ready && !s.error_domain && !id_none(s.target) && same_id(s.target, s.connected);
                     if (opcode_ == SELECT && same_id(s.target, target_)) {
                         if (connected) { finish(CONFIRMED); return; }
-                        if (persisted && (s.flags & FILTER_READY) && s.requested_mode == AUTO && s.applied_mode == AUTO && s.state == WAITING) result = WAITING_HOST;
+                        if (!late_timeout && persisted && (s.flags & FILTER_READY) && s.requested_mode == AUTO && s.applied_mode == AUTO && s.state == WAITING) result = WAITING_HOST;
                     } else if (opcode_ == ENROLL) {
                         if (connected) { finish(CONFIRMED); return; }
-                        if (s.state == ENROLLING) result = PAIRING;
+                        if (s.state == ENROLLING && !late_timeout) result = PAIRING;
                         else if (persisted && s.state == PAUSED_STATE && s.requested_mode == PAUSED && s.applied_mode == PAUSED) { finish(ENROLLMENT_ENDED); return; }
                     } else if (opcode_ == FORGET && s.request_result == 3 && clean_paused(s) &&
                                !same_id(s.target, target_) && s.bond_generation != bond_generation_ &&
@@ -392,7 +418,7 @@ public:
                         if (peer && strcmp(peer->alias, alias_) == 0) { finish(CONFIRMED); return; }
                     }
                 }
-            } else if (observed_own_ && (s.request_result == 1 || s.request_result == 3 || s.request_result == 4)) { finish(SUPERSEDED); return; }
+            } else if (!late_timeout && observed_own_ && (s.request_result == 1 || s.request_result == 3 || s.request_result == 4)) { finish(SUPERSEDED); return; }
         }
         if (result != WAITING_HOST && static_cast<uint32_t>(now - sent_at_) >= timeout_) finish(TIMED_OUT);
     }

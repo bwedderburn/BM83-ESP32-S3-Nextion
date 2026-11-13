@@ -21,6 +21,12 @@ int bleio_host_policy_queue_input(uint16_t, uint16_t, const uint8_t *, size_t);
 bool bleio_host_policy_input_value(uint16_t, uint16_t, uint8_t *, size_t);
 uint32_t bleio_host_policy_connect(uint16_t handle);
 void bleio_host_policy_connection_attach_failed(uint16_t handle, uint32_t generation, int error);
+// Scalar-only observations, including events refused before CP publication.
+enum { HP_GAP_SOURCE_CENTRAL=1, HP_GAP_SOURCE_ADVERTISING, HP_GAP_SOURCE_CONNECTION };
+void bleio_host_policy_observe_gap_event(const struct ble_gap_event *, unsigned source);
+void bleio_host_policy_observe_vm_adv_stop(bool active, int result);
+void bleio_host_policy_observe_adapter_no_slot(void);
+void bleio_host_policy_observe_adapter_publication(void);
 void bleio_host_policy_event(struct ble_gap_event *, uint32_t generation);
 void bleio_host_policy_subscription(uint16_t handle, uint32_t generation, uint16_t input_handle, bool enabled);
 int bleio_host_policy_store_status(struct ble_store_status_event *, void *);
@@ -29,4 +35,5 @@ mp_obj_t bleio_host_policy_status(void);
 mp_obj_t bleio_host_policy_request(mp_obj_t mode, mp_obj_t target, mp_int_t timeout_s);
 mp_obj_t bleio_host_policy_alias(mp_obj_t target, mp_obj_t alias);
 mp_obj_t bleio_host_policy_forget(mp_obj_t target, mp_obj_t generation);
+mp_obj_t bleio_host_policy_clear_saved_hosts(mp_obj_t generation);
 mp_obj_t bleio_host_policy_arm_input(mp_obj_t, mp_obj_t, mp_obj_t, mp_obj_t);

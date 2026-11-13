@@ -11,8 +11,9 @@ static test_nvs_record_t nvs_records[9][24];
 bool test_raise_armed;
 jmp_buf test_raise_jump;
 static unsigned erase_attempts, erased_rows, vendor_nvs_erases, nvs_commits;
+static unsigned cccd_blob_writes, cccd_blob_fail_at;
 static unsigned erase_fail_at, nvs_commit_fail_at;
-static unsigned stops, erase_types[32];
+static unsigned stops, erase_types[64];
 static bool erase_readback_present;
 static ble_store_config_vars_t test_store;
 ble_store_config_vars_t *ble_store_config_vars = &test_store;
@@ -23,6 +24,7 @@ static unsigned test_nimble_lock_depth;
 static uint16_t test_bond_count[9];
 static unsigned hci_step,fail_hci_step;
 static int timer_fail,write_fail,read_fail,notify_fail,stop_fail;
+static unsigned write_fail_at;
 static uint64_t test_ms,next_service;
 static struct ble_gap_conn_desc test_connection;
 static void (*background_injection)(void);
@@ -34,6 +36,13 @@ static char string_pool[128][64];
 static ble_addr_t test_address(unsigned n) { ble_addr_t a={.type=0,.val={1,2,3,4,5,0}};a.val[5]=(uint8_t)n;return a; }
 static const ble_addr_t *record_address(int type,const union ble_store_value *v) { return type==BLE_STORE_OBJ_TYPE_CCCD ? &v->cccd.peer_addr : type==BLE_STORE_OBJ_TYPE_CSFC ? &v->csfc.peer_addr : type==BLE_STORE_OBJ_TYPE_LOCAL_IRK ? &v->local_irk.addr : type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? &v->rpa_rec.peer_rpa_addr : &v->sec.peer_addr; }
 static const ble_addr_t *key_address(int type,const union ble_store_key *k) { return type==BLE_STORE_OBJ_TYPE_CCCD ? &k->cccd.peer_addr : type==BLE_STORE_OBJ_TYPE_CSFC ? &k->csfc.peer_addr : type==BLE_STORE_OBJ_TYPE_LOCAL_IRK ? &k->local_irk.addr : type==BLE_STORE_OBJ_TYPE_PEER_ADDR ? &k->rpa_rec.peer_rpa_addr : &k->sec.peer_addr; }
+static bool empty_peer_family(int type) {
+    return (type==BLE_STORE_OBJ_TYPE_OUR_SEC && !ble_store_config_num_our_secs) ||
+        (type==BLE_STORE_OBJ_TYPE_PEER_SEC && !ble_store_config_num_peer_secs) ||
+        (type==BLE_STORE_OBJ_TYPE_CCCD && !ble_store_config_num_cccds) ||
+        (type==BLE_STORE_OBJ_TYPE_CSFC && !ble_store_config_num_csfcs) ||
+        (type==BLE_STORE_OBJ_TYPE_PEER_ADDR && !ble_store_config_num_rpa_recs);
+}
 static union ble_store_value record_ram(int type, unsigned index) {
     if (type == BLE_STORE_OBJ_TYPE_CCCD) {
         return (union ble_store_value){.cccd = test_store._ble_store_config_cccds[index]};
@@ -52,6 +61,7 @@ static bool matches_vendor_address(int type, const ble_addr_t *wanted, const uni
 int ble_store_config_read(int type,const union ble_store_key *key,union ble_store_value *out) {
     reads++;
     if(read_fail)return read_fail;
+    if(empty_peer_family(type))return BLE_HS_ENOENT;
     if (type == BLE_STORE_OBJ_TYPE_CCCD) {
         assert(ble_store_config_vars && ble_store_config_num_cccds >= 0 &&
             ble_store_config_num_cccds <= CONFIG_BT_NIMBLE_MAX_CCCDS);
@@ -78,7 +88,8 @@ int ble_store_config_read(int type,const union ble_store_key *key,union ble_stor
     return BLE_HS_ENOENT;
 }
 int ble_store_config_write(int type,const union ble_store_value *value) {
-    writes++;if(write_fail)return write_fail;
+    writes++;if(write_fail || (write_fail_at && writes==write_fail_at))return write_fail ? write_fail : 91;
+    if(empty_peer_family(type))memset(records[type],0,sizeof(records[type]));
     const ble_addr_t *a=record_address(type,value);unsigned index=24;
     for(unsigned i=0;i<24;i++)if(records[type][i].used) {
         union ble_store_value current = record_ram(type, i);
@@ -107,7 +118,16 @@ int ble_store_config_write(int type,const union ble_store_value *value) {
         // RPA persistence has the same equal-count behavior as CCCDs.
         else return 0;
     }
-    if(!nvs_stale){nvs_records[type][index].used=true;nvs_records[type][index].value=records[type][index].ram;}
+    if(!nvs_stale){
+        unsigned slot=index;
+        if(new_record) {
+            // Pinned ble_store_nvs_write chooses the first EMPTY NVS key,
+            // independently of the appended/compacted RAM array index.
+            for(slot=0;slot<24;slot++)if(!nvs_records[type][slot].used)break;
+            if(slot==24)return BLE_HS_ESTORE_CAP;
+        }
+        nvs_records[type][slot].used=true;nvs_records[type][slot].value=records[type][index].ram;
+    }
     return 0;
 }
 
@@ -171,7 +191,19 @@ static int nimble_write(int type, const union ble_store_value *value) {
     return rc;
 }
 int nvs_open(const char *name,int mode,nvs_handle_t *h) { assert(!test_lock_depth);*h=!strcmp(name,"nimble_bond")?1:2;return *h==2 && mode==NVS_READONLY && !policy_exists ? ESP_ERR_NVS_NOT_FOUND : 0; }
-int nvs_set_blob(nvs_handle_t h,const char *key,const void *value,size_t size) { assert(h==2&&!strcmp(key,"policy_v1")&&size==sizeof(stored_policy));memcpy(&pending_policy,value,size);return 0; }
+static bool nvs_key(const char *key,int *type,unsigned *index);
+int nvs_set_blob(nvs_handle_t h,const char *key,const void *value,size_t size) {
+    if(h==1) {
+        assert(!test_lock_depth && test_nimble_lock_depth==1);
+        int type;unsigned index;assert(nvs_key(key,&type,&index));
+        assert(type==BLE_STORE_OBJ_TYPE_CCCD && size==sizeof(struct ble_store_value_cccd));
+        cccd_blob_writes++;
+        if(cccd_blob_fail_at==cccd_blob_writes)return 81;
+        if(!nvs_stale){nvs_records[type][index].used=true;memcpy(&nvs_records[type][index].value.cccd,value,size);}
+        return 0;
+    }
+    assert(h==2&&!strcmp(key,"policy_v1")&&size==sizeof(stored_policy));memcpy(&pending_policy,value,size);return 0;
+}
 
 int nvs_commit(nvs_handle_t h) {
     assert(!test_lock_depth);
@@ -197,7 +229,7 @@ int nvs_erase_key(nvs_handle_t h,const char *key) {
     if(erase_fail_at==erase_attempts)return 78;
     int type;unsigned index;
     if(!nvs_key(key,&type,&index)||!nvs_records[type][index].used)return ESP_ERR_NVS_NOT_FOUND;
-    assert(erase_attempts<=32);erase_types[erase_attempts-1]=(unsigned)type;
+    assert(erase_attempts<=64);erase_types[erase_attempts-1]=(unsigned)type;
     if(!erase_readback_present){nvs_records[type][index].used=false;erased_rows++;}
     return 0;
 }
@@ -227,6 +259,7 @@ int ble_gap_wl_set(const ble_addr_t *a,int n){assert(n==0||n==1);if(n)assert(a);
 int ble_gap_conn_find(uint16_t h,struct ble_gap_conn_desc *out){if(h!=test_connection.conn_handle)return BLE_HS_ENOTCONN;*out=test_connection;return 0;}
 void ble_store_key_from_value(int t,union ble_store_key *k,const union ble_store_value *v){memset(k,0,sizeof(*k));if(t==BLE_STORE_OBJ_TYPE_CCCD){k->cccd.peer_addr=v->cccd.peer_addr;k->cccd.chr_val_handle=v->cccd.chr_val_handle;}else if(t==BLE_STORE_OBJ_TYPE_CSFC)k->csfc.peer_addr=v->csfc.peer_addr;else if(t==BLE_STORE_OBJ_TYPE_LOCAL_IRK)k->local_irk.addr=v->local_irk.addr;else if(t==BLE_STORE_OBJ_TYPE_PEER_ADDR)k->rpa_rec.peer_rpa_addr=v->rpa_rec.peer_rpa_addr;else k->sec.peer_addr=v->sec.peer_addr;}
 static bool iterable_record(int type, unsigned index) {
+    if(empty_peer_family(type))return false;
     if (!records[type][index].used) return false;
     return type != BLE_STORE_OBJ_TYPE_PEER_ADDR ||
         matches_vendor_address(type, BLE_ADDR_ANY, &records[type][index].ram);
@@ -254,10 +287,10 @@ static void reset(void){
     initialized=false;synced=true;timer_ready=true;processing=false;policy_busy=false;fault_pending=false;last_input_valid=false;input_origin_valid=false;policy_exists=false;nvs_stale=false;adv_on=false;mbuf_fail=false;policy_read_fail_once=false;memset(test_bond_count,0,sizeof(test_bond_count));
     timer_initialized = store_guard_failed = false;
     memset(&policy_timer, 0, sizeof(policy_timer));
-    reads=writes=deletes=policy_commits=timer_initializations=timer_deinitializations=terminations=actual_adv_starts=actual_notifications=hci_step=fail_hci_step=string_index=0;timer_fail=write_fail=read_fail=notify_fail=stop_fail=0;test_ms=0;next_service=100;background_injection=NULL;store_generation=0;
+    reads=writes=deletes=policy_commits=timer_initializations=timer_deinitializations=terminations=actual_adv_starts=actual_notifications=hci_step=fail_hci_step=string_index=0;timer_fail=write_fail=read_fail=notify_fail=stop_fail=0;write_fail_at=0;test_ms=0;next_service=100;background_injection=NULL;store_generation=0;
     restore_vendor_callbacks();
     ble_hs_cfg.store_status_cb = bleio_host_policy_store_status;
-    test_raise_armed=false;stops=erase_attempts=erased_rows=vendor_nvs_erases=nvs_commits=erase_fail_at=nvs_commit_fail_at=0;erase_readback_present=false;memset(erase_types,0,sizeof(erase_types));
+    test_raise_armed=false;stops=erase_attempts=erased_rows=vendor_nvs_erases=nvs_commits=erase_fail_at=nvs_commit_fail_at=cccd_blob_writes=cccd_blob_fail_at=0;erase_readback_present=false;memset(erase_types,0,sizeof(erase_types));
     bleio_host_policy_install_store_guards();
     bleio_host_policy_init(0);
     assert(core.backend.forget==forget_records);
@@ -531,11 +564,298 @@ static void test_fresh_private_enrollment(void) {
     assert(terminations == 0);
 }
 
+static ble_addr_t hinted_rpa(void) {
+    return (ble_addr_t){.type=BLE_ADDR_RANDOM,.val={0x44,0x22,0x33,1,2,0x40}};
+}
+static uint32_t connect_fresh_window(uint32_t operation) {
+    hp_request(&core,HP_ENROLL,0,operation,60,test_ms);
+    ble_addr_t rpa=hinted_rpa();rpa.val[0]=0x55;
+    test_connection=(struct ble_gap_conn_desc){.conn_handle=50,.peer_id_addr=rpa,.peer_ota_addr=rpa};
+    uint32_t generation=bleio_host_policy_connect(50);
+    assert(generation && !core.candidate_valid && !core.status.connected_id);
+    return generation;
+}
+static void setup_three_saved_hosts(void) {
+    reset();
+    // Three complete saved hosts and their store families remain independent
+    // of the connect-time 24-bit ah hint. The AES primitive is an external stub;
+    // this test proves production admission/store ordering, not RF identity.
+    for(unsigned host=7;host<=8;host++) {
+        union ble_store_value sec=record_ram(BLE_STORE_OBJ_TYPE_OUR_SEC,0);
+        sec.sec.peer_addr=test_address(host);sec.sec.ltk[0]^=(uint8_t)host;
+        assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&sec));
+        sec.sec.irk_present=true;sec.sec.irk[0]=(uint8_t)(0x44+host);
+        assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_PEER_SEC,&sec));
+        union ble_store_value cccd={.cccd={.peer_addr=test_address(host),.chr_val_handle=123,.flags=1}};
+        assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));
+    }
+    for(unsigned host=6;host<=8;host++) {
+        union ble_store_value rpa={.rpa_rec={.peer_addr=test_address(host),.peer_rpa_addr=test_rpa(host)}};
+        union ble_store_value csfc={.csfc={.peer_addr=test_address(host),.csfc={(uint8_t)host}}};
+        assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_PEER_ADDR,&rpa));
+        assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_CSFC,&csfc));
+    }
+    union ble_store_value local={.local_irk={.addr=test_address(20)}};
+    memset(local.local_irk.irk,0x99,sizeof(local.local_irk.irk));
+    assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_LOCAL_IRK,&local));
+    assert(!hp_refresh(&core) && core.peer_count==3);
+    writes=0;
+}
+static void ready_cccd_fixture(void) {
+    setup_three_saved_hosts();
+    union ble_store_value service_changed={.cccd={.peer_addr=test_address(6),.chr_val_handle=124,.flags=2}};
+    assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_CCCD,&service_changed));
+    ble_addr_t native=test_address(6);hp_address_t peer=address(&native);
+    hp_request(&core,HP_AUTO,hp_identity_id(&peer),850,60,test_ms);
+    test_connection=(struct ble_gap_conn_desc){.conn_handle=42,.peer_id_addr=native,.peer_ota_addr=native};
+    test_connection.sec_state.encrypted=test_connection.sec_state.bonded=1;
+    uint32_t gen=hp_connect(&core,42,&peer);assert(gen);
+    hp_security(&core,42,gen,true,true,0);hp_subscribe(&core,42,gen,123,true);hp_tick(&core,test_ms);publish();
+    assert(core.status.hid_ready);arm_ready();writes=0;
+}
+static int disable_cccd(uint16_t attribute) {
+    union ble_store_key key={.cccd={.peer_addr=test_address(6),.chr_val_handle=attribute}};
+    // Exact pinned ble_gatts.c flags=0 persistence callback; the real
+    // Characteristic.c forwards only HID input subscriptions to the policy.
+    ble_hs_lock();int rc=guarded_delete(BLE_STORE_OBJ_TYPE_CCCD,&key);ble_hs_unlock();return rc;
+}
+static void test_cccd_disable_resubscribe_preserves_bonds_and_other_hosts(void) {
+    ready_cccd_fixture();
+    test_record_t old_ram[9][24];test_nvs_record_t old_nvs[9][24];
+    memcpy(old_ram,records,sizeof(old_ram));memcpy(old_nvs,nvs_records,sizeof(old_nvs));
+    uint32_t generation=core.status.connection_generation, subscription=core.status.subscription_generation;
+    assert(!disable_cccd(124)); // Service Changed is not the volume input.
+    assert(core.status.hid_ready && core.hid_input_handle==123 && core.status.subscription_generation==subscription);
+    union ble_store_value cccd=record_ram(BLE_STORE_OBJ_TYPE_CCCD,3);assert(!cccd.cccd.flags);
+    cccd.cccd.flags=2;assert(!nimble_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));
+    assert(core.status.hid_ready && core.status.subscription_generation==subscription);
+    bleio_host_policy_subscription(42,generation,123,false);
+    assert(!disable_cccd(123));service(NULL);
+    assert(core.status.state!=HP_ERROR && !core.status.hid_ready && !core.input_subscribed && !fault_pending);
+    assert(!ble_store_config_cccds[0].flags && !nvs_records[3][0].value.cccd.flags);
+    assert(!hp_refresh(&core));
+    hp_peer_t *peer=NULL;for(size_t i=0;i<core.peer_count;i++)if(core.peers[i].id==core.status.connected_id)peer=&core.peers[i];
+    assert(peer && peer->our_sec && peer->durable && !peer->cccd);
+    string_index=0;bleio_host_policy_peers(); // Public resumable does not require enabled CCCD.
+    bleio_host_policy_subscription(42,generation,123,true);
+    cccd=record_ram(BLE_STORE_OBJ_TYPE_CCCD,0);cccd.cccd.flags=1;
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));service(NULL);
+    assert(core.status.hid_ready && core.status.connection_generation==generation);
+    assert(core.status.subscription_generation!=subscription && !fault_pending);arm_ready();
+    uint8_t report[2]={0xe9,0};assert(!bleio_host_policy_queue_input(42,123,report,sizeof(report)));service(NULL);
+    assert(actual_notifications==1 && !writes && !deletes && !erased_rows && cccd_blob_writes==4);
+    assert(!memcmp(old_ram,records,sizeof(old_ram))); // No vendor key/bond-count writer.
+    for(int type=1;type<=8;type++)for(unsigned i=0;i<24;i++) {
+        if(type==BLE_STORE_OBJ_TYPE_CCCD && (i==0 || i==3))continue;
+        assert(!memcmp(&old_nvs[type][i],&nvs_records[type][i],sizeof(old_nvs[type][i])));
+    }
+    // A persisted disabled subscription still permits AUTO for the saved bond.
+    bleio_host_policy_subscription(42,generation,123,false);assert(!disable_cccd(123));
+    hp_disconnect(&core,42,generation,0x213);
+    uint64_t id=peer->id;hp_request(&core,HP_AUTO,id,851,60,test_ms);
+    assert(core.status.state==HP_WAITING && core.status.target_id==id && !fault_pending);
+}
+static void test_cccd_disable_control_barriers_and_invalid_keys(void) {
+    for(unsigned variant=0;variant<10;variant++) {
+        ready_cccd_fixture();
+        union ble_store_key key={.cccd={.peer_addr=test_address(6),.chr_val_handle=123}};
+        if(variant==0)key.cccd.peer_addr=*BLE_ADDR_ANY;
+        if(variant==1)key.cccd.chr_val_handle=0;
+        if(variant==2)key.cccd.idx=1;
+        if(variant==3)key.cccd.peer_addr=test_address(7);
+        if(variant==4)core.status.bonded=false;
+        if(variant==5)core.status.encrypted=false;
+        if(variant==6)core.handle=HP_INVALID_HANDLE;
+        if(variant==7)core.status.connected=false;
+        if(variant==8)fault(HP_DOMAIN_NVS,93);
+        if(variant==9)key.cccd.chr_val_handle=999;
+        ble_hs_lock();assert(guarded_delete(BLE_STORE_OBJ_TYPE_CCCD,&key));ble_hs_unlock();
+        assert(!cccd_blob_writes && !writes && !deletes && ble_store_config_cccds[0].flags==1);
+    }
+    for(unsigned mode=0;mode<2;mode++) {
+        ready_cccd_fixture();uint32_t gen=core.status.connection_generation;
+        hp_address_t other=address(&(ble_addr_t){.type=0,.val={1,2,3,4,5,7}});
+        hp_command_t queued={.mode=mode ? HP_AUTO : HP_PAUSED,.target=mode ? hp_identity_id(&other) : 0,.timeout_s=60};
+        assert(!hp_submit(&command_queue,&queued));
+        bleio_host_policy_subscription(42,gen,123,false);assert(!disable_cccd(123));
+        union ble_store_value cccd=record_ram(BLE_STORE_OBJ_TYPE_CCCD,0);cccd.cccd.flags=1;
+        assert(nimble_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd)==BLE_HS_EREJECT);
+        assert(!fault_pending && !core.status.hid_ready && !ble_store_config_cccds[0].flags);
+        service(NULL); // Select now targets another host, old admitted link can still disable.
+        assert(!disable_cccd(123) && !fault_pending && !deletes && !writes);
+        hp_disconnect(&core,42,gen,0x216);
+        assert(disable_cccd(123)==BLE_HS_EREJECT); // Old link no longer has authority.
+    }
+}
+static void test_cccd_canonical_failure_and_first_fault_preservation(void) {
+    for(unsigned variant=0;variant<5;variant++) {
+        ready_cccd_fixture();
+        if(variant==0)cccd_blob_fail_at=1;
+        if(variant==1)nvs_commit_fail_at=1;
+        if(variant==2)nvs_stale=true;
+        if(variant==3)nvs_records[3][8]=nvs_records[3][0];
+        if(variant==4)nvs_records[3][0].value.cccd.flags=2;
+        bleio_host_policy_subscription(42,core.status.connection_generation,123,false);
+        assert(disable_cccd(123) && fault_pending && ble_store_config_cccds[0].flags==1);
+        assert(!writes && !deletes && !erased_rows);
+        service(NULL);assert(core.status.state==HP_ERROR && core.status.error_domain==HP_DOMAIN_NVS);
+    }
+    ready_cccd_fixture();fault(HP_DOMAIN_NVS,0x731);
+    union ble_store_value sec=record_ram(BLE_STORE_OBJ_TYPE_OUR_SEC,0);
+    assert(nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&sec));
+    assert(pending_fault_domain==HP_DOMAIN_NVS && pending_fault==0x731);
+    service(NULL);assert(core.status.error_domain==HP_DOMAIN_NVS && core.status.error_code==0x731);
+    assert(nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&sec) && !fault_pending);
+    service(NULL);assert(core.status.error_domain==HP_DOMAIN_NVS && core.status.error_code==0x731);
+    // A subsequent explicit intent, not a secondary callback, can recover.
+    hp_disconnect(&core,42,core.status.connection_generation,0x216);
+    hp_request(&core,HP_PAUSED,0,852,60,test_ms);assert(core.status.state==HP_STATE_PAUSED);
+}
+static void test_fresh_identity_enrollment_preserves_saved_hosts(void) {
+    setup_three_saved_hosts();
+    test_record_t saved_ram[9][24];test_nvs_record_t saved_nvs[9][24];
+    memcpy(saved_ram,records,sizeof(saved_ram));memcpy(saved_nvs,nvs_records,sizeof(saved_nvs));
+    uint32_t generation=connect_fresh_window(810);
+    assert(!diagnostics.saved_irk_matches && diagnostics.admissions);
+    ble_addr_t identity=test_address(9);
+    test_connection.peer_id_addr=identity;
+    struct ble_gap_event resolved={.type=BLE_GAP_EVENT_IDENTITY_RESOLVED,.identity_resolved={.conn_handle=50}};
+    bleio_host_policy_event(&resolved,generation);
+    assert(core.candidate_valid && !core.enrollment_rejected);
+    union ble_store_value sec=record_ram(BLE_STORE_OBJ_TYPE_OUR_SEC,0);
+    sec.sec.peer_addr=identity;sec.sec.ltk[0]^=0x77;sec.sec.irk_present=true;sec.sec.irk[0]=0x55;sec.sec.irk[1]=0x99;
+    unsigned before_keys=writes;uint32_t before_generation=store_generation;
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&sec));
+    assert(writes==before_keys && store_generation==before_generation && enrollment_keys.our_pending && !core.candidate_store_started);
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_PEER_SEC,&sec));
+    assert(!enrollment_keys.our_pending && core.candidate_store_started);
+    union ble_store_value mapping={.rpa_rec={.peer_addr=identity,.peer_rpa_addr=enrollment_keys.original_ota}};
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_PEER_ADDR,&mapping));
+    test_connection.sec_state.encrypted=test_connection.sec_state.bonded=1;
+    struct ble_gap_event encrypted={.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=50}};
+    bleio_host_policy_event(&encrypted,generation);
+    bleio_host_policy_subscription(50,generation,123,true);
+    union ble_store_value cccd={.cccd={.peer_addr=identity,.chr_val_handle=123,.flags=1}};
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));service(NULL);
+    assert(core.status.state==HP_CONNECTED && core.status.applied_mode==HP_AUTO && core.status.hid_ready);
+    assert(core.peer_count==4 && core.status.connected_id==hp_identity_id(&core.candidate));
+    for(unsigned type=1;type<=8;type++)for(unsigned slot=0;slot<24;slot++) {
+        if(saved_ram[type][slot].used)assert(!memcmp(&saved_ram[type][slot],&records[type][slot],sizeof(saved_ram[type][slot])));
+        if(saved_nvs[type][slot].used)assert(!memcmp(&saved_nvs[type][slot],&nvs_records[type][slot],sizeof(saved_nvs[type][slot])));
+    }
+    assert(!deletes && !erased_rows && !terminations);
+}
+static void test_enrollment_key_staging_rejections_and_failures(void) {
+    for(unsigned variant=0;variant<14;variant++) {
+        setup_three_saved_hosts();
+        test_record_t old_ram[9][24];test_nvs_record_t old_nvs[9][24];
+        memcpy(old_ram,records,sizeof(old_ram));memcpy(old_nvs,nvs_records,sizeof(old_nvs));
+        uint32_t generation=connect_fresh_window(830);
+        ble_addr_t identity=test_address(9);
+        test_connection.peer_id_addr=identity;
+        struct ble_gap_event resolved={.type=BLE_GAP_EVENT_IDENTITY_RESOLVED,.identity_resolved={.conn_handle=50}};
+        bleio_host_policy_event(&resolved,generation);
+        struct ble_store_value_sec our=record_ram(BLE_STORE_OBJ_TYPE_OUR_SEC,0).sec;
+        our.peer_addr=identity;our.ltk[0]^=0x77;
+        struct ble_store_value_sec peer=our;
+        peer.irk_present=true;peer.irk[0]=0x55;peer.irk[1]=0x99;
+        if(variant!=4) {
+            assert(!nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,(const union ble_store_value *)&our));
+            assert(enrollment_keys.our_pending && !core.candidate_store_started && !writes);
+        }
+        if(variant==0)peer=record_ram(BLE_STORE_OBJ_TYPE_PEER_SEC,0).sec,peer.peer_addr=identity;
+        if(variant==1)peer.irk[0]=0x66;
+        if(variant==2)peer.irk_present=false;
+        if(variant==3) {
+            // No PEER callback / link loss must never flush or retain the OUR secret.
+            struct ble_gap_event gone={.type=BLE_GAP_EVENT_DISCONNECT,.disconnect={.conn={.conn_handle=50},.reason=0x213}};
+            bleio_host_policy_event(&gone,generation);service(NULL);
+            assert(!enrollment_keys.valid && !enrollment_keys.our_pending && !fault_pending && !writes);
+            assert(core.status.state==HP_ENROLLING && !core.candidate_store_started);
+        } else if(variant==5) {
+            our.ltk[0]^=1;
+            assert(nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,(const union ble_store_value *)&our));
+        } else if(variant==6) {
+            core.status.operation_id++;
+            assert(nimble_write(BLE_STORE_OBJ_TYPE_PEER_SEC,(const union ble_store_value *)&peer));
+        } else if(variant==7) {
+            union ble_store_value cccd={.cccd={.peer_addr=identity,.chr_val_handle=123,.flags=1}};
+            assert(nimble_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));
+        } else {
+            if(variant==11)core.handle++;
+            if(variant==12)core.status.connection_generation++;
+            if(variant==13)read_fail=92;
+            if(variant==8)write_fail_at=1; // OUR flush fails before any new row.
+            if(variant==9)nvs_stale=true; // OUR RAM write succeeds, NVS readback fails.
+            if(variant==10)write_fail_at=2; // OUR durable, then PEER write fails.
+            assert(nimble_write(BLE_STORE_OBJ_TYPE_PEER_SEC,(const union ble_store_value *)&peer));
+        }
+        if(variant!=3) {
+            assert(!enrollment_keys.our_pending && !enrollment_keys.valid && fault_pending);
+            assert(!test_nimble_lock_depth && !test_lock_depth);
+            if(variant==0)assert(pending_fault==HP_DUPLICATE_IRK && !writes);
+            if(variant==1 || variant==2)assert(pending_fault==HP_IRK_RPA_MISMATCH && !writes);
+            if((variant>=4 && variant<=7) || variant==11 || variant==12)assert(pending_fault==HP_KEY_SEQUENCE && !writes);
+            // No GAP termination occurred while the store callback held its lock.
+            assert(!terminations);service(NULL);
+            assert(core.status.state==HP_ERROR && terminations==1);
+        }
+        for(unsigned type=1;type<=8;type++)for(unsigned slot=0;slot<24;slot++) {
+            if(old_ram[type][slot].used)assert(!memcmp(&old_ram[type][slot],&records[type][slot],sizeof(old_ram[type][slot])));
+            if(old_nvs[type][slot].used)assert(!memcmp(&old_nvs[type][slot],&nvs_records[type][slot],sizeof(old_nvs[type][slot])));
+        }
+        assert(!deletes && !erased_rows);
+        assert(!nvs_records[BLE_STORE_OBJ_TYPE_PEER_SEC][3].used);
+        assert(nvs_records[BLE_STORE_OBJ_TYPE_OUR_SEC][3].used==(variant==10));
+        // Rejected duplicate/mismatch/sequence candidates leave no new family.
+        if(variant<8)assert(!records[BLE_STORE_OBJ_TYPE_OUR_SEC][3].used && !records[BLE_STORE_OBJ_TYPE_PEER_SEC][3].used);
+        if(variant==0) {
+            uint32_t old_generation=core.status.connection_generation;
+            hp_disconnect(&core,50,old_generation,0x216);
+            hp_request(&core,HP_ENROLL,0,831,60,test_ms);
+            ble_addr_t rpa=hinted_rpa();rpa.val[0]=0x55;test_connection=(struct ble_gap_conn_desc){.conn_handle=50,.peer_id_addr=rpa,.peer_ota_addr=rpa};
+            assert(bleio_host_policy_connect(50) && !fault_pending && core.peer_count==3); // no future duplicate ambiguity
+        }
+    }
+    // Stable-address enrollment with no peer IRK still receives the pinned
+    // unconditional PEER callback. It flushes OUR without waiting forever.
+    setup_three_saved_hosts();hp_request(&core,HP_ENROLL,0,832,60,0);
+    ble_addr_t identity=test_address(9);test_connection=(struct ble_gap_conn_desc){.conn_handle=50,.peer_id_addr=identity,.peer_ota_addr=identity};
+    assert(bleio_host_policy_connect(50));
+    struct ble_store_value_sec our=record_ram(BLE_STORE_OBJ_TYPE_OUR_SEC,0).sec;our.peer_addr=identity;our.ltk[0]^=0x77;
+    struct ble_store_value_sec peer={.peer_addr=identity};
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,(const union ble_store_value *)&our) && !writes);
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_PEER_SEC,(const union ble_store_value *)&peer));
+    assert(writes==2 && !enrollment_keys.our_pending && core.candidate_store_started);
+}
+static void test_known_saved_rpa_refused_before_smp(void) {
+    reset();hp_request(&core,HP_ENROLL,0,820,60,0);
+    memset(&diagnostics,0,sizeof(diagnostics));memset(&saved_refusal,0,sizeof(saved_refusal));
+    test_record_t old_ram[9][24];test_nvs_record_t old_nvs[9][24];
+    memcpy(old_ram,records,sizeof(old_ram));memcpy(old_nvs,nvs_records,sizeof(old_nvs));
+    ble_addr_t rpa=hinted_rpa();
+    test_connection=(struct ble_gap_conn_desc){.conn_handle=50,.peer_id_addr=rpa,.peer_ota_addr=rpa};
+    assert(!bleio_host_policy_connect(50));
+    assert(diagnostics.saved_irk_matches==1 && diagnostics.refused_saved_identity==1 && !diagnostics.admissions);
+    assert(!core.status.connection_generation && !enrollment_keys.valid && terminations==1);
+    assert(saved_refusal.id==core.peers[0].id && saved_refusal.source==HP_SAVED_FROM_SOFTWARE);
+    assert(!memcmp(old_ram,records,sizeof(old_ram)) && !memcmp(old_nvs,nvs_records,sizeof(old_nvs)));
+    assert(!writes && !deletes && !erased_rows);
+    // Late security/identity callbacks have no admitted generation to consume.
+    struct ble_gap_event event={.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=50}};
+    test_connection.sec_state.encrypted=test_connection.sec_state.bonded=1;
+    bleio_host_policy_event(&event,1);
+    assert(!core.status.connected && !core.status.hid_ready && !writes);
+    reset();hp_request(&core,HP_AUTO,core.peers[0].id,823,60,0);
+    test_connection=(struct ble_gap_conn_desc){.conn_handle=50,.peer_id_addr=rpa,.peer_ota_addr=rpa};
+    assert(bleio_host_policy_connect(50) && core.status.connected_id==core.peers[0].id);
+}
 static void test_rejected_enrollment_cannot_write_existing_records(void) {
     reset();
+    memset(&saved_refusal,0,sizeof(saved_refusal));memset(&diagnostics,0,sizeof(diagnostics));
     hp_request(&core, HP_ENROLL, 0, 25, 60, 0);
     const uint16_t handle = 50;
-    ble_addr_t private_address = test_rpa(9);
+    ble_addr_t private_address = hinted_rpa();private_address.val[0]=0x55;
     test_connection = (struct ble_gap_conn_desc){
         .conn_handle = handle, .peer_id_addr = private_address, .peer_ota_addr = private_address,
     };
@@ -547,6 +867,13 @@ static void test_rejected_enrollment_cannot_write_existing_records(void) {
     };
     bleio_host_policy_event(&resolved, generation);
     assert(core.enrollment_rejected && terminations == 1 && !fault_pending);
+    assert(saved_refusal.id==core.peers[0].id && saved_refusal.source==HP_SAVED_FROM_DESCRIPTOR &&
+        saved_refusal.operation_id==25 && saved_refusal.window_count==1);
+    assert(diagnostics.admissions==1 && !diagnostics.refused_saved_identity);
+    bleio_host_policy_event(&resolved,generation);
+    struct ble_gap_event encrypted={.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=handle}};
+    bleio_host_policy_event(&encrypted,generation);
+    assert(saved_refusal.window_count==1); // once per link, not once per late callback
 
     union ble_store_value original = record_ram(BLE_STORE_OBJ_TYPE_OUR_SEC, 0);
     union ble_store_value changed = original;
@@ -660,8 +987,9 @@ static void forget_fixture(bool select_target) {
     nvs_records[BLE_STORE_OBJ_TYPE_CCCD][0].used=false;
     union ble_store_value cccd={.cccd={.peer_addr=test_address(7),.chr_val_handle=123,.flags=1}};
     assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));
-    nvs_records[BLE_STORE_OBJ_TYPE_CCCD][0]=nvs_records[BLE_STORE_OBJ_TYPE_CCCD][1];
-    nvs_records[BLE_STORE_OBJ_TYPE_CCCD][1].used=false;
+    // The vendor put the new unrelated row in first-empty NVS slot0 even
+    // though its compact RAM index is1; no artificial RAM-index remap.
+    assert(nvs_records[BLE_STORE_OBJ_TYPE_CCCD][0].used && !nvs_records[BLE_STORE_OBJ_TYPE_CCCD][1].used);
     ble_store_config_cccds[1].value_changed=1;
     cccd.cccd.peer_addr=test_address(6);cccd.cccd.chr_val_handle=124;
     assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));
@@ -975,6 +1303,70 @@ static void test_forget_partial_failure_retry(void) {
     assert(core.status.state==HP_STATE_PAUSED && core.peer_count==1 && core.peers[0].id==test_host_id(7));
     assert(!vendor_nvs_erases);
 }
+static void clear_fixture(void) {
+    setup_three_saved_hosts();clean_pause();
+    // Same effective-key, byte-identical target CCCDs and an orphan RPA owner
+    // mirror the authenticated 2fcc legacy layout without using its secrets.
+    unsigned slot=(unsigned)ble_store_config_num_cccds;
+    records[BLE_STORE_OBJ_TYPE_CCCD][slot]=records[BLE_STORE_OBJ_TYPE_CCCD][0];
+    nvs_records[BLE_STORE_OBJ_TYPE_CCCD][slot]=nvs_records[BLE_STORE_OBJ_TYPE_CCCD][0];
+    ble_store_config_cccds[slot]=ble_store_config_cccds[0];ble_store_config_num_cccds++;
+    union ble_store_value orphan={.rpa_rec={.peer_addr=test_address(30),.peer_rpa_addr=test_rpa(30)}};
+    assert(!ble_store_config_write(BLE_STORE_OBJ_TYPE_PEER_ADDR,&orphan));
+    memset(ble_store_config_our_secs,0x31,sizeof(ble_store_config_our_secs));
+    memset(ble_store_config_peer_secs,0x32,sizeof(ble_store_config_peer_secs));
+    memset(ble_store_config_csfcs,0x33,sizeof(ble_store_config_csfcs));
+    ble_store_config_our_bond_count=19;ble_store_config_peer_bond_count=20;
+    hp_address_t target=address(&(ble_addr_t){.type=0,.val={1,2,3,4,5,6}});
+    assert(forget_records(NULL,&target,false)==HP_STORAGE);
+    publish();
+}
+static void test_explicit_all_peer_clear_duplicate_orphan_local_irk_preservation(void) {
+    clear_fixture();
+    test_record_t local=records[BLE_STORE_OBJ_TYPE_LOCAL_IRK][0];
+    test_nvs_record_t durable_local=nvs_records[BLE_STORE_OBJ_TYPE_LOCAL_IRK][0];
+    uint32_t generation=core.status.bond_generation;
+    assert(bleio_host_policy_clear_saved_hosts(mp_obj_new_int_from_uint(generation)));
+    assert(command_queue.pending && command_queue.command.clear_peers && !erased_rows);
+    uint32_t operation=command_queue.command.operation;service(NULL);
+    assert(core.status.operation_id==operation && hp_forget_allowed(&core.status,core.handle));
+    assert(core.status.bond_generation!=generation && !core.status.target_id && !core.peer_count && !core.cccd_count);
+    assert(!ble_store_config_num_our_secs && !ble_store_config_num_peer_secs && !ble_store_config_num_cccds);
+    assert(!ble_store_config_num_csfcs && !ble_store_config_num_rpa_recs);
+    assert(!ble_store_config_our_bond_count && !ble_store_config_peer_bond_count);
+    const uint8_t *ram=(const uint8_t *)ble_store_config_our_secs;
+    for(unsigned i=0;i<sizeof(ble_store_config_our_secs);i++)assert(!ram[i]);
+    ram=(const uint8_t *)ble_store_config_peer_secs;
+    for(unsigned i=0;i<sizeof(ble_store_config_peer_secs);i++)assert(!ram[i]);
+    const int types[]={BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CCCD,BLE_STORE_OBJ_TYPE_CSFC,BLE_STORE_OBJ_TYPE_PEER_ADDR};
+    for(unsigned type=0;type<sizeof(types)/sizeof(types[0]);type++)for(unsigned slot=0;slot<24;slot++)assert(!nvs_records[types[type]][slot].used);
+    assert(!memcmp(&local,&records[BLE_STORE_OBJ_TYPE_LOCAL_IRK][0],sizeof(local)));
+    assert(!memcmp(&durable_local,&nvs_records[BLE_STORE_OBJ_TYPE_LOCAL_IRK][0],sizeof(durable_local)));
+    assert(stored_policy.mode==HP_PAUSED && !hp_identity_id(&stored_policy.selected));
+    for(unsigned i=0;i<HP_MAX_PEERS;i++)assert(!hp_identity_id(&stored_policy.aliases[i].address));
+    unsigned erases=erase_attempts;service(NULL);service(NULL);assert(erase_attempts==erases);
+    // A new empty-identity window has no saved-key match to refuse.
+    hp_request(&core,HP_ENROLL,0,900,60,test_ms);
+    ble_addr_t rpa=hinted_rpa();test_connection=(struct ble_gap_conn_desc){.conn_handle=50,.peer_id_addr=rpa,.peer_ota_addr=rpa};
+    assert(bleio_host_policy_connect(50) && !diagnostics.saved_irk_matches);
+}
+static void test_explicit_all_clear_failures_stop_without_ram_success_or_retry(void) {
+    for(unsigned variant=0;variant<5;variant++) {
+        clear_fixture();test_record_t local=records[BLE_STORE_OBJ_TYPE_LOCAL_IRK][0];
+        if(variant<3)erase_fail_at=variant==0 ? 1 : variant==1 ? 10 : 56;
+        if(variant==3)nvs_commit_fail_at=1;
+        if(variant==4)erase_readback_present=true;
+        assert(bleio_host_policy_clear_saved_hosts(mp_obj_new_int_from_uint(core.status.bond_generation)));
+        service(NULL);assert(core.status.state==HP_ERROR && core.status.error_domain==HP_DOMAIN_NVS);
+        assert(ble_store_config_num_our_secs==3 && ble_store_config_num_peer_secs==3);
+        assert(!memcmp(&local,&records[BLE_STORE_OBJ_TYPE_LOCAL_IRK][0],sizeof(local)));
+        unsigned erases=erase_attempts;service(NULL);service(NULL);assert(erase_attempts==erases);
+    }
+    clear_fixture();uint32_t old=core.status.bond_generation;
+    assert(bleio_host_policy_clear_saved_hosts(mp_obj_new_int_from_uint(old)));
+    core.status.bond_generation++;service(NULL);
+    assert(core.status.state==HP_ERROR && core.status.error_code==HP_STALE && !erase_attempts);
+}
 static void expect_forget_value_error(mp_obj_t target,mp_obj_t generation) {
     hp_queue_t queue=command_queue;unsigned before=terminations,erases=erase_attempts;
     test_raise_armed=true;
@@ -1045,7 +1437,7 @@ static void test_forget_then_reenroll_saved_identity(void) {
     bleio_host_policy_event(&resolved,connection);
     assert(core.candidate_valid && !core.enrollment_rejected);
     union ble_store_value sec={.sec={.peer_addr=identity,.key_size=16,.ltk_present=true,.irk_present=true}};
-    memset(sec.sec.ltk,0x33,sizeof(sec.sec.ltk));memset(sec.sec.irk,0x22,sizeof(sec.sec.irk));
+    memset(sec.sec.ltk,0x33,sizeof(sec.sec.ltk));memset(sec.sec.irk,0x22,sizeof(sec.sec.irk));sec.sec.irk[0]=0x55;
     assert(!nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&sec));
     assert(!nimble_write(BLE_STORE_OBJ_TYPE_PEER_SEC,&sec));
     test_connection.sec_state.encrypted=test_connection.sec_state.bonded=1;
@@ -1054,6 +1446,34 @@ static void test_forget_then_reenroll_saved_identity(void) {
     union ble_store_value cccd={.cccd={.peer_addr=identity,.chr_val_handle=123,.flags=1}};
     assert(!nimble_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));service(NULL);
     assert(core.status.applied_mode==HP_AUTO && core.status.state==HP_CONNECTED && core.status.hid_ready && core.status.connected_id==test_host_id(6));
+}
+static void test_new_enrollment_uses_first_empty_nvs_slot_after_non_tail_forget(void) {
+    setup_three_saved_hosts();clean_pause();
+    test_nvs_record_t original[9][24];memcpy(original,nvs_records,sizeof(original));
+    bleio_host_policy_forget(id_object(test_host_id(6)),mp_obj_new_int_from_uint(core.status.bond_generation));service(NULL);
+    assert(core.peer_count==2 && !nvs_records[1][0].used && nvs_records[1][1].used && nvs_records[1][2].used);
+    hp_request(&core,HP_ENROLL,0,906,60,test_ms);
+    ble_addr_t identity=test_address(9);
+    test_connection=(struct ble_gap_conn_desc){.conn_handle=51,.peer_id_addr=identity,.peer_ota_addr=identity};
+    uint32_t gen=bleio_host_policy_connect(51);assert(gen);
+    union ble_store_value sec={.sec={.peer_addr=identity,.key_size=16,.ltk_present=true,.irk_present=true}};
+    memset(sec.sec.ltk,0x39,sizeof(sec.sec.ltk));memset(sec.sec.irk,0x59,sizeof(sec.sec.irk));
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_OUR_SEC,&sec));assert(!nimble_write(BLE_STORE_OBJ_TYPE_PEER_SEC,&sec));
+    union ble_store_value cccd={.cccd={.peer_addr=identity,.chr_val_handle=123,.flags=1}};
+    union ble_store_value csfc={.csfc={.peer_addr=identity,.csfc={1}}};
+    assert(!nimble_write(BLE_STORE_OBJ_TYPE_CSFC,&csfc));assert(!nimble_write(BLE_STORE_OBJ_TYPE_CCCD,&cccd));
+    test_connection.sec_state.encrypted=test_connection.sec_state.bonded=1;
+    struct ble_gap_event encrypted={.type=BLE_GAP_EVENT_ENC_CHANGE,.enc_change={.conn_handle=51}};
+    bleio_host_policy_event(&encrypted,gen);bleio_host_policy_subscription(51,gen,123,true);service(NULL);
+    assert(core.status.hid_ready && core.status.state==HP_CONNECTED && core.peer_count==3 && !fault_pending);
+    const int families[]={BLE_STORE_OBJ_TYPE_OUR_SEC,BLE_STORE_OBJ_TYPE_PEER_SEC,BLE_STORE_OBJ_TYPE_CCCD,BLE_STORE_OBJ_TYPE_CSFC};
+    for(unsigned j=0;j<sizeof(families)/sizeof(families[0]);j++) {
+        int type=families[j];assert(nvs_records[type][0].used);
+        assert(same_store_address(record_address(type,&nvs_records[type][0].value),&identity));
+        assert(!memcmp(&original[type][1],&nvs_records[type][1],sizeof(original[type][1])));
+        assert(!memcmp(&original[type][2],&nvs_records[type][2],sizeof(original[type][2])));
+    }
+    assert(!memcmp(original[BLE_STORE_OBJ_TYPE_LOCAL_IRK],nvs_records[BLE_STORE_OBJ_TYPE_LOCAL_IRK],sizeof(original[7])));
 }
 
 int main(void){
@@ -1094,10 +1514,19 @@ int main(void){
     test_forget_partial_failure_retry();
     test_forget_vm_preconditions();
     test_forget_then_reenroll_saved_identity();
+    test_new_enrollment_uses_first_empty_nvs_slot_after_non_tail_forget();
+    test_explicit_all_peer_clear_duplicate_orphan_local_irk_preservation();
+    test_explicit_all_clear_failures_stop_without_ram_success_or_retry();
     test_privacy_sync_and_marker();
     test_marker_store_boundaries();
+    test_cccd_disable_resubscribe_preserves_bonds_and_other_hosts();
+    test_cccd_disable_control_barriers_and_invalid_keys();
+    test_cccd_canonical_failure_and_first_fault_preservation();
     test_rpa_mappings_preserve_existing_rows();
     test_fresh_private_enrollment();
+    test_fresh_identity_enrollment_preserves_saved_hosts();
+    test_enrollment_key_staging_rejections_and_failures();
+    test_known_saved_rpa_refused_before_smp();
     test_rejected_enrollment_cannot_write_existing_records();
     test_failed_peripheral_establishment();
     test_failed_connection_callback_registration();

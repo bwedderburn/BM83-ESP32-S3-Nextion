@@ -107,10 +107,48 @@ removal from clean persisted PAUSED. Its preflight verifies RAM/NVS agreement
 and key uniqueness, then each exact NVS row is erased and read back before its
 RAM row is removed. Other hosts and the local IRK keep their bytes. See
 [Forget one saved host](HOST-POLICY-API.md#forget-one-saved-host) for completion,
-partial-failure recovery and the ESP-NOW transport risk. This addition is
-host-tested source with native build, installation and acceptance pending. The default for missing/corrupt policy or a
-native failure is closed admission. Explicit Disconnect remains paused across
+partial-failure recovery and the ESP-NOW transport risk. The separate optional
+`clear_saved_hosts(bond_generation)` capability is explicit owner maintenance
+for a clean baseline. Under clean persisted PAUSED, no link/advertising, an idle
+queue and a refreshed generation check, it removes the five canonical peer-store
+families, clears selection/aliases and verifies absence before clearing their
+RAM arrays/counts. Local IRK, unrelated NVS namespaces and private application
+files are preserved. It never starts pairing or retries, resets or restores old
+bonds automatically. It is separate from legacy global erase; the obsolete
+CrowPanel **Erase BLE bonds** button has been removed. See
+[the maintenance contract](HOST-POLICY-API.md#explicit-all-peer-maintenance-clear).
+
+The latest enrollment/maintenance candidate has host fault coverage and two
+matching clean native builds; its
+[physical acceptance remains separate](../../docs/reliability/phase2-host-selection.md#required-gates).
+Explicit ENROLL refuses descriptor-resolved and software IRK-resolved saved
+identities before SMP. A new candidate's OUR_SEC is held until PEER_SEC validates
+any supplied IRK as unique among other saved identities. An RPA link must supply
+an IRK resolving the original connection RPA; public/static-address enrollment
+without an IRK is supported. Invalid peer
+keys are rejected before either security record is written. A later backend
+failure after OUR_SEC is durable can leave a reported partial new record; it
+does not replace a saved host or trigger automatic cleanup. The earlier
+experimental software-hint deferral/drain is no longer active. The default
+for missing/corrupt policy or a native failure is closed admission. Explicit Disconnect remains paused across
 boot; AUTO admits only the selected saved identity.
+
+The latest implementation tree is `0e412220e887326268b1b25febe32581189a3099`:
+Linux host gates reported **2,253 passed, 6 skipped and 177 subtests passed**,
+with MPY/main parity, fatal lint, reliability and CI-argument Bandit checks
+passing. Two fresh Linux native builds produced 14 byte-identical outputs and
+passed offline image checks. The app is 1,976,608 bytes with SHA-256
+`872f600726a62775679bbefb1d04c94453dcd044d4200d02e633f02ddd93cc68`.
+The earlier tree `0c3b5c5366e6de504362c3e9655df28ea0a96cd5`, its 2,251-test result
+and app `2188109d…` are historical artifacts, not the current implementation.
+
+The [phase-2 record](../../docs/reliability/phase2-host-selection.md#november-13-current-clean-baseline-candidate)
+separates those host/build results from the verified controller/CrowPanel writes,
+normal boots and public empty-PAUSED cleanup result. The owner's current scope
+retains old-host backups for recovery, then verifies a fresh iPhone first and
+each other intended host individually before switching/power-cycle acceptance.
+Keeping the original three active bonds is no longer a prerequisite. Empty-list
+status is not a post-clear raw-NVS audit or final iPhone acceptance.
 
 The patch checks persistent NimBLE records and keeps OUR_SEC, PEER_SEC and CCCD
 facts separate. Controller privacy and accept-list configuration are verified;
