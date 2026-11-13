@@ -117,12 +117,12 @@ guarantee.
 | CrowPanel compilation | Actual ESP32-S3 application build with recorded source, dependency and image hashes | The current application, including removal of the obsolete Erase button, compiled and passed full 4 MiB composite readback and a normal startup capture. Host-specific functional acceptance is recorded separately below. |
 | Native compilation | Two clean Linux builds, exact source/patch/tool provenance, offline app/partition checks and byte comparison | Tree `0c7555e` produced 14 byte-identical outputs in two fresh Linux builds; offline image checks passed. The app is 1,976,816 bytes. Live acceptance remains separate. |
 | Installation and rollback | Fresh paused state, verified safe/ROM mode, scoped write authority, private backups and protected-range readback | Matching dual 8 MiB backups, fresh full prewrite match, one native app-slot write and full 8 MiB composite readback passed. Before boot, protected 6 MiB, raw NVS, the three recovery-checkpoint peer records and local IRK were unchanged. CrowPanel full 4 MiB readback and both startups passed. |
-| Persistent Disconnect | No connection or advertising through reset; retain the bonds enrolled for that test | Normal startup retained clean PAUSED with the fresh iPhone/B-Intel/Mac rows. The final four-host set still needs its physical power-cycle check. Historical November 5–6 Windows/badge pause evidence is retained below. |
-| Selected AUTO | Correct host after explicit Select, unexpected loss, controller restart and target absence | Saved Pi reconnection and direct Pi → B-Intel → Mac selection passed for the fresh host set. Selection of the saved iPhone is waiting for that host; final saved-iPhone reconnection and physical power-cycle checks remain open. Historical Windows/Pi evidence is retained below. |
+| Persistent Disconnect | No connection or advertising through reset; retain the bonds enrolled for that test | Normal startup retained clean PAUSED with the fresh iPhone/B-Intel/Mac rows. After the final four-host power cycle, explicit Disconnect for each host reached clean persisted PAUSED with no connected host or advertising and all four rows retained. A separate cold boot while PAUSED with the final four-host set was not repeated. Historical November 5–6 Windows/badge pause evidence is retained below. |
+| Selected AUTO | Correct host after explicit Select, unexpected loss, controller restart and target absence | Saved selections covering Mac, Pi, B-Intel and iPhone reached encrypted, bonded, HID-ready AUTO for the fresh host set. Full controller power removal retained all four rows and automatically resumed the selected iPhone; subsequent Mac, Pi, B-Intel and iPhone selections passed without re-pairing. Historical Windows/Pi evidence is retained below. |
 | Enrollment | New-host success, expiry, cancel, stale requests, capacity and storage failure | Fresh iPhone-first, B-Intel, Mac and Pi enrollment reached encrypted, bonded HID-ready AUTO. The owner verified iPhone/B-Intel controls; Mac and Pi OS measurements are recorded below. Historical expiry/cancel evidence remains scoped to its recorded builds. |
 | Single-host Forget | Native fault harnesses, controller/CrowPanel and wire tests, then scoped physical removal and preservation checks | The strict per-host path remains supported. Historical A6 cleanup stopped on duplicate legacy CCCDs; the authorized all-peer operation established the clean baseline. A later ordinary Mac-only Forget removed that row and kept the fresh iPhone/B-Intel rows; its temporary hook was disarmed before fresh Mac enrollment. |
 | Owner-authorized all-peer clean baseline | Recovery backups retained; own clear operation, advanced generation, clean persisted PAUSED and coherent empty roster; no automatic pairing | Observed `HOST_CLEAR_ALL` `EMPTY_PAUSED`, operation 1, bond generation 2 and roster `[]`. The temporary hook entry was disarmed and the original observer entry restored before fresh enrollment. No post-clear raw-NVS audit is claimed. |
-| iPhone-first clean-baseline acceptance | Verify iPhone enrollment and volume up/down/mute with usable onscreen keyboard; add each other intended host individually; verify Connect/Disconnect, selected switching and power-cycle persistence | The owner verified iPhone and B-Intel controls. Mac/Pi controls and saved Pi → B-Intel → Mac selection passed within the recorded scopes below. Saved iPhone reconnection and physical power-cycle persistence remain open. The original three bonds remain recovery backups, not an active-bond prerequisite. |
+| iPhone-first clean-baseline acceptance | Verify iPhone enrollment and volume up/down/mute with usable onscreen keyboard; add each other intended host individually; verify Connect/Disconnect, selected switching and power-cycle persistence | Passed within the recorded scope: iPhone/B-Intel owner controls, Mac/Pi OS effects, all-four saved switching, full controller power-cycle persistence and repeated post-cycle iPhone volume/mute/onscreen-keyboard checks. The original three bonds remain recovery backups, not an active-bond prerequisite. |
 | Stable Mac handle name | Verify the running native GAP/GATT Device Name and the Mac's saved and reconnected display name as `B's Groovy BT CTRL` | Passed: passive startup/connected GAP reads are correct, and Mac saved reconnection, Bluetooth off/on and a normal controller restart retain the corrected local name. Physical power-cycle acceptance remains separate. |
 | Live regression | Audio, Nextion, CrowPanel, badge, artwork, controls and measured UART/radio service during a new stability window | Functional bench checks passed for the tested controls, Windows launch and media playback. A new qualified Phase 2 timing window remains open. |
 
@@ -142,7 +142,7 @@ results remain separate from the physical results below.
 
 | Host | Physical controls | Saved reconnection and selected switching |
 | --- | --- | --- |
-| iPhone | The owner confirmed fresh pairing, volume up/down and mute working; the bundled onscreen-keyboard acceptance prompt also passed. | The fresh row remains saved and resumable. The saved iPhone has been selected in the current four-host matrix; reconnection is pending the physical phone-on check. |
+| iPhone | The owner confirmed fresh pairing, volume up/down and mute working; the bundled onscreen-keyboard acceptance prompt also passed. | After the owner confirmed Bluetooth On, the fresh 09:50 UTC receipt showed saved iPhone operation 4 CONNECTED/AUTO, encrypted, bonded and HID-ready (flags 509), with NONE/0 and all four rows unchanged. |
 | B-Intel | The owner confirmed fresh pairing and controls earlier in this investigation. | Direct selection from Pi reached encrypted, bonded, HID-ready CONNECTED/AUTO with no current native error and all four saved rows retained. A later Windows endpoint read found no active audio render endpoint while the separate BM83 audio link was held by Pi; that observation does not negate controller HID readiness or the earlier owner control result. |
 | Mac | Actual macOS output volume changed 10 to 6 and then 6 to 13; mute changed false to true and back to false after separate guarded gestures. | Saved reconnection occurred without another pairing request. Direct B-Intel-to-Mac selection also reached CONNECTED/AUTO with no native error. The required name `B's Groovy BT CTRL` remained visible after Mac Bluetooth off/on and a normal controller restart. |
 | Raspberry Pi 5 | Actual OS ALSA volume changed 95% to 90% and back to 95%, and mute changed false to true to false. The kernel input device also reported a volume-up press and release. | Fresh enrollment reached encrypted, bonded, HID-ready CONNECTED/AUTO. Explicit Disconnect followed by Select reconnected the saved Pi without re-pairing; direct selection onward to B-Intel and Mac preserved the four-host roster. |
@@ -185,8 +185,12 @@ startup capture verified no fatal errors and no temporary observation streams.
 Fresh authenticated status showed all four resumable rows and the persisted
 AUTO/iPhone selection. Production-entry selections to Mac, Pi and B-Intel then
 reached encrypted, bonded, HID-ready CONNECTED/AUTO with no native error; a Mac
-volume command changed the reported level from 10 to 6. Selection was returned
-to the saved iPhone for the pending physical check.
+volume command changed the reported level from 10 to 6. After selection returned
+to the saved iPhone and the owner confirmed Bluetooth On, the fresh 09:50 UTC
+receipt showed CONNECTED/AUTO, flags 509 and NONE/0 in operation 4, unit
+`fa485559`, with all four resumable rows unchanged. This completes the recorded
+saved-selection sequence covering all four hosts before a physical power-cycle
+check.
 
 Before that restart, the recorded network endpoint had become unreachable
 while a separate passive USB capture showed the application still servicing
@@ -195,18 +199,72 @@ both Wi-Fi and the endpoint, so this recovery does not establish the failure's
 cause or prove long-term network reliability. The restart was software-issued;
 the startup reset-reason label alone is not evidence of physical power removal.
 
-At this checkpoint saved-iPhone reconnection, complete four-host switching
-sequence and physical controller power-cycle persistence remain open. The
-normal controller restart and host Bluetooth off/on checks above do not replace
-a power-cycle test. Final publication/CI and any wider stability claim are also
-separate. Private flash backups, bonding records, profiles and raw captures stay
-outside Git; pre-boot write-preservation proofs do not claim byte equality after
-intentional host cleanup or fresh enrollment.
+The subsequent USB unplug/replug test observed exact USB disappearance and
+reappearance, followed by a completed 180.067-second passive capture. The
+application kept servicing BM83 and metadata with no captured fatal error; the
+capture requested no reset, reconnect or application transmission. Fresh
+authenticated status retained unit `fa485559`, operation 4 and the same request
+origin, while the new HELLO client advanced by one. Those session/request/
+operation fields are RAM state, not values restored from the saved policy.
+The iPhone remained CONNECTED/AUTO, flags 509 and NONE/0, with the four rows
+unchanged. This is USB detach/replug continuity, not demonstrated removal of all
+controller power or a cold-boot persistence PASS. The owner subsequently
+identified a separate power supply; that source was not removed by the USB-only
+instruction.
+
+Before each subsequent switch, report the fresh observed connected host, target,
+mode, error and roster. A Select is a pending intent until matching fresh status
+confirms its result; requesting another target does not by itself prove a
+disconnection or a successful handoff.
+
+A later saved-host check first observed the iPhone CONNECTED/AUTO, flags 509,
+operation 4. The subsequent Mac Select, operation 5 at 10:01 UTC, reached
+CONNECTED/AUTO, flags 509 and NONE/0, retaining all four resumable rows at the
+same generation. Actual macOS measurements then showed volume 6 to 0 (muted)
+and back to 6 (unmuted), followed by explicit mute on and off at volume 6. These
+are OS volume/mute effects, not absolute BM83 volume or acoustic measurements.
+The following iPhone Select, operation 6, initially reported WAITING/A6; fresh
+10:05 and 10:06 UTC status then confirmed CONNECTED/AUTO, flags 509 and NONE/0,
+with all four resumable rows retained at the same generation.
+
+The final power-loss test removed both the controller USB cable and the unit's
+separate supply for ten seconds, as confirmed by the owner. The passive capture
+opened at 10:08:42 UTC and closed normally after 180.183 seconds. Its 8,271-byte
+raw stream has SHA-256
+`e539a906f5332c11523aa7fda6de3fc6381823232dddd0a83e956c9536e424cb`;
+the 17,954-byte receive index has SHA-256
+`b2efc4452407ba0e2499aca4b48a307d3bba851bb1240d3c682b2759881217f5`.
+It recorded the normal BLE-ready name and POWER_ON startup line, one serial
+open/close, zero transmitted application bytes, no capture-requested reset or
+reconnect, and no fatal error. Fresh authenticated status established a new
+application unit `a50200a3`, native operation zero and no request origin. The
+saved AUTO/iPhone selection automatically reached encrypted, bonded, HID-ready
+CONNECTED with NONE/0 and all four resumable rows retained. Unlike the earlier
+USB-only test, this combines the owner's complete power-removal action with a
+new running session and native startup state. The owner then repeated volume
+up/down, two Mute taps and the onscreen-keyboard check: all passed.
+
+The final post-cycle pass explicitly disconnected the iPhone (operation 1),
+selected the saved Mac (2), disconnected it (3), selected Pi 5 (4), disconnected
+it (5), selected B-Intel (6), disconnected it (7), and returned to iPhone (8).
+Each Select was followed by a fresh matching CONNECTED/AUTO observation with
+encryption, bonding and HID readiness. Each Disconnect reached clean persisted
+PAUSED with no connected host or advertising. All four resumable rows and bond
+generation 1 were unchanged throughout, with NONE/0. The final 10:15 UTC receipt
+left the iPhone CONNECTED/AUTO, flags 509, selected and connected to the same
+saved identity. No Forget or new enrollment was needed in this pass.
+
+These results complete the requested iPhone/four-host acceptance and saved-state
+power-cycle checks. They do not establish a wider radio/power-order matrix,
+measured UART latency or long-term network stability. Final publication/CI is a
+separate delivery result. Private flash backups, bonding records, profiles and
+raw captures stay outside Git; pre-boot write-preservation proofs do not claim
+byte equality after intentional host cleanup or fresh enrollment.
 
 ## November 13 CCCD correction and Mac recovery
 
-The next qualified implementation is Git tree
-`0c7555eda3f029820908244e97f98429dd3ddaad`. Its full native-Linux suite
+At this earlier CCCD-correction checkpoint, the qualified implementation was
+Git tree `0c7555eda3f029820908244e97f98429dd3ddaad`. Its full native-Linux suite
 reported **2,256 passed, 6 skipped and 177 subtests passed**. MPY/main parity,
 fatal lint, reliability and the Host security workflow's Bandit check passed.
 The six skips retain the documented Node.js and filesystem limitations. Two
@@ -309,9 +367,10 @@ The owner next removed the stale Windows volume-peripheral entry, freshly
 paired B-Intel and confirmed all volume and other controls working. That later
 transition occurred after the bounded serial probes ended, so its physical
 control result is owner evidence and is not inferred from the old capture.
-Mac and Raspberry Pi enrollment, selected switching and controller power-cycle
-persistence remain open. The fresh host set must stay intact while adding each
-later verified host.
+At that earlier iPhone-first checkpoint, Mac and Raspberry Pi enrollment,
+selected switching and controller power-cycle persistence remained open. The
+fresh host set was retained while each later host was added and verified; the
+current results are recorded above.
 
 ### Earlier November 13 candidate: historical evidence
 
@@ -331,10 +390,11 @@ CrowPanel compilation and focused production C++ tests also passed. These are
 host/build results. At the subsequent pre-boot full readbacks, controller
 protected ranges and the original three complete peer-security records/local IRK
 were unchanged; CrowPanel preserved every byte outside its new application image.
-Both applications then completed captured normal startups. Fresh iPhone pairing, retained-host
-reconnection, controls, power-cycle persistence and a new measured stability window
-remain separate physical gates. Neither a model
-witness nor cached panel text establishes the cause of an earlier field failure.
+Both applications then completed captured normal startups. Those earlier
+host/build results did not establish fresh iPhone pairing, retained-host
+reconnection, controls, power-cycle persistence or a new measured stability
+window. Neither a model witness nor cached panel text establishes the cause of
+an earlier field failure.
 
 ## November 5–6 physical results
 
@@ -360,8 +420,9 @@ witness nor cached panel text establishes the cause of an earlier field failure.
 These results cover the exercised devices and operations. The companion's dry
 run was exercised on Linux. The physical Raspberry Pi test used the existing
 saved host and the Windows companion to request Disconnect.
-Fresh enrollment on another platform, the wider radio and power-order matrix,
-and a new measured UART and radio stability window remain open.
+At that historical checkpoint, fresh enrollment on another platform, the wider
+radio and power-order matrix, and a new measured UART/radio stability window
+remained open. Current platform results and remaining gates are recorded above.
 
 ## Earlier bring-up observations
 
