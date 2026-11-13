@@ -140,6 +140,15 @@ cache correction; readiness and connected flags are derived from fresh native
 status even when the saved-host generation does not change. These host/build
 results remain separate from the physical results below.
 
+The first fresh iPhone and B-Intel enrollments and their original owner control
+checks used the earlier `0e412220` implementation recorded below. Their saved
+records were carried onto `0c7555e`. On `0c7555e`, the iPhone passed saved
+reconnection and post-power-cycle volume, mute and onscreen-keyboard checks;
+B-Intel passed saved selection and Disconnect, but its owner control check was
+not repeated after the CCCD update. Mac and Pi fresh enrollment and OS control
+measurements below used `0c7555e`. These are the recorded test scopes, rather
+than a claim that every fresh enrollment was repeated on the final build.
+
 | Host | Physical controls | Saved reconnection and selected switching |
 | --- | --- | --- |
 | iPhone | The owner confirmed fresh pairing, volume up/down and mute working; the bundled onscreen-keyboard acceptance prompt also passed. | After the owner confirmed Bluetooth On, the fresh 09:50 UTC receipt showed saved iPhone operation 4 CONNECTED/AUTO, encrypted, bonded and HID-ready (flags 509), with NONE/0 and all four rows unchanged. |
