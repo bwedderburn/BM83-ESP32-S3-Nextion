@@ -176,6 +176,25 @@ The temporary Mac-only cleanup hook removed only that host, preserved the other
 two fresh rows, and was disarmed before fresh Mac enrollment. No cleanup hook
 remains active in these acceptance tests.
 
+The final application entry was then restored to the canonical production
+layout: the exact temporary observer `code.py` was backed up and retired,
+leaving the unchanged 43,032-byte `main.py` as the startup entry. Boot, the Python
+host-policy owner and native image were unchanged. Optional observer modules
+remain unused. One automatic normal restart and a completed 180-second passive
+startup capture verified no fatal errors and no temporary observation streams.
+Fresh authenticated status showed all four resumable rows and the persisted
+AUTO/iPhone selection. Production-entry selections to Mac, Pi and B-Intel then
+reached encrypted, bonded, HID-ready CONNECTED/AUTO with no native error; a Mac
+volume command changed the reported level from 10 to 6. Selection was returned
+to the saved iPhone for the pending physical check.
+
+Before that restart, the recorded network endpoint had become unreachable
+while a separate passive USB capture showed the application still servicing
+BM83 and metadata. The normal restart restored network access. It reinitializes
+both Wi-Fi and the endpoint, so this recovery does not establish the failure's
+cause or prove long-term network reliability. The restart was software-issued;
+the startup reset-reason label alone is not evidence of physical power removal.
+
 At this checkpoint saved-iPhone reconnection, complete four-host switching
 sequence and physical controller power-cycle persistence remain open. The
 normal controller restart and host Bluetooth off/on checks above do not replace
