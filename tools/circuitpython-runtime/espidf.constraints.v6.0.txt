@@ -80,7 +80,7 @@ paho-mqtt!=2.0.0,<3
 
 # IDFCI-2426
 # https://github.com/secdev/scapy/issues/4512
-scapy<2.6
+scapy<2.9
 
 # --------- TEST SPECIFIC ends ---------
 
