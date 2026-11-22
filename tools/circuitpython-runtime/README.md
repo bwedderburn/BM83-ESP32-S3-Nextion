@@ -47,7 +47,7 @@ The active raw-byte dependency hashes in `source-pins.json` are:
 
 | Input | SHA256 |
 | --- | --- |
-| `requirements-build.txt` | `92682c3c8de9380d226d62ba03e225bdd0575659cbd327f86d4250520ceb37c3` |
+| `requirements-build.txt` | `5858388123e433409a3a12f7ba7e81b866cc8120b05f8c450382dc16ee63e6df` |
 | `espidf.constraints.v6.0.txt` | `d6eebe8116fd5187345b5aadfb3875de132091340434799be7d317b06baa9565` |
 
 The [3 November dependency validation](VALIDATION-DEPENDENCIES-2026-11-03.md)
