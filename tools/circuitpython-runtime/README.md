@@ -29,6 +29,14 @@ v6.0 constraint ceiling of `<3.3`. The pinned ESP-IDF linker-generator suite
 passed 135 tests with both 3.2.5 and 3.3.3. The 45 rendered linker fixtures
 and tested Kconfig outputs matched byte for byte across the two versions.
 
+The optional ESP-IDF network tests use Scapy. This recipe overrides Espressif's
+v6.0 bound of `<2.6` with `>=2.8.0,<2.9`. Scapy 2.8.0 includes the
+[upstream fix](https://github.com/secdev/scapy/pull/5046) for a tcpdump child
+left behind after reading a filtered capture file. With 2.8.0 on Linux, the
+pinned IDF L2TAP example passed an in-memory frame round trip, and full and
+early-stop reads of a filtered capture both reaped tcpdump. Scapy is an
+optional test dependency.
+
 The optional ESP-IDF MQTT tests use Paho's legacy callback API. The constraint
 excludes 2.0.0 because it requires a callback API argument to Client(). Offline
 checks of the pinned IDF MQTT example covered client setup and callback delivery
@@ -40,7 +48,7 @@ The active raw-byte dependency hashes in `source-pins.json` are:
 | Input | SHA256 |
 | --- | --- |
 | `requirements-build.txt` | `5858388123e433409a3a12f7ba7e81b866cc8120b05f8c450382dc16ee63e6df` |
-| `espidf.constraints.v6.0.txt` | `27e41a315367e1b73c91e138d4ca8ff45846d3e8ec8ff6ac44e0333c6481f739` |
+| `espidf.constraints.v6.0.txt` | `d6eebe8116fd5187345b5aadfb3875de132091340434799be7d317b06baa9565` |
 
 The [3 November dependency validation](VALIDATION-DEPENDENCIES-2026-11-03.md)
 records real offline host-tool preflight and two clean native builds of these

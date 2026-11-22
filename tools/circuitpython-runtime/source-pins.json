@@ -34,7 +34,7 @@
     "python": "3.11.18",
     "cryptography": "50.0.0",
     "container_base": "python@sha256:84fa927127b46670e768371d1ad1be271d57ba93a6fbb3479045c7c6c452432f",
-    "constraints_sha256": "27e41a315367e1b73c91e138d4ca8ff45846d3e8ec8ff6ac44e0333c6481f739",
+    "constraints_sha256": "d6eebe8116fd5187345b5aadfb3875de132091340434799be7d317b06baa9565",
     "requirements_sha256": "5858388123e433409a3a12f7ba7e81b866cc8120b05f8c450382dc16ee63e6df",
     "preserves_reference_sources_and_board_configuration": true
   },
