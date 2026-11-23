@@ -3,6 +3,9 @@
 # scripts/setup-dev.ps1 and scripts/setup-dev.sh install this file into .venv.
 -r requirements-reliability.txt
 
+# Powers Test Explorer's Run with Coverage and the local coverage.sh script.
+pytest-cov==7.1.0
+
 # Type stubs for the device's CircuitPython core modules (board, busio, wifi,
 # _bleio, ...). Editor help only: host tests keep stubbing these modules.
 # Keep this equal to MPY_CROSS_VERSION in tools/mpy_cross_pin.env and bump both

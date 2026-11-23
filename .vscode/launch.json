@@ -27,6 +27,19 @@
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "justMyCode": false
+    },
+    {
+      "name": "pytest: selected tests",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "purpose": ["debug-test"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "env": {
+        "PYTEST_ADDOPTS": "-p no:pytest_cov"
+      }
     }
   ]
 }
