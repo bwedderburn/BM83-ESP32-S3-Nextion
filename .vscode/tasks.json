@@ -102,8 +102,16 @@
       "problemMatcher": []
     },
     {
+      "label": "Quick checks: BM83 lint and reliability policy",
+      "detail": "Fast host checks on Windows and Linux after developer setup. Runs the CI lint gate and reliability policy check.",
+      "dependsOrder": "sequence",
+      "dependsOn": ["BM83: lint gate (CI flake8)", "BM83: reliability policy"],
+      "group": {"kind": "build", "isDefault": true},
+      "problemMatcher": []
+    },
+    {
       "label": "CI parity: lint gate, host tests, policy",
-      "detail": "Runs the merge-gating host checks from python-package.yml and host-security.yml in order.",
+      "detail": "Runs lint, the full host test suite and reliability policy in order. Use Linux, WSL or the dev container for the full suite.",
       "dependsOrder": "sequence",
       "dependsOn": ["BM83: lint gate (CI flake8)", "BM83: host tests", "BM83: reliability policy"],
       "problemMatcher": []

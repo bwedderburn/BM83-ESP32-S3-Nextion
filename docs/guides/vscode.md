@@ -37,15 +37,16 @@ Options: `-SkipExtensions` / `--no-extensions`, `-Recreate` / `--recreate`,
 `-Python 3.12` / `--python 3.12` and `-Board <id>` / `--board <id>`. The same
 setup runs inside VS Code as the task **Setup: dev environment**.
 
-Then choose the interpreter once: Command Palette > **Python: Select
-Interpreter** > `.venv`.
+VS Code defaults to the repository's `.venv` on first open. If the workspace
+already has another interpreter selected, use Command Palette >
+**Python: Select Interpreter** > `.venv`.
 
 ## Extensions
 
 | Extension | Purpose |
 | --- | --- |
 | Python, Pylance, Python Debugger | Interpreter, IntelliSense with the CircuitPython stubs, debugging host code and tests |
-| Flake8 | Lints with `.flake8` and the pinned flake8 in `.venv`. Advisory style findings appear as information; the codes that fail CI appear as errors |
+| Flake8 | Lints with `.flake8` and the pinned flake8 in `.venv`. Advisory style findings appear as information and the codes that fail CI appear as errors. The workspace uses Flake8 for Python linting and turns off Ruff lint diagnostics |
 | Serial Monitor | CircuitPython console on the ESP32-S3 (see below) |
 | PlatformIO IDE, C/C++ | CrowPanel firmware in `firmware/crowpanel-remote/` and the native C test sources |
 | Dev Containers | Reopens the repository in the Linux container described below |
@@ -65,6 +66,7 @@ Terminal > Run Task. The Python tasks use the interpreter selected in VS Code.
 | BM83: reliability policy | `scripts/check_reliability_setup.py` |
 | BM83: security (host only) | Bandit over the production Python, exactly as host-security CI runs it |
 | BM83: frozen toolchain advisory audit | pip-audit of the pinned native-build requirements |
+| Quick checks: BM83 lint and reliability policy | Lint gate and reliability policy. Run with **Ctrl+Shift+B** on Windows or Linux |
 | CI parity: lint gate, host tests, policy | The three merge gates, in order |
 | CrowPanel: build firmware (PlatformIO, no upload) | A compile check of the CrowPanel firmware |
 | Setup: dev environment | The setup script for your operating system |
@@ -76,7 +78,7 @@ a qualified compiled payload, so deployment follows the
 
 ## Tests on Windows
 
-The Testing view discovers the same suite as `pytest -q`. The complete host suite
+The Testing view discovers the host suite under `tests/`. The complete host suite
 targets Linux: on Windows, tests that assume POSIX permissions, paths or tools
 fail or skip, as they do on `main`. Use the dev container or WSL for a complete,
 green run, and treat a Windows run as a partial check.

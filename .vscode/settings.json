@@ -6,14 +6,19 @@
     ".flake8": "ini"
   },
   "files.exclude": {
+    ".venv": true,
+    "**/.pio": true,
     "**/__pycache__": true,
     "**/.pytest_cache": true,
+    "**/pytest-cache-files-*": true,
     "**/*.egg-info": true
   },
   "files.watcherExclude": {
     "**/.venv/**": true,
     "**/.pio/**": true,
     "**/__pycache__/**": true,
+    "**/.pytest_cache/**": true,
+    "**/pytest-cache-files-*/**": true,
     "build/**": true,
     "dist/**": true,
     "tools/mpy-cross/**": true
@@ -26,6 +31,7 @@
     "tools/mpy-cross": true,
     "docs/reference/vendor": true
   },
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv",
   "python.analysis.extraPaths": [
     "firmware/circuitpython",
     "firmware/circuitpython/lib",
@@ -34,6 +40,7 @@
   "python.analysis.exclude": [
     "**/node_modules",
     "**/__pycache__",
+    "**/pytest-cache-files-*",
     "**/.*",
     "build",
     "dist",
@@ -44,7 +51,9 @@
     "reportMissingModuleSource": "none"
   },
   "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
   "python.testing.unittestEnabled": false,
+  "ruff.lint.enable": false,
   "flake8.importStrategy": "fromEnvironment",
   "flake8.severity": {
     "E": "Information",
