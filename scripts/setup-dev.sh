@@ -49,8 +49,13 @@ if command -v uv >/dev/null 2>&1; then
 fi
 
 if [ "$RECREATE" -eq 1 ] && [ -d "$VENV" ]; then
-    echo "Removing existing .venv (--recreate)"
-    rm -rf "$VENV"
+    echo "Clearing existing .venv (--recreate)"
+    if [ -L "$VENV" ]; then
+        rm -- "$VENV"
+    else
+        # Retain the directory itself, which can be a dev container volume mount.
+        find "$VENV" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    fi
 fi
 
 if [ ! -x "$PY" ]; then

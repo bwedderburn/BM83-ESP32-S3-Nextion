@@ -6,7 +6,11 @@
       "version": "lts"
     }
   },
-  "postCreateCommand": "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential rsync zip && bash scripts/setup-dev.sh --no-extensions",
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=bm83-venv-${devcontainerId},target=${containerWorkspaceFolder}/.venv,type=volume,volume-nocopy"
+  ],
+  "postCreateCommand": "sudo chown \"$(id -u):$(id -g)\" .venv && bash scripts/setup-dev.sh --no-extensions",
   "customizations": {
     "vscode": {
       "extensions": [
