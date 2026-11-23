@@ -31,7 +31,6 @@
     "tools/mpy-cross": true,
     "docs/reference/vendor": true
   },
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv",
   "python.analysis.extraPaths": [
     "firmware/circuitpython",
     "firmware/circuitpython/lib",

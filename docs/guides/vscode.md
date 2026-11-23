@@ -13,13 +13,13 @@ Run this from the repository root. Re-running it is safe; it reuses an existing
 
 Windows (PowerShell)
 
-```
+```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup-dev.ps1
 ```
 
 Linux, macOS or WSL (bash)
 
-```
+```bash
 bash scripts/setup-dev.sh
 ```
 
@@ -37,9 +37,8 @@ Options: `-SkipExtensions` / `--no-extensions`, `-Recreate` / `--recreate`,
 `-Python 3.12` / `--python 3.12` and `-Board <id>` / `--board <id>`. The same
 setup runs inside VS Code as the task **Setup: dev environment**.
 
-VS Code defaults to the repository's `.venv` on first open. If the workspace
-already has another interpreter selected, use Command Palette >
-**Python: Select Interpreter** > `.venv`.
+Confirm that VS Code uses the repository's `.venv` under Command Palette >
+**Python: Select Interpreter**.
 
 ## Extensions
 
@@ -80,8 +79,9 @@ a qualified compiled payload, so deployment follows the
 
 The Testing view discovers the host suite under `tests/`. The complete host suite
 targets Linux: on Windows, tests that assume POSIX permissions, paths or tools
-fail or skip, as they do on `main`. Use the dev container or WSL for a complete,
-green run, and treat a Windows run as a partial check.
+fail or skip. Use the dev container or WSL for a full run. In WSL, open a
+checkout on the Linux filesystem and run the Bash setup there so it gets its
+own Linux `.venv`.
 
 ## Dev container and Codespaces
 
