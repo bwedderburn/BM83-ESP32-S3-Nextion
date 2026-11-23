@@ -44,7 +44,7 @@ Confirm that VS Code uses the repository's `.venv` under Command Palette >
 
 | Extension | Purpose |
 | --- | --- |
-| Python, Pylance, Python Debugger | Interpreter, IntelliSense with the CircuitPython stubs, debugging host code and tests |
+| Python, Pylance, Python Debugger | Interpreter, CircuitPython IntelliSense, and Test Explorer with debugging and coverage |
 | Flake8 | Lints with `.flake8` and the pinned flake8 in `.venv`. Advisory style findings appear as information and the codes that fail CI appear as errors. The workspace uses Flake8 for Python linting and turns off Ruff lint diagnostics |
 | Serial Monitor | CircuitPython console on the ESP32-S3 (see below) |
 | PlatformIO IDE, C/C++ | CrowPanel firmware in `firmware/crowpanel-remote/` and the native C test sources |
@@ -60,6 +60,7 @@ Terminal > Run Task. The Python tasks use the interpreter selected in VS Code.
 | --- | --- |
 | BM83: host tests | `pytest -q`; the default test task |
 | BM83: test current file | `pytest -q` on the open test file |
+| CircuitPython: verify .mpy packaging (Linux x64) | Fetches the SHA-256-verified compiler and runs the real packaging tests in temporary directories |
 | BM83: lint gate (CI flake8) | The flake8 selection that fails CI; findings go to Problems |
 | BM83: lint advisory (CI flake8 report) | The advisory report CI prints but never fails on |
 | BM83: reliability policy | `scripts/check_reliability_setup.py` |
@@ -75,22 +76,40 @@ There is deliberately no deploy or flash task. An installed controller can carry
 a qualified compiled payload, so deployment follows the
 [deployment guide](deployment.md), with a backup and hash verification.
 
-## Tests on Windows
+## Test Explorer
 
-The Testing view discovers the host suite under `tests/`. The complete host suite
-targets Linux: on Windows, tests that assume POSIX permissions, paths or tools
-fail or skip. Use the dev container or WSL for a full run. In WSL, open a
-checkout on the Linux filesystem and run the Bash setup there so it gets its
-own Linux `.venv`.
+The Testing view discovers the host suite under `tests/`. Use **Debug Test** on an
+individual test to step into repository code and its fixtures, or **Run with
+Coverage** to show which lines your selected tests exercised. Re-run developer
+setup in an existing environment to install the pinned coverage plugin.
+
+Run the full host suite under Linux. Windows can run individual compatible tests
+and the quick lint and policy checks. Linux also runs the C and C++ host fixtures
+when the toolchain is installed.
+
+## WSL
+
+Clone into the Linux filesystem (for example `~/src`) and run Bash setup there.
+From the Linux checkout, `code .` opens the VS Code window with the WSL extension
+host. Select `.venv/bin/python` and install the Python, Pylance, Python Debugger
+and Flake8 extensions in WSL if the Extensions view shows them only as local.
+Use `build-essential`, `rsync` and `zip` for the Linux host fixtures. `repo-health`
+needs Linux Node on the VS Code server's PATH. For a user-local Node install,
+see [VS Code's server environment setup](https://code.visualstudio.com/docs/remote/wsl#_advanced-environment-setup-script).
 
 ## Dev container and Codespaces
 
-`.devcontainer/devcontainer.json` provides Python 3.13 on Debian with Node.js, a
-C/C++ toolchain and `rsync`, then runs `scripts/setup-dev.sh --no-extensions`.
-Choose **Dev Containers: Reopen in Container**, or open the repository in a
-GitHub Codespace. The container has no USB access, so use it for host tests,
-linting and documentation, and use the host operating system for the controller
-and the CrowPanel.
+`.devcontainer/devcontainer.json` provides Python 3.13 on Debian, a pinned Node
+feature, and the image's C/C++ toolchain, `rsync` and `zip`. It installs the
+project tooling and stores the container's `.venv` in a Docker volume, separate
+from a virtual environment in the host checkout.
+
+For a fast, isolated checkout on Windows, choose **Dev Containers: Clone
+Repository in Container Volume**. To share source files with an existing WSL
+checkout, use **Dev Containers: Reopen in Container** from its WSL window. A
+GitHub Codespace can use the same project configuration. Use these environments
+for host tests, lint and coverage. Use the host operating system for physical
+controller and CrowPanel work.
 
 ## CircuitPython serial console
 
@@ -113,6 +132,18 @@ the procedure in the CrowPanel guide.
 
 ## AI assistants and MCP
 
-`.mcp.json` registers the repository's `repo-health` MCP server, which runs from
-`.venv`; the setup script installs its dependency. Agent instructions live in
-`AGENTS.md`, `CLAUDE.md` and `.github/copilot-instructions.md`.
+`.mcp.json` provides `repo-health` for the VS Code MCP client and Claude Code. In
+VS Code, use **MCP: List Servers** to start the server for the active workspace.
+Keep the assistant in the same Linux checkout as the tests and source being
+reviewed. The server uses that checkout's `.venv`. See the
+[tool list](../../tools/mcp/repo_health/README.md) before selecting agent tools.
+`repo_test_summary` executes local pytest. Use the inventory, TODO, churn,
+dependency and lint tools for read-only review.
+
+Open the repo root in Codex or start its CLI there. Trusted Codex projects load
+`.codex/config.toml`, which exposes the five read-only tools. Codex takes project
+instructions from `AGENTS.md`. Claude Code uses `CLAUDE.md` and prompts for
+approval of the project MCP registration. Copilot instructions remain in
+`.github/copilot-instructions.md`. The
+[maintenance handoff](../reliability/DIRECT-MAINTENANCE.md) records the pause on
+Copilot requests.

@@ -54,6 +54,9 @@ The server resolves the repo root via `git rev-parse` (override with the
   `.mcp.json` at the repo root (portable `mcpServers` format, repo-relative
   path, no secrets). The deprecated duplicate `.vscode/mcp.json` entry was
   migrated here and removed.
+- **Codex CLI and IDE extension** use `.codex/config.toml` for the five read-only
+  tools. Open or launch Codex from the repository root so the launcher can
+  resolve its relative path. Codex loads project settings for trusted projects.
 - **Copilot coding agent (github.com)**: paste
   `docs/agents/copilot-coding-agent-mcp.json` into
   *Repo Settings → Copilot → Coding agent → MCP configuration*. The

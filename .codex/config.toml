@@ -1,0 +1,10 @@
+[mcp_servers.repo-health]
+command = "node"
+args = ["tools/mcp/repo_health/launch.mjs"]
+enabled_tools = [
+    "repo_inventory",
+    "repo_todo_scan",
+    "repo_churn_hotspots",
+    "repo_dependency_report",
+    "repo_lint_summary",
+]
