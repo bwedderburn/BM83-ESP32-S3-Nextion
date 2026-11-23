@@ -94,6 +94,6 @@ linuxdoc==20260504
 # --------- esp_prov -------------
 
 # https://github.com/protocolbuffers/protobuf/issues/10075
-protobuf<=3.20.1
+protobuf<=7.36.2
 
 # --------- esp_prov ends ---------
