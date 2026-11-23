@@ -33,6 +33,29 @@
       "problemMatcher": []
     },
     {
+      "label": "CircuitPython: fetch pinned mpy-cross (Linux x64)",
+      "detail": "Downloads the pinned host compiler and verifies its SHA-256 before installation.",
+      "type": "process",
+      "command": "bash",
+      "args": ["scripts/fetch_mpy_cross.sh"],
+      "options": {"cwd": "${workspaceFolder}"},
+      "problemMatcher": []
+    },
+    {
+      "label": "CircuitPython: verify .mpy packaging (Linux x64)",
+      "detail": "Fetches the pinned compiler and exercises the real compiler and release tests. Build output goes to pytest temporary directories.",
+      "dependsOn": ["CircuitPython: fetch pinned mpy-cross (Linux x64)"],
+      "type": "process",
+      "command": "${command:python.interpreterPath}",
+      "args": ["-m", "pytest", "-q", "-m", "mpy"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {"RUN_MPY_TESTS": "1", "MPY_CROSS": "${workspaceFolder}/tools/mpy-cross/mpy-cross"}
+      },
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
       "label": "BM83: lint gate (CI flake8)",
       "detail": "The flake8 selection that fails python-package.yml.",
       "type": "process",

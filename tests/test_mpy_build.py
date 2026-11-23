@@ -8,10 +8,6 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "firmware" / "circuitpython"
-SRC_LIB_DIR = SRC_DIR / "lib"
-DIST_DIR = REPO_ROOT / "dist" / "circuitpython"
-DIST_LIB_DIR = DIST_DIR / "lib"
 PRIVATE_PROFILES = (
     ".artwork_wifi.json", ".metadata_bridge.json", ".badge_remote.json",
     ".badge_windows_launch.key", ".bm83_windows_companion.json", ".bm83_windows_receiver.json",
@@ -34,8 +30,8 @@ def test_plain_python_module_path_smoke():
 
 
 @pytest.mark.mpy
-def test_build_mpy_outputs():
-    """Build .mpy files and verify expected outputs when mpy-cross is available."""
+def test_build_mpy_outputs(tmp_path):
+    """Verify a real build without replacing the checkout's dist payload."""
     if os.environ.get("RUN_MPY_TESTS") != "1":
         pytest.skip("Skipped by CI toggle: set RUN_MPY_TESTS=1 to enable .mpy build verification")
 
@@ -47,20 +43,25 @@ def test_build_mpy_outputs():
     if not build_script.exists():
         pytest.skip("build_mpy.sh not found; skipping .mpy build test")
 
-    env = os.environ.copy()
-    env["MPY_CROSS"] = mpy_cross
-    subprocess.run(["bash", str(build_script)], check=True, env=env, cwd=REPO_ROOT)
+    source = tmp_path / "firmware/circuitpython"
+    shutil.copytree(REPO_ROOT / "firmware/circuitpython", source,
+                    ignore=shutil.ignore_patterns(*PRIVATE_PROFILES, "__pycache__", "*.pyc"))
+    (tmp_path / "tools").mkdir()
+    shutil.copyfile(REPO_ROOT / "tools/mpy_cross_pin.env", tmp_path / "tools/mpy_cross_pin.env")
+    shutil.copyfile(build_script, tmp_path / "build_mpy.sh")
+    env = dict(os.environ, MPY_CROSS=str(Path(mpy_cross).resolve()))
+    subprocess.run(["bash", "build_mpy.sh"], check=True, env=env, cwd=tmp_path)
 
-    assert DIST_DIR.exists(), "dist/circuitpython not created"
-    assert (DIST_DIR / "main.py").exists(), "main.py should remain as .py in dist"
-    if (SRC_DIR / "boot.py").exists():
-        assert (DIST_DIR / "boot.py").read_bytes() == (SRC_DIR / "boot.py").read_bytes()
-    assert DIST_LIB_DIR.exists(), "dist/circuitpython/lib not created"
+    dist = tmp_path / "dist/circuitpython"
+    assert (dist / "main.py").exists(), "main.py should remain as .py in dist"
+    if (source / "boot.py").exists():
+        assert (dist / "boot.py").read_bytes() == (source / "boot.py").read_bytes()
+    assert (dist / "lib").exists(), "dist/circuitpython/lib not created"
 
     # Every library .py should have a .mpy in dist/lib
-    for py_file in SRC_LIB_DIR.rglob("*.py"):
-        rel = py_file.relative_to(SRC_LIB_DIR)
-        out = DIST_LIB_DIR / rel.with_suffix(".mpy")
+    for py_file in (source / "lib").rglob("*.py"):
+        rel = py_file.relative_to(source / "lib")
+        out = dist / "lib" / rel.with_suffix(".mpy")
         assert out.exists(), f"Missing compiled file: {out}"
 
 
