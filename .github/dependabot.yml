@@ -10,6 +10,15 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 2
+    # Every bump rewrites requirements-build.txt and its recorded digest in
+    # source-pins.json, so separate PRs conflict; batch minor/patch updates.
+    groups:
+      native-build-recipe:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "pip"
     directory: "/"
