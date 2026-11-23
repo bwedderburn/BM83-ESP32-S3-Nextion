@@ -1,6 +1,19 @@
 {
   "recommendations": [
     "GitHub.copilot-chat",
-    "ms-python.python"
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-python.debugpy",
+    "ms-python.flake8",
+    "ms-vscode.vscode-serial-monitor",
+    "platformio.platformio-ide",
+    "ms-vscode.cpptools",
+    "ms-vscode-remote.remote-containers",
+    "github.vscode-github-actions",
+    "redhat.vscode-yaml",
+    "tamasfe.even-better-toml",
+    "timonwong.shellcheck",
+    "anthropic.claude-code",
+    "openai.chatgpt"
   ]
 }

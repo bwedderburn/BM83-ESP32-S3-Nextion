@@ -129,6 +129,19 @@ and native build tools. See [testing](docs/guides/testing.md) for optional compi
 gates, and [scan status](docs/security/SCAN-STATUS.md) for security-scan coverage.
 Host tests, native compilation and physical acceptance are separate evidence.
 
+For VS Code, run `scripts\setup-dev.ps1` (Windows) or `bash scripts/setup-dev.sh`
+once from the repository root. It creates `.venv` with these tools, CircuitPython
+type stubs and the repo-health MCP dependency, then installs the recommended
+extensions. The [VS Code guide](docs/guides/vscode.md) lists the tasks, the dev
+container and the serial-console settings.
+
+## Use as a template
+
+This repository is a GitHub template: **Use this template** creates a new
+repository with the firmware, tests, CI and VS Code workspace. Then run
+`scripts/init_from_template.py` to replace this project's identity and its
+owner-specific agent notes; see the [template guide](docs/guides/template.md).
+
 ## Known limits and release status
 
 - Windows Apple Music can retain a stalled audio session after BM83 power cycling.

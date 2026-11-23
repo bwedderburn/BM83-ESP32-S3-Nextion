@@ -1,0 +1,10 @@
+# Editor and local-development extras on top of the CI toolchain.
+# Host development only; never copy these packages to CIRCUITPY.
+# scripts/setup-dev.ps1 and scripts/setup-dev.sh install this file into .venv.
+-r requirements-reliability.txt
+
+# Type stubs for the device's CircuitPython core modules (board, busio, wifi,
+# _bleio, ...). Editor help only: host tests keep stubbing these modules.
+# Keep this equal to MPY_CROSS_VERSION in tools/mpy_cross_pin.env and bump both
+# with the device firmware (tests/test_dev_environment.py enforces the match).
+circuitpython-stubs==10.3.1

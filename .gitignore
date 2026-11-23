@@ -38,9 +38,11 @@ sym-lib-table-bak
 *.tmp
 *.bak
 
-# Editor junk
+# Editor junk (the shared workspace files below are tracked; see docs/guides/vscode.md)
 .vscode/*
 !.vscode/tasks.json
 !.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/launch.json
 .idea/
 tools/mpy-cross/

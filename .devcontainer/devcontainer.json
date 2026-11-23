@@ -1,0 +1,31 @@
+{
+  "name": "BM83 host tools (Linux)",
+  "image": "mcr.microsoft.com/devcontainers/python:2-3.13-trixie",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    }
+  },
+  "postCreateCommand": "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential rsync zip && bash scripts/setup-dev.sh --no-extensions",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "GitHub.copilot-chat",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "ms-python.flake8",
+        "ms-vscode.cpptools",
+        "github.vscode-github-actions",
+        "redhat.vscode-yaml",
+        "tamasfe.even-better-toml",
+        "timonwong.shellcheck",
+        "anthropic.claude-code",
+        "openai.chatgpt"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "${containerWorkspaceFolder}/.venv/bin/python"
+      }
+    }
+  }
+}

@@ -11,6 +11,8 @@ the repository root unless they explicitly select another folder.
 | [Nextion setup](guides/nextion-setup.md) | Touch press/release tokens and display configuration |
 | [Build project libraries](guides/building.md) | Pinned CircuitPython compiler and host-specific build commands |
 | [Host testing](guides/testing.md) | Regression suites and optional compiler checks |
+| [VS Code workspace](guides/vscode.md) | One-time setup script, extensions, tasks, dev container and serial console |
+| [New project from this template](guides/template.md) | "Use this template", the identity rewrite script and the manual checklist |
 | [BLE host handoff](guides/ble-volume-handoff.md) | Pause/Enable, saved hosts and bond preservation |
 | [BLE runtime update](guides/ble-runtime-update.md) | Reviewed capacity/runtime updates and guarded app-only writes |
 | [Mac metadata bridge](guides/mac-metadata-bridge.md) | Optional LAN metadata, private pairing and one-time USB setup |

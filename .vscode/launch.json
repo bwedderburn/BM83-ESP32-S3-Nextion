@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: current file (host, firmware import paths)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${file}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/firmware/circuitpython:${workspaceFolder}/firmware/circuitpython/lib"
+      },
+      "windows": {
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}\\firmware\\circuitpython;${workspaceFolder}\\firmware\\circuitpython\\lib"
+        }
+      }
+    },
+    {
+      "name": "pytest: current test file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q", "${file}"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}
