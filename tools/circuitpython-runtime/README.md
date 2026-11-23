@@ -18,9 +18,10 @@ Linux snapshot and its current requirements/constraints hashes. Do not relabel
 an original artifact with new digests or replace frozen candidates silently.
 The active recipe incorporates dependency updates from PRs #196 and #197
 (`idf-build-apps < 3.2` for Python >=3.10 and NVS partition generator `0.3.0`),
-#199 (Click `8.5.0`) and #200 (the optional linuxdoc constraint `20260504`).
+#199 (Click `8.5.0`), #200 (the optional linuxdoc constraint `20260504`), #206
+(typing-inspection `0.4.5`) and #207 (Click `8.5.1`).
 The frozen build requirements install neither `idf-build-apps` nor linuxdoc;
-their constraints do not add those tools to this recipe. Click `8.5.0` is an
+their constraints do not add those tools to this recipe. Click `8.5.1` is an
 explicit local override of the pinned ESP-IDF's upstream `click<8.2` bound,
 validated for the recorded Linux/Python 3.11.18 environment.
 
@@ -47,13 +48,16 @@ The active raw-byte dependency hashes in `source-pins.json` are:
 
 | Input | SHA256 |
 | --- | --- |
-| `requirements-build.txt` | `5858388123e433409a3a12f7ba7e81b866cc8120b05f8c450382dc16ee63e6df` |
-| `espidf.constraints.v6.0.txt` | `d6eebe8116fd5187345b5aadfb3875de132091340434799be7d317b06baa9565` |
+| `requirements-build.txt` | `dc5be1cd7a69de619664525be74b6c74c9352c5091f40a48ac7e86659a19a37b` |
+| `espidf.constraints.v6.0.txt` | `d3ed46dae4948fffc62f4a77a8c3828c3b562ba92566b7de4744f917c8a3cd8f` |
 
 The [3 November dependency validation](VALIDATION-DEPENDENCIES-2026-11-03.md)
 records real offline host-tool preflight and two clean native builds of these
 dependency inputs recorded there. Raw comparison passed for all ten recorded artifacts, and
-both builds passed the default offline image validator with no writes. This
+both builds passed the default offline image validator with no writes. The
+#206/#207 patch releases passed `pip check` and import/CLI smoke checks in the
+pinned Linux/Python 3.11.18 environment; no native image has been rebuilt from
+these exact inputs yet, so repeat the two-build comparison at the next rebuild. This
 dated evidence does not qualify later source or patch changes, or establish
 hardware acceptance. The November 1 reports retain their original inputs and
 frozen artifacts; they are not relabeled as builds of the refreshed recipe.
