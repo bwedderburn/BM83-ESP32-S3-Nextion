@@ -19,6 +19,11 @@ updates:
         update-types:
           - "minor"
           - "patch"
+    ignore:
+      # The esp_prov cap in espidf.constraints.v6.0.txt is copied from the pinned
+      # ESP-IDF v6.0 constraints (protocolbuffers/protobuf#10075) and this recipe
+      # does not install protobuf, so it moves with an ESP-IDF update, not PyPI.
+      - dependency-name: "protobuf"
 
   - package-ecosystem: "pip"
     directory: "/"
