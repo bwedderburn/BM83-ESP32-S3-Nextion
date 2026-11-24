@@ -132,18 +132,37 @@ the procedure in the CrowPanel guide.
 
 ## AI assistants and MCP
 
-`.mcp.json` provides `repo-health` for the VS Code MCP client and Claude Code. In
-VS Code, use **MCP: List Servers** to start the server for the active workspace.
-Keep the assistant in the same Linux checkout as the tests and source being
-reviewed. The server uses that checkout's `.venv`. See the
+`.mcp.json` provides `repo-health` for Claude Code and compatible VS Code chat
+harnesses. **MCP: List Servers** in VS Code shows controls for the selected chat
+session or harness. A Copilot session may need to initialize before that command
+can start its servers. Verify Claude Code through its own status commands below.
+See [VS Code's MCP server controls](https://code.visualstudio.com/docs/agents/run/manage-mcp-servers).
+
+Keep the assistant in the same checkout as the tests and source being reviewed.
+The server uses that checkout's `.venv`. See the
 [tool list](../../tools/mcp/repo_health/README.md) before selecting agent tools.
 `repo_test_summary` executes local pytest. Use the inventory, TODO, churn,
 dependency and lint tools for read-only review.
 
 Open the repo root in Codex or start its CLI there. Trusted Codex projects load
 `.codex/config.toml`, which exposes the five read-only tools. Codex takes project
-instructions from `AGENTS.md`. Claude Code uses `CLAUDE.md` and prompts for
-approval of the project MCP registration. Copilot instructions remain in
+instructions from `AGENTS.md`. Copilot instructions remain in
 `.github/copilot-instructions.md`. The
 [maintenance handoff](../reliability/DIRECT-MAINTENANCE.md) records the pause on
 Copilot requests.
+
+### Claude Code
+
+1. Open the repo root as the workspace in the intended WSL or dev-container
+   window. Start Claude Code there, or run `claude` interactively from that
+   directory if the CLI is on your PATH. Claude Code reads `CLAUDE.md` from the
+   project.
+2. Accept Claude Code's trust prompt for that folder first. When it asks which
+   project MCP servers to approve, select only `repo-health`. For checkout-local
+   approval, `enabledMcpjsonServers` in `.claude/settings.local.json` lists just
+   `repo-health`. Keep that file out of Git. See
+   [Claude Code's project server approvals](https://code.claude.com/docs/en/mcp#project-server-approvals-and-workspace-trust).
+3. In the Claude Code panel in VS Code, open `/mcp`, select `repo-health`, and
+   choose **View tools** to see the six tools. If `claude` is on your PATH, you
+   can also run `claude mcp get repo-health` from the same repo root and look
+   for **Connected**.
