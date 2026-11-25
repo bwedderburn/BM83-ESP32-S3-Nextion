@@ -32,10 +32,10 @@
   "security_build": {
     "host_platform": "linux/amd64",
     "python": "3.11.18",
-    "cryptography": "50.0.0",
+    "cryptography": "50.0.2",
     "container_base": "python@sha256:84fa927127b46670e768371d1ad1be271d57ba93a6fbb3479045c7c6c452432f",
-    "constraints_sha256": "d3ed46dae4948fffc62f4a77a8c3828c3b562ba92566b7de4744f917c8a3cd8f",
-    "requirements_sha256": "dc5be1cd7a69de619664525be74b6c74c9352c5091f40a48ac7e86659a19a37b",
+    "constraints_sha256": "82ce4e6131d22c9244b4ea198bc9807a0be31ede28a775084472865538f63191",
+    "requirements_sha256": "fe81ddb713224a81e2c5e304125ef447bc6a6f2fd2f15c9ec2a11cba88b91ec9",
     "preserves_reference_sources_and_board_configuration": true
   },
   "runtime_patches": {

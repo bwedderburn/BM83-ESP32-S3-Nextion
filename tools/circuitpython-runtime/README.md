@@ -1,6 +1,6 @@
 # Secure isolated CircuitPython runtime build
 
-The active recipe uses **cryptography 50.0.0** on **Linux amd64**, with Python
+The active recipe uses **cryptography 50.0.2** on **Linux amd64**, with Python
 3.11.18, pinned CMake 3.30.9, Ninja package 1.13.2 and the official
 `esp-15.2.0_20251204` target toolchain. cryptography 49 removed Intel macOS
 support/wheels, so this recipe runs in a local Linux container on the Intel Mac.
@@ -48,19 +48,20 @@ The active raw-byte dependency hashes in `source-pins.json` are:
 
 | Input | SHA256 |
 | --- | --- |
-| `requirements-build.txt` | `dc5be1cd7a69de619664525be74b6c74c9352c5091f40a48ac7e86659a19a37b` |
-| `espidf.constraints.v6.0.txt` | `d3ed46dae4948fffc62f4a77a8c3828c3b562ba92566b7de4744f917c8a3cd8f` |
+| `requirements-build.txt` | `fe81ddb713224a81e2c5e304125ef447bc6a6f2fd2f15c9ec2a11cba88b91ec9` |
+| `espidf.constraints.v6.0.txt` | `82ce4e6131d22c9244b4ea198bc9807a0be31ede28a775084472865538f63191` |
 
 The [3 November dependency validation](VALIDATION-DEPENDENCIES-2026-11-03.md)
-records real offline host-tool preflight and two clean native builds of these
-dependency inputs recorded there. Raw comparison passed for all ten recorded artifacts, and
-both builds passed the default offline image validator with no writes. The
-#206/#207 patch releases passed `pip check` and import/CLI smoke checks in the
-pinned Linux/Python 3.11.18 environment; no native image has been rebuilt from
-these exact inputs yet, so repeat the two-build comparison at the next rebuild. This
-dated evidence does not qualify later source or patch changes, or establish
-hardware acceptance. The November 1 reports retain their original inputs and
-frozen artifacts; they are not relabeled as builds of the refreshed recipe.
+records the offline host-tool preflight and two clean native builds for that
+dependency snapshot. All ten recorded artifacts matched byte for byte, and
+both builds passed the default offline image validator. The #206/#207 patch
+releases passed `pip check` and import/CLI smoke checks in the pinned builder.
+The November 1 reports retain their original inputs and frozen artifacts.
+
+For the grouped dependency update in #212, two clean builds on the pinned
+Linux amd64 builder passed the offline host-tool checks and the default offline
+image validator. The repeat verifier matched all ten recorded artifacts,
+including the ESP32-S3 application image, byte for byte.
 
 The additional [one-line web-asset build-tool patch](reproducible-web-assets.patch)
 sets gzip's timestamp to zero before compression. The pinned upstream generator

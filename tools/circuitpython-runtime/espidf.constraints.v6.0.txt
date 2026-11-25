@@ -16,7 +16,7 @@ pyserial>=3.3
 # On https://pypi.org/ are no ARM binaries as standard now
 # Security override for this isolated host build; validated against pinned IDF tools.
 # cryptography 49+ requires a supported Linux/ARM macOS host, not Intel macOS.
-cryptography>=50.0.0,<50.1
+cryptography>=50.0.2,<50.1
 --only-binary cryptography
 
 # pyparsing: Min version was set based on https://github.com/pyparsing/pyparsing/issues/482
@@ -35,19 +35,19 @@ esptool>=5.3.0.dev0,<6
 bitstring<5
 
 # IDFCI-13852
-esp-coredump~=1.14,!=1.17.0
+esp-coredump~=1.18
 
 esp-idf-kconfig>=3.2.0,<4.0.0
 
 freertos_gdb~=1.0
 
-esp-idf-monitor>=1.10.0,<2
+esp-idf-monitor>=1.11.0,<2
 
 esp-idf-size>=2.0.0,<3.0.0
 
 esp-idf-nvs-partition-gen~=0.3.0
 
-tree-sitter~=0.25
+tree-sitter~=0.26
 tree-sitter-c~=0.24
 
 mcp<2
