@@ -292,7 +292,7 @@ If tokens are clean (`b'BT_POWER'`) but buttons don't trigger actions:
 
 3. **Check Nextion configuration:**
    - Verify Touch Press and Touch Release events are configured
-   - Use `print "TOKEN"` commands (not `printh`)
+   - For each custom button event, follow `print "TOKEN"` with `printh FF FF FF` in the same event. See the [Nextion setup guide](nextion-setup.md) for examples.
 
 ### Board Won't Start After Update
 
